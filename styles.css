@@ -1,0 +1,1385 @@
+/* Hyo Plugin — Obsidian theme-aware styles */
+
+/* Hide Obsidian's native view header — the plugin has its own tab bar */
+.workspace-leaf-content[data-type="hyo-plugin-view"] .view-header {
+  display: none !important;
+}
+
+.hyo-plugin {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Reset all buttons inside plugin — Obsidian themes apply their own
+   button styles (border, background, box-shadow) that leak into our UI.
+   Note: padding intentionally NOT reset here — each button sets its own. */
+.hyo-plugin button {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  outline: none;
+  font: inherit;
+  color: inherit;
+  margin: 0;
+  cursor: pointer;
+}
+
+.hyo-app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--background-primary-alt);
+  color: var(--text-normal);
+  padding-bottom: var(--status-bar-height, 24px);
+}
+
+/* Loading & onboarding */
+.hyo-loading,
+.hyo-onboarding {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.hyo-onboarding h3 {
+  color: var(--text-normal);
+  margin: 0 0 12px;
+}
+
+.hyo-onboarding p {
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+
+.hyo-onboarding-steps {
+  text-align: left;
+  width: 100%;
+  max-width: 320px;
+}
+
+.hyo-onboarding-step {
+  margin-bottom: 16px;
+}
+
+.hyo-onboarding-step strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-normal);
+}
+
+.hyo-onboarding-step code {
+  display: block;
+  padding: 8px 12px;
+  background: var(--background-secondary);
+  border-radius: var(--radius-s);
+  font-family: var(--font-monospace);
+  font-size: 12px;
+  color: var(--text-normal);
+  word-break: break-all;
+}
+
+.hyo-onboarding-note {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.hyo-onboarding-intro {
+  max-width: 400px;
+  margin-bottom: 24px;
+}
+
+.hyo-step-instruction {
+  margin: 8px 0;
+  color: var(--text-normal);
+}
+
+.hyo-step-note {
+  margin: 8px 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.hyo-install-command {
+  display: block;
+  padding: 12px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  font-family: var(--font-monospace);
+  font-size: 13px;
+  color: var(--text-normal);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  word-break: break-all;
+  user-select: all;
+}
+
+.hyo-install-command:hover {
+  background: var(--background-secondary-alt);
+  border-color: var(--text-accent);
+}
+
+.hyo-install-command.copied {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+
+.hyo-install-command.copied::after {
+  content: " ✓ Copied!";
+  font-family: var(--font-ui);
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+.hyo-onboarding-troubleshooting {
+  margin-top: 24px;
+  text-align: left;
+  max-width: 500px;
+}
+
+.hyo-onboarding-troubleshooting summary {
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 8px 0;
+}
+
+.hyo-onboarding-troubleshooting summary:hover {
+  color: var(--text-normal);
+}
+
+.hyo-troubleshooting-content {
+  padding: 12px 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.hyo-troubleshooting-content p {
+  margin: 8px 0;
+}
+
+.hyo-troubleshooting-content strong {
+  color: var(--text-normal);
+}
+
+.hyo-troubleshooting-content a {
+  color: var(--text-accent);
+  text-decoration: none;
+}
+
+.hyo-troubleshooting-content a:hover {
+  text-decoration: underline;
+}
+
+/* Chat panel */
+.hyo-chat-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Messages area */
+.hyo-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.hyo-empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-faint);
+}
+
+/* Message bubbles */
+.hyo-message {
+  margin-bottom: 16px;
+}
+
+.hyo-message-user .hyo-message-content {
+  background: var(--background-secondary);
+  padding: 10px 14px;
+  border-radius: var(--radius-m);
+  font-size: 14px;
+  line-height: 1.5;
+  user-select: text;
+}
+
+.hyo-message-assistant .hyo-message-content {
+  padding: 4px 0;
+  font-size: 14px;
+  line-height: 1.6;
+  user-select: text;
+}
+
+/* Markdown body */
+.hyo-markdown-body {
+  word-wrap: break-word;
+}
+
+.hyo-markdown-body p {
+  margin: 0 0 8px;
+}
+
+.hyo-markdown-body p:last-child {
+  margin-bottom: 0;
+}
+
+.hyo-markdown-body pre {
+  background: var(--background-secondary);
+  padding: 10px 12px;
+  border-radius: var(--radius-s);
+  overflow-x: auto;
+  font-size: 12px;
+  margin: 8px 0;
+}
+
+.hyo-markdown-body code {
+  font-family: var(--font-monospace);
+  font-size: 12px;
+}
+
+.hyo-markdown-body :not(pre) > code {
+  background: var(--background-secondary);
+  padding: 2px 5px;
+  border-radius: 3px;
+}
+
+.hyo-markdown-body ul,
+.hyo-markdown-body ol {
+  padding-left: 20px;
+  margin: 4px 0 8px;
+}
+
+.hyo-markdown-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.hyo-markdown-body th,
+.hyo-markdown-body td {
+  border: 1px solid var(--background-modifier-border);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.hyo-markdown-body th {
+  background: var(--background-secondary);
+  font-weight: 600;
+}
+
+.hyo-markdown-body blockquote {
+  border-left: 3px solid var(--interactive-accent);
+  margin: 8px 0;
+  padding: 4px 12px;
+  color: var(--text-muted);
+}
+
+/* Thinking blocks */
+.hyo-thinking-block {
+  margin: 8px 0;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.hyo-thinking-block summary {
+  cursor: pointer;
+  user-select: none;
+  font-style: italic;
+}
+
+.hyo-thinking-content {
+  padding: 8px 0 4px 12px;
+  white-space: pre-wrap;
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  line-height: 1.4;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* Tool calls */
+.hyo-tool-call {
+  margin: 8px 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  font-size: 12px;
+  overflow: hidden;
+}
+
+.hyo-tool-call-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  background: var(--background-secondary);
+}
+
+.hyo-tool-call-header:hover {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-tool-call-arrow {
+  font-size: 10px;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.hyo-tool-call-name {
+  font-weight: 600;
+  color: var(--text-normal);
+  flex-shrink: 0;
+}
+
+.hyo-tool-call-summary {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hyo-tool-call-body {
+  padding: 8px 10px;
+  margin: 0;
+  font-size: 11px;
+  font-family: var(--font-monospace);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--background-primary);
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+/* Permission request */
+.hyo-permission {
+  margin: 12px 0;
+  padding: 10px 14px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+
+.hyo-permission-tool {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.hyo-permission-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.hyo-permission-buttons button {
+  padding: 4px 12px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.hyo-permission-buttons button:hover {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-permission-deny {
+  color: var(--text-error) !important;
+}
+
+.hyo-permission-allow {
+  background: var(--interactive-accent) !important;
+  color: var(--text-on-accent) !important;
+  border-color: var(--interactive-accent) !important;
+}
+
+.hyo-permission-allow:hover {
+  background: var(--interactive-accent-hover) !important;
+}
+
+/* Ask question */
+.hyo-ask-question {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+
+.hyo-ask-question-header {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.hyo-ask-question-text {
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+
+.hyo-ask-question-answered {
+  padding: 6px 10px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-radius: var(--radius-s);
+  font-size: 13px;
+  display: inline-block;
+}
+
+.hyo-ask-question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.hyo-ask-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  width: 100%;
+}
+
+.hyo-ask-option:hover {
+  background: var(--background-modifier-hover);
+  border-color: var(--interactive-accent);
+}
+
+.hyo-ask-option-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.hyo-ask-or {
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.hyo-ask-text-input {
+  display: flex;
+  gap: 6px;
+}
+
+.hyo-ask-text-input input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 13px;
+}
+
+.hyo-ask-text-input button {
+  padding: 6px 12px;
+  border: none;
+  border-radius: var(--radius-s);
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.hyo-ask-text-input button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Streaming state */
+.hyo-streaming-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 16px;
+  background: var(--interactive-accent);
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: hyo-blink 1s step-end infinite;
+}
+
+@keyframes hyo-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* Activity indicator */
+.hyo-activity-indicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.hyo-thinking-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  animation: hyo-dot-pulse 1.4s ease-in-out infinite;
+}
+
+.hyo-thinking-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.hyo-thinking-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes hyo-dot-pulse {
+  0%, 80%, 100% { opacity: 0.3; }
+  40% { opacity: 1; }
+}
+
+/* Compaction banner */
+.hyo-compaction-banner {
+  text-align: center;
+  padding: 8px;
+  margin: 12px 0;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-style: italic;
+  border-top: 1px dashed var(--background-modifier-border);
+  border-bottom: 1px dashed var(--background-modifier-border);
+}
+
+/* Input area */
+.hyo-input-area {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+}
+
+.hyo-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+/* File attachment chips */
+.hyo-attachment-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.hyo-attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  font-size: 12px;
+  color: var(--text-muted);
+  align-self: flex-start;
+}
+
+.hyo-attachment-name {
+  color: var(--text-normal);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hyo-attachment-remove {
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-faint);
+  padding: 0 2px !important;
+  cursor: pointer;
+}
+
+.hyo-attachment-remove:hover {
+  color: var(--text-muted);
+}
+
+/* Attach (paperclip) button + popup */
+.hyo-attach-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.hyo-attach-btn {
+  color: var(--text-faint);
+  padding: 8px;
+  border-radius: var(--radius-s);
+  display: flex;
+  align-items: center;
+  transition: color 0.1s;
+}
+
+.hyo-attach-btn:hover {
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
+}
+
+.hyo-attach-popup {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  padding: 4px;
+  min-width: 180px;
+  z-index: 100;
+}
+
+.hyo-attach-popup-item {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px !important;
+  border-radius: var(--radius-s);
+  font-size: 13px;
+  color: var(--text-normal);
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.hyo-attach-popup-item svg {
+  flex-shrink: 0;
+  align-self: center;
+  display: inline-block;
+}
+
+.hyo-attach-popup-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-family: var(--font-text);
+  font-size: 14px;
+  line-height: 1.4;
+  resize: none;
+  min-height: 36px;
+  max-height: 150px;
+}
+
+.hyo-input:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+}
+
+.hyo-input::placeholder {
+  color: var(--text-faint);
+}
+
+.hyo-send-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50% !important;
+  background: var(--interactive-accent) !important;
+  color: var(--text-on-accent) !important;
+  padding: 0 !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.hyo-send-btn:hover {
+  background: var(--interactive-accent-hover) !important;
+}
+
+.hyo-send-btn:active {
+  transform: scale(0.93);
+}
+
+/* Stop button — red */
+.hyo-send-btn.hyo-stop {
+  background: var(--text-error) !important;
+}
+
+.hyo-send-btn.hyo-stop:hover {
+  background: #b55555 !important;
+}
+
+/* Tab bar — acts as header, combines tabs + actions */
+.hyo-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-end;
+  justify-content: space-between;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding: 6px 8px 0 8px;
+  gap: 8px;
+}
+
+/* Left side — scrollable tabs */
+.hyo-tabs-left {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  gap: 2px;
+}
+
+.hyo-tabs-left::-webkit-scrollbar {
+  height: 0;
+}
+
+/* Right side — action buttons */
+.hyo-tabs-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding-bottom: 6px;
+}
+
+/* Action button styling */
+.hyo-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border-radius: var(--radius-s);
+  transition: all 0.1s;
+}
+
+.hyo-action-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+/* Individual tab */
+.hyo-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  max-width: 200px;
+  padding: 6px 8px;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  user-select: none;
+  transition: color 0.1s;
+}
+
+.hyo-tab:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.hyo-tab-active {
+  color: var(--text-normal);
+  background: var(--background-primary);
+}
+
+.hyo-tab-active:hover {
+  background: var(--background-primary);
+}
+
+/* Tab title */
+.hyo-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* Close button — always reserves space, visible on hover/active */
+.hyo-tab-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-muted) !important;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.hyo-tab-close:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.hyo-tab:hover .hyo-tab-close,
+.hyo-tab-active .hyo-tab-close {
+  opacity: 1;
+}
+
+.hyo-tab-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  flex-shrink: 0;
+  animation: hyo-dot-pulse 1.4s ease-in-out infinite;
+}
+
+.hyo-tab-rename-input {
+  width: 100px;
+  padding: 2px 6px;
+  font-size: 12px;
+  border: 1px solid var(--interactive-accent);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  outline: none;
+}
+
+/* Session dropdown */
+.hyo-session-dropdown {
+  position: relative;
+}
+
+.hyo-session-dropdown-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border-radius: var(--radius-s);
+  transition: all 0.1s;
+}
+
+.hyo-session-dropdown-toggle:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.hyo-session-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 9999;
+  width: 260px;
+  max-height: 360px;
+  overflow-y: auto;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border-hover);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  padding: 4px;
+}
+
+.hyo-session-dropdown-header {
+  padding: 4px 14px 6px;
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.hyo-session-dropdown-empty {
+  padding: 20px 8px;
+  color: var(--text-faint);
+  font-size: 13px;
+  text-align: center;
+}
+
+.hyo-session-dropdown-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.hyo-session-dropdown-date {
+  padding: 8px 14px 4px;
+  font-size: 10px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.hyo-session-dropdown-date:first-child {
+  padding-top: 0;
+}
+
+.hyo-session-dropdown-item {
+  display: block;
+  width: 100%;
+  padding: 6px 14px !important;
+  color: var(--text-normal) !important;
+  font-size: 13px;
+  text-align: left !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: var(--radius-s);
+}
+
+.hyo-session-dropdown-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+/* Status bar */
+.hyo-status-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--background-secondary);
+  border-top: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+/* Usage bars — single clickable group */
+.hyo-usage-bars-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: var(--radius-s);
+  transition: background 0.1s;
+}
+
+.hyo-usage-bars-group:hover {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-usage-bar-label {
+  font-size: 10px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  min-width: 18px;
+}
+
+.hyo-usage-bar-track-wrap {
+  position: relative;
+  width: 60px;
+  padding: 4px 0;
+}
+
+.hyo-usage-bar-track {
+  display: block;
+  height: 4px;
+  background: var(--background-modifier-border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.hyo-usage-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--interactive-accent);
+  transition: width 0.3s, background 0.3s;
+}
+
+.hyo-usage-bar-fill.warning {
+  background: #f39c12;
+}
+
+.hyo-usage-bar-fill.danger {
+  background: #e74c3c;
+}
+
+.hyo-usage-bar-pace {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--text-faint);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Model selector */
+.hyo-model-selector {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: transparent;
+  border-radius: var(--radius-s);
+  transition: all 0.1s;
+}
+
+.hyo-model-selector:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.hyo-model-selector-name {
+  font-weight: 500;
+}
+
+/* Permission mode selector */
+.hyo-permission-mode-selector {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: transparent;
+  border-radius: var(--radius-s);
+  transition: all 0.1s;
+}
+
+.hyo-permission-mode-selector:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.hyo-permission-mode-name {
+  font-weight: 500;
+}
+
+/* Usage popup */
+.hyo-usage-popup {
+  z-index: 9999;
+  min-width: 240px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  padding: 8px;
+}
+
+.hyo-usage-popup-title {
+  padding: 4px 8px;
+  font-weight: 600;
+  font-size: 10px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.hyo-usage-divider {
+  height: 1px;
+  background: var(--background-modifier-border);
+  margin: 6px 0;
+}
+
+.hyo-usage-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.hyo-usage-row.small {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.hyo-usage-label {
+  color: var(--text-muted);
+}
+
+.hyo-usage-value {
+  color: var(--text-normal);
+  font-weight: 500;
+}
+
+.hyo-usage-bar-inline-wrap {
+  position: relative;
+  padding: 4px 8px;
+}
+
+.hyo-usage-bar-inline {
+  height: 6px;
+  background: var(--background-modifier-border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.hyo-usage-bar-inline-fill {
+  height: 100%;
+  background: var(--interactive-accent);
+  transition: width 0.3s, background 0.3s;
+}
+
+.hyo-usage-bar-inline-fill.warning {
+  background: #f39c12;
+}
+
+.hyo-usage-bar-inline-fill.danger {
+  background: #e74c3c;
+}
+
+.hyo-usage-refresh-btn {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  background: transparent;
+  border-radius: var(--radius-s);
+  transition: all 0.1s;
+}
+
+.hyo-usage-refresh-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+/* Model popup */
+.hyo-model-popup {
+  z-index: 9999;
+  min-width: 180px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  padding: 4px;
+}
+
+.hyo-model-popup-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 13px;
+  color: var(--text-normal);
+  cursor: pointer;
+  border-radius: var(--radius-s);
+  transition: background 0.1s;
+}
+
+.hyo-model-popup-name {
+  flex: 1;
+}
+
+.hyo-model-popup-context {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.hyo-model-popup-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-model-popup-item.active {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-model-check {
+  width: 14px;
+  font-size: 12px;
+  color: var(--interactive-accent);
+}
+
+/* Permission popup */
+.hyo-perm-popup {
+  z-index: 9999;
+  min-width: 220px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  padding: 4px;
+}
+
+.hyo-perm-popup-item {
+  padding: 8px 10px;
+  cursor: pointer;
+  border-radius: var(--radius-s);
+  transition: background 0.1s;
+}
+
+.hyo-perm-popup-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-perm-popup-item.active {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-perm-popup-item-name {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-normal);
+  margin-bottom: 2px;
+}
+
+.hyo-perm-popup-check {
+  font-size: 12px;
+  color: var(--interactive-accent);
+}
+
+.hyo-perm-popup-item-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+/* Drag and drop overlay */
+.hyo-chat-panel.hyo-drag-over::after {
+  content: "Drop file to attach";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+  border: 2px dashed var(--interactive-accent);
+  border-radius: var(--radius-m);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--interactive-accent);
+  pointer-events: none;
+  z-index: 50;
+}
+
+.hyo-chat-panel {
+  position: relative;
+}
+
+/* Slash command menu */
+.hyo-slash-menu {
+  position: relative;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  padding: 4px;
+  margin-bottom: 2px;
+}
+
+.hyo-slash-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 10px;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.hyo-slash-item:hover,
+.hyo-slash-item-selected {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-slash-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-normal);
+}
+
+.hyo-slash-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* File chips in message history */
+.hyo-message-file-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.hyo-message-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-s);
+  font-size: 12px;
+  color: inherit;
+  opacity: 0.85;
+}
+
+/* Message copy button */
+.hyo-message-actions {
+  display: flex;
+  gap: 4px;
+  padding: 2px 0 0 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.hyo-message-assistant:hover .hyo-message-actions {
+  opacity: 1;
+}
+
+.hyo-copy-btn {
+  color: var(--text-faint);
+  padding: 4px;
+  border-radius: var(--radius-s);
+  display: flex;
+  align-items: center;
+  line-height: 1;
+}
+
+.hyo-copy-btn:hover {
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
+}

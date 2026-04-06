@@ -1,0 +1,7 @@
+{
+  "cliPath": "/usr/local/bin/claude",
+  "model": "claude-sonnet-4-5-20250929",
+  "permissionMode": "default",
+  "skillsPath": "~/Dropbox/chad/skills",
+  "workingDirectory": ""
+}
