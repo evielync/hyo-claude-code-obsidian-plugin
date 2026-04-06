@@ -6,7 +6,7 @@ import type {
   OrderedBlock,
   AskQuestionData,
 } from "./useChatEngine";
-import { listPastSessions, loadSessionHistory, type PastSession } from "../session-parser";
+import { listPastSessions, loadSessionHistory, saveCustomTitle, type PastSession } from "../session-parser";
 
 // Re-export for convenience
 export type { PastSession };
@@ -434,13 +434,24 @@ export function useSessionManager(options: SessionManagerOptions) {
   }, []);
 
   const renameTab = useCallback((id: string, title: string) => {
-    setState((prev) => ({
-      ...prev,
-      tabs: prev.tabs.map((tab) =>
-        tab.id === id ? { ...tab, title } : tab
-      ),
-    }));
-  }, []);
+    setState((prev) => {
+      const tab = prev.tabs.find((t) => t.id === id);
+
+      // If this tab has a persisted session, save the custom title and refresh dropdown
+      if (tab?.cliSessionId) {
+        saveCustomTitle(options.cwd, tab.cliSessionId, title);
+        // Refresh past sessions to update dropdown
+        setTimeout(() => refreshPastSessions(), 0);
+      }
+
+      return {
+        ...prev,
+        tabs: prev.tabs.map((t) =>
+          t.id === id ? { ...t, title } : t
+        ),
+      };
+    });
+  }, [options.cwd, refreshPastSessions]);
 
   // ------- messaging -------
 

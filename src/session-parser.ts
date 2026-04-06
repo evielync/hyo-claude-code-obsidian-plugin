@@ -14,6 +14,49 @@ export function getProjectDir(cwd: string): string {
   return path.join(os.homedir(), ".claude", "projects", hash);
 }
 
+function getMetadataPath(cwd: string): string {
+  return path.join(getProjectDir(cwd), "session-metadata.json");
+}
+
+interface SessionMetadata {
+  [sessionId: string]: {
+    customTitle?: string;
+  };
+}
+
+function loadMetadata(cwd: string): SessionMetadata {
+  const metaPath = getMetadataPath(cwd);
+  try {
+    if (fs.existsSync(metaPath)) {
+      return JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+    }
+  } catch (e) {
+    console.error("[hyo] Failed to load metadata:", e);
+  }
+  return {};
+}
+
+function saveMetadata(cwd: string, metadata: SessionMetadata): void {
+  const metaPath = getMetadataPath(cwd);
+  try {
+    fs.writeFileSync(metaPath, JSON.stringify(metadata, null, 2), "utf-8");
+  } catch (e) {
+    console.error("[hyo] Failed to save metadata:", e);
+  }
+}
+
+export function saveCustomTitle(cwd: string, sessionId: string, title: string): void {
+  const metadata = loadMetadata(cwd);
+  if (!metadata[sessionId]) metadata[sessionId] = {};
+  metadata[sessionId].customTitle = title;
+  saveMetadata(cwd, metadata);
+}
+
+function getCustomTitle(cwd: string, sessionId: string): string | null {
+  const metadata = loadMetadata(cwd);
+  return metadata[sessionId]?.customTitle || null;
+}
+
 export function listPastSessions(cwd: string): PastSession[] {
   const dir = getProjectDir(cwd);
   try {
@@ -39,12 +82,18 @@ export function listPastSessions(cwd: string): PastSession[] {
   entries.sort((a, b) => b.stat.mtime.getTime() - a.stat.mtime.getTime());
   entries = entries.slice(0, 50);
 
-  return entries.map((f) => ({
-    id: f.name.replace(".jsonl", ""),
-    title: extractTitle(f.fullPath) || "Untitled",
-    date: f.stat.mtime,
-    size: f.stat.size,
-  }));
+  return entries.map((f) => {
+    const sessionId = f.name.replace(".jsonl", "");
+    const customTitle = getCustomTitle(cwd, sessionId);
+    const title = customTitle || extractTitle(f.fullPath) || "Untitled";
+
+    return {
+      id: sessionId,
+      title,
+      date: f.stat.mtime,
+      size: f.stat.size,
+    };
+  });
 }
 
 export interface HistoryMessage {
