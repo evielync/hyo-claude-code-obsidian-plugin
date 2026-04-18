@@ -17,17 +17,34 @@ export const DEFAULT_SETTINGS: HyoSettings = {
 
 export class HyoSettingTab extends PluginSettingTab {
   plugin: HyoPlugin;
+  private savedIndicator: HTMLElement | null = null;
+  private savedTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor(app: App, plugin: HyoPlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }
 
+  private showSaved(): void {
+    if (this.savedIndicator) {
+      if (this.savedTimeout) clearTimeout(this.savedTimeout);
+      this.savedIndicator.style.opacity = "1";
+      this.savedTimeout = setTimeout(() => {
+        if (this.savedIndicator) this.savedIndicator.style.opacity = "0";
+      }, 1500);
+    }
+  }
+
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "Hyo Plugin" });
+    const header = containerEl.createEl("div", { attr: { style: "display: flex; align-items: baseline; gap: 12px; margin-bottom: 0;" } });
+    header.createEl("h2", { text: "Hyo Plugin", attr: { style: "margin: 0;" } });
+    this.savedIndicator = header.createEl("span", {
+      text: "Saved",
+      attr: { style: "font-size: 0.8em; color: var(--color-green); opacity: 0; transition: opacity 0.3s;" },
+    });
 
     const guideLink = containerEl.createEl("p", { attr: { style: "margin: 0 0 20px;" } });
     guideLink.createEl("a", {
@@ -52,6 +69,7 @@ export class HyoSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.model = value;
             await this.plugin.saveSettings();
+            this.showSaved();
           })
       );
 
@@ -69,6 +87,7 @@ export class HyoSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.permissionMode = value;
             await this.plugin.saveSettings();
+            this.showSaved();
           })
       );
 
@@ -99,6 +118,7 @@ export class HyoSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.workingDirectory = value;
             await this.plugin.saveSettings();
+            this.showSaved();
           })
       );
 
@@ -136,6 +156,7 @@ export class HyoSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.cliPath = value;
             await this.plugin.saveSettings();
+            this.showSaved();
           })
       );
 
