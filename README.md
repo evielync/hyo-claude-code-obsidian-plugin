@@ -47,7 +47,7 @@ In Obsidian, go to Settings → Community Plugins → Browse, search for "BRAT",
 **Step 2: Add Hyo**
 Go to Settings → BRAT → Add Beta Plugin, paste in:
 ```
-https://github.com/evielync/hyo-claude-code-plugin
+https://github.com/evielync/hyo-claude-code-obsidian-plugin
 ```
 Click **Add Plugin**.
 

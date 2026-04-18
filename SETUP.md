@@ -13,7 +13,7 @@
 ### Step 1: Add Hyo via BRAT
 
 1. In Obsidian, go to **Settings → BRAT → Add Beta Plugin**
-2. Paste in the Hyo repo URL: `https://github.com/evielync/hyo-claude-code-plugin`
+2. Paste in the Hyo repo URL: `https://github.com/evielync/hyo-claude-code-obsidian-plugin`
 3. Click **Add Plugin** — BRAT will download and install it
 4. Go to **Settings → Community Plugins**, find **Hyo - Claude Code Obsidian Plugin**, and enable it
 
