@@ -25,6 +25,10 @@ No separate app. No API keys. No extra billing. Just Claude, living in your vaul
 
 ---
 
+→ **[Full setup guide with Claude Desktop install prompt](SETUP.md)**
+
+---
+
 ## Requirements
 
 - [Obsidian](https://obsidian.md) (desktop only)
