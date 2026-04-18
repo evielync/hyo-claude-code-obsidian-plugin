@@ -1,4 +1,4 @@
-# Hyo Claude Code Plugin
+# Hyo — Claude Code Obsidian Plugin
 
 **The power of Claude Code — without the terminal.**
 
