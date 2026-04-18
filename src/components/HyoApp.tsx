@@ -61,6 +61,16 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
       ? "Right-click in the PowerShell window to paste"
       : "Press Cmd+V to paste";
 
+    const claudeDesktopPrompt = `I need you to install Claude Code on my machine. Here's what to do:
+
+1. Check if it's already installed by running: ${isWindows ? "where claude" : "which claude"}
+2. If not found, install it by running: ${installCommand}
+3. After install, verify it works by running: ${isWindows ? "where claude" : "which claude"}
+4. Then run: claude
+   My browser will open to log in — that's expected. Once I've logged in, tell me to come back to Obsidian and reopen the Hyo panel.
+
+Be friendly and walk me through each step. I might not be technical.`;
+
     return (
       <div className="hyo-app">
         <div className="hyo-onboarding">
@@ -69,6 +79,39 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
             Hyo needs Claude Code installed to work. This is a one-time setup
             that takes about 2 minutes.
           </p>
+          <p className="hyo-onboarding-intro">
+            <a href="https://www.loom.com/share/349eaac59e514142bc47b10469287db0" target="_blank" rel="noopener">
+              Watch the user guide →
+            </a>
+          </p>
+
+          <div className="hyo-onboarding-option-quick">
+            <strong>Quickest way: Let Claude do it</strong>
+            <p className="hyo-step-instruction">
+              Open the Claude desktop app, switch to the Code tab, and paste
+              this prompt. Claude will handle the installation for you.
+            </p>
+            <button
+              className="hyo-copy-prompt-button"
+              onClick={(e) => {
+                navigator.clipboard.writeText(claudeDesktopPrompt);
+                const btn = e.currentTarget;
+                btn.textContent = "Copied!";
+                setTimeout(() => {
+                  btn.textContent = "Copy install prompt";
+                }, 2000);
+              }}
+            >
+              Copy install prompt
+            </button>
+            <p className="hyo-step-note">
+              Once Claude Code is installed, close and reopen this panel.
+            </p>
+          </div>
+
+          <div className="hyo-onboarding-divider">
+            <span>or install manually</span>
+          </div>
 
           <div className="hyo-onboarding-steps">
             <div className="hyo-onboarding-step">

@@ -29,16 +29,24 @@ export class HyoSettingTab extends PluginSettingTab {
 
     containerEl.createEl("h2", { text: "Hyo Plugin" });
 
+    const guideLink = containerEl.createEl("p", { attr: { style: "margin: 0 0 20px;" } });
+    guideLink.createEl("a", {
+      text: "Watch the user guide →",
+      href: "https://www.loom.com/share/349eaac59e514142bc47b10469287db0",
+      attr: { target: "_blank", rel: "noopener" },
+    });
+
     // Model
     new Setting(containerEl)
       .setName("Model")
       .setDesc("Default model for new conversations")
       .addDropdown((dropdown) =>
         dropdown
+          .addOption("claude-opus-4-7", "Opus 4.7 (200K)")
           .addOption("claude-opus-4-6[1m]", "Opus 4.6 (1M)")
           .addOption("claude-opus-4-6", "Opus 4.6 (200K)")
-          .addOption("claude-sonnet-4-5-20250929[1m]", "Sonnet 4.5 (1M)")
-          .addOption("claude-sonnet-4-5-20250929", "Sonnet 4.5 (200K)")
+          .addOption("claude-sonnet-4-6[1m]", "Sonnet 4.6 (1M)")
+          .addOption("claude-sonnet-4-6", "Sonnet 4.6 (200K)")
           .addOption("claude-haiku-4-5-20251001", "Haiku 4.5 (200K)")
           .setValue(this.plugin.settings.model)
           .onChange(async (value) => {
@@ -82,7 +90,7 @@ export class HyoSettingTab extends PluginSettingTab {
     const workingDirSetting = new Setting(containerEl)
       .setName("Working directory")
       .setDesc(
-        "Where Claude Code runs. Leave blank to use your current Obsidian vault."
+        "Claude's home folder — where it looks for your CLAUDE.md and starts working from. Defaults to your current Obsidian vault. Set this to a different folder if your Claude project lives outside your vault."
       )
       .addText((text) =>
         text
@@ -119,7 +127,7 @@ export class HyoSettingTab extends PluginSettingTab {
     const cliPathSetting = new Setting(containerEl)
       .setName("Claude Code CLI path")
       .setDesc(
-        "Default is /usr/local/bin/claude. Only change if Claude is installed elsewhere."
+        "Where Claude Code is installed on your machine. The default works for most installations — only change this if you get a 'Claude not found' error."
       )
       .addText((text) =>
         text
