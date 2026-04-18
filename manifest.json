@@ -1,7 +1,7 @@
 {
   "id": "hyo-plugin",
   "name": "Hyo - Claude Code Obsidian Plugin",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "minAppVersion": "1.5.0",
   "description": "Chat with Claude Code inside your Obsidian vault.",
   "author": "Ev Chapman",
