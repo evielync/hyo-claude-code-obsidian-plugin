@@ -80,6 +80,10 @@ Be friendly and walk me through each step. I might not be technical.`;
             that takes about 2 minutes.
           </p>
           <p className="hyo-onboarding-intro">
+            <a href="https://www.loom.com/share/9fecabcdda3c4e83bae142d67838c2fa" target="_blank" rel="noopener">
+              Watch the install guide →
+            </a>
+            {" · "}
             <a href="https://www.loom.com/share/349eaac59e514142bc47b10469287db0" target="_blank" rel="noopener">
               Watch the user guide →
             </a>
