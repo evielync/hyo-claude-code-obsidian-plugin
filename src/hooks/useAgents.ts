@@ -45,7 +45,7 @@ function parseFrontmatter(text: string): { name: string; description: string } {
   };
 }
 
-export const DEFAULT_AGENT = "chad";
+export const DEFAULT_AGENT = "";
 
 export function useAgents(): Agent[] {
   const [agents, setAgents] = useState<Agent[]>([]);

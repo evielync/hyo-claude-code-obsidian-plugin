@@ -18,6 +18,7 @@ interface StreamState {
   orderedBlocks: OrderedBlock[];
   turnIndex: number;
   toolResultSinceLastText: boolean;
+  skillResultPending: boolean; // true after Skill tool_result, until next text block is consumed
 }
 
 export interface TabSession {
@@ -28,6 +29,8 @@ export interface TabSession {
   generating: boolean;
   model: string;
   permissionMode: string;
+  agent: string;
+  inputTokens: number;
 }
 
 interface SessionState {
@@ -51,7 +54,7 @@ function genId(): string {
   });
 }
 
-function processContentBlocks(contentArr: any[], ss: StreamState) {
+function processContentBlocks(contentArr: any[], ss: StreamState, source: "user" | "assistant") {
   for (const block of contentArr) {
     if (block.type === "text") {
       if (ss.toolResultSinceLastText && ss.orderedBlocks.length > 0)
@@ -59,13 +62,21 @@ function processContentBlocks(contentArr: any[], ss: StreamState) {
       const existing = ss.orderedBlocks.find(
         (b) => b.type === "text" && b.turnIndex === ss.turnIndex
       );
-      if (existing) existing.content = block.text || "";
-      else
+      if (existing) {
+        existing.content = block.text || "";
+        // When Claude's assistant event updates a previously suppressed block, unsuppress it
+        if (source === "assistant") existing.isSkillOutput = false;
+      } else {
+        // Text arriving in a user event immediately after a Skill tool_result is a system message — hide it
+        const isSkillOutput = source === "user" && ss.skillResultPending;
+        ss.skillResultPending = false;
         ss.orderedBlocks.push({
           type: "text",
           content: block.text || "",
           turnIndex: ss.turnIndex,
+          isSkillOutput,
         });
+      }
       ss.toolResultSinceLastText = false;
     } else if (block.type === "thinking") {
       const existing = ss.orderedBlocks.find(
@@ -92,6 +103,14 @@ function processContentBlocks(contentArr: any[], ss: StreamState) {
           toolId: tool.id,
           turnIndex: ss.turnIndex,
         });
+        // Immediately suppress text at this turn if it's a Skill call
+        if (tool.name === "Skill") {
+          for (const b of ss.orderedBlocks) {
+            if (b.type === "text" && b.turnIndex === ss.turnIndex) {
+              b.isSkillOutput = true;
+            }
+          }
+        }
       }
     } else if (block.type === "tool_result") {
       const tool = ss.toolCalls.find((t) => t.id === block.tool_use_id);
@@ -100,6 +119,20 @@ function processContentBlocks(contentArr: any[], ss: StreamState) {
           typeof block.content === "string"
             ? block.content
             : JSON.stringify(block.content);
+        if (tool.name === "Skill") {
+          ss.skillResultPending = true;
+          // Retroactively suppress text at the same turn as the Skill tool block
+          const skillBlock = ss.orderedBlocks.find(
+            (b) => b.type === "tool" && b.toolId === tool.id
+          );
+          if (skillBlock) {
+            for (const b of ss.orderedBlocks) {
+              if (b.type === "text" && b.turnIndex === skillBlock.turnIndex) {
+                b.isSkillOutput = true;
+              }
+            }
+          }
+        }
       }
       ss.toolResultSinceLastText = true;
     }
@@ -136,6 +169,8 @@ export function useSessionManager(options: SessionManagerOptions) {
           generating: false,
           model: options.model,
           permissionMode: options.permissionMode,
+          agent: "",
+          inputTokens: 0,
         },
       ],
       activeTabId: id,
@@ -215,6 +250,33 @@ export function useSessionManager(options: SessionManagerOptions) {
           return;
         }
 
+        // Auto-compaction marker (compact_boundary fires when the CLI auto-compacts)
+        if (event.type === "system" && event.subtype === "compact_boundary") {
+          // Only add a marker if this wasn't triggered by a manual /compact
+          // (manual compact already has a streaming isCompaction assistant message)
+          const currentTab = stateRef.current.tabs.find((t) => t.id === tabId);
+          const alreadyHasCompactionMarker = currentTab?.messages.some(
+            (m) => m.isCompaction && m.streaming
+          );
+          if (!alreadyHasCompactionMarker) {
+            const markerMsg: Message = {
+              role: "assistant",
+              content: "compacted",
+              isCompaction: true,
+              streaming: false,
+              toolCalls: [],
+              orderedBlocks: [],
+            };
+            setState((prev) => ({
+              ...prev,
+              tabs: prev.tabs.map((tab) =>
+                tab.id === tabId ? { ...tab, messages: [...tab.messages, markerMsg] } : tab
+              ),
+            }));
+          }
+          return;
+        }
+
         if (event.type === "system") return;
 
         // Permission request
@@ -247,10 +309,16 @@ export function useSessionManager(options: SessionManagerOptions) {
         // Result — turn complete
         if (event.type === "result") {
           updateTabLastAssistant(tabId, () => ({ streaming: false }));
+          const u = event.usage || {};
+          const inputTokens = (u.input_tokens ?? 0) +
+            (u.cache_creation_input_tokens ?? 0) +
+            (u.cache_read_input_tokens ?? 0);
           setState((prev) => ({
             ...prev,
             tabs: prev.tabs.map((tab) =>
-              tab.id === tabId ? { ...tab, generating: false } : tab
+              tab.id === tabId
+                ? { ...tab, generating: false, ...(inputTokens > 0 ? { inputTokens } : {}) }
+                : tab
             ),
           }));
           return;
@@ -259,7 +327,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         // User event (tool results)
         if (event.type === "user") {
           const contentArr = event.message?.content || [];
-          processContentBlocks(contentArr, ss);
+          processContentBlocks(contentArr, ss, "user");
           updateTabLastAssistant(tabId, () => buildSnapshot(ss));
           return;
         }
@@ -267,7 +335,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         // Assistant message (complete)
         if (event.type === "assistant") {
           const contentArr = event.message?.content || [];
-          processContentBlocks(contentArr, ss);
+          processContentBlocks(contentArr, ss, "assistant");
           updateTabLastAssistant(tabId, () => buildSnapshot(ss));
           return;
         }
@@ -293,6 +361,13 @@ export function useSessionManager(options: SessionManagerOptions) {
                 toolId: tool.id,
                 turnIndex: ss.turnIndex,
               });
+              if (tool.name === "Skill") {
+                for (const b of ss.orderedBlocks) {
+                  if (b.type === "text" && b.turnIndex === ss.turnIndex) {
+                    b.isSkillOutput = true;
+                  }
+                }
+              }
               updateTabLastAssistant(tabId, () => buildSnapshot(ss));
             }
           }
@@ -384,6 +459,7 @@ export function useSessionManager(options: SessionManagerOptions) {
             generating: false,
             model: activeTab?.model || options.model,
             permissionMode: activeTab?.permissionMode || options.permissionMode,
+            agent: "",
           },
         ],
         activeTabId: id,
@@ -411,6 +487,7 @@ export function useSessionManager(options: SessionManagerOptions) {
               generating: false,
               model: options.model,
               permissionMode: options.permissionMode,
+              agent: "",
             },
           ],
           activeTabId: newId,
@@ -451,12 +528,12 @@ export function useSessionManager(options: SessionManagerOptions) {
         ),
       };
     });
-  }, [options.cwd, refreshPastSessions]);
+  }, [options.cwd]); // refreshPastSessions intentionally omitted — declared later, referenced via closure
 
   // ------- messaging -------
 
   const sendMessage = useCallback(
-    (content: string | any[], meta?: { displayText?: string; attachedFileNames?: string[] }) => {
+    (content: string | any[], meta?: { displayText?: string; attachedFileNames?: string[]; isCompaction?: boolean }) => {
       const tabId = stateRef.current.activeTabId;
 
       // For display, use the typed text; for arrays (image messages) use displayText or placeholder
@@ -469,6 +546,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         content: displayContent,
         displayText: meta?.displayText,
         attachments: meta?.attachedFileNames?.map((name) => ({ type: "file", name })),
+        isCompaction: meta?.isCompaction,
       };
       const assistantMsg: Message = {
         role: "assistant",
@@ -477,6 +555,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         toolCalls: [],
         orderedBlocks: [],
         streaming: true,
+        isCompaction: meta?.isCompaction,
       };
 
       streamStatesRef.current[tabId] = {
@@ -484,6 +563,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         orderedBlocks: [],
         turnIndex: 0,
         toolResultSinceLastText: false,
+        skillResultPending: false,
       };
 
       setState((prev) => ({
@@ -495,10 +575,14 @@ export function useSessionManager(options: SessionManagerOptions) {
             tab.messages.length === 0 && tab.title === "New conversation"
               ? titleText.slice(0, 40) + (titleText.length > 40 ? "..." : "")
               : tab.title;
+          // Compaction: don't add a user message — just the streaming assistant marker
+          const newMessages = meta?.isCompaction
+            ? [...tab.messages, assistantMsg]
+            : [...tab.messages, userMsg, assistantMsg];
           return {
             ...tab,
             title,
-            messages: [...tab.messages, userMsg, assistantMsg],
+            messages: newMessages,
             generating: true,
           };
         }),
@@ -519,6 +603,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           cwd: options.cwd,
           model: currentTab?.model || options.model,
           permissionMode: currentTab?.permissionMode || options.permissionMode,
+          agent: currentTab?.agent || "",
           sessionId: cliSessionId || undefined,
           resume: !!cliSessionId,
           onMessage: makeProcessEvent(tabId),
@@ -566,14 +651,14 @@ export function useSessionManager(options: SessionManagerOptions) {
   );
 
   const sendPermissionResponse = useCallback(
-    (requestId: string, allowed: boolean) => {
+    (requestId: string, behavior: "allow" | "allow_always" | "deny") => {
       const tabId = stateRef.current.activeTabId;
-      transportsRef.current[tabId]?.sendPermissionResponse(requestId, allowed);
+      transportsRef.current[tabId]?.sendPermissionResponse(requestId, behavior);
       updateTabLastAssistant(tabId, (msg) => ({
         permissionRequest: msg.permissionRequest
           ? {
               ...msg.permissionRequest,
-              resolved: allowed ? ("allowed" as const) : ("denied" as const),
+              resolved: behavior === "deny" ? ("denied" as const) : ("allowed" as const),
             }
           : null,
       }));
@@ -590,6 +675,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         orderedBlocks: [],
         turnIndex: 0,
         toolResultSinceLastText: false,
+        skillResultPending: false,
       };
 
       updateTabLastAssistant(tabId, () => ({
@@ -654,6 +740,23 @@ export function useSessionManager(options: SessionManagerOptions) {
     }));
   }, []);
 
+  const setTabAgent = useCallback((agent: string) => {
+    // Switching agents requires a fresh CLI process — kill the current transport.
+    // Next sendMessage will respawn with the new --agent flag.
+    setState((prev) => {
+      const tabId = prev.activeTabId;
+      transportsRef.current[tabId]?.stop();
+      delete transportsRef.current[tabId];
+      delete streamStatesRef.current[tabId];
+      return {
+        ...prev,
+        tabs: prev.tabs.map((tab) =>
+          tab.id === tabId ? { ...tab, agent, cliSessionId: null } : tab
+        ),
+      };
+    });
+  }, []);
+
   // ------- past sessions -------
 
   const refreshPastSessions = useCallback(() => {
@@ -703,12 +806,17 @@ export function useSessionManager(options: SessionManagerOptions) {
             generating: false,
             model: activeTab?.model || options.model,
             permissionMode: activeTab?.permissionMode || options.permissionMode,
+            agent: "",
           },
         ],
         activeTabId: id,
       };
     });
   }, [options.cwd, options.model, options.permissionMode]);
+
+  const compact = useCallback(() => {
+    sendMessage("/compact", { isCompaction: true });
+  }, [sendMessage]);
 
   // ------- return -------
 
@@ -721,16 +829,21 @@ export function useSessionManager(options: SessionManagerOptions) {
     activeGenerating: activeTab?.generating || false,
     activeModel: activeTab?.model || options.model,
     activePermissionMode: activeTab?.permissionMode || options.permissionMode,
+    activeAgent: activeTab?.agent || "",
+    activeTabHasSession: !!activeTab?.cliSessionId,
+    activeInputTokens: activeTab?.inputTokens || 0,
     newTab,
     closeTab,
     switchTab,
     renameTab,
     setTabModel,
     setTabPermissionMode,
+    setTabAgent,
     sendMessage,
     sendPermissionResponse,
     sendQuestionAnswer,
     stopGeneration,
+    compact,
     pastSessions,
     openPastSession,
     refreshPastSessions,
