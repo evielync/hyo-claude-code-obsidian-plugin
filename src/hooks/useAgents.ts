@@ -11,12 +11,7 @@ export interface Agent {
 }
 
 // Predefined colors for known agents, hash-based for new ones
-const AGENT_COLORS: Record<string, string> = {
-  chad: "#D4956A",      // Warm tan
-  stella: "#9B6BA6",    // Purple
-  ivy: "#6BA69B",       // Teal
-  content: "#A69B6B",   // Olive
-};
+const AGENT_COLORS: Record<string, string> = {};
 
 function colorFromName(name: string): string {
   // Use predefined color if available
