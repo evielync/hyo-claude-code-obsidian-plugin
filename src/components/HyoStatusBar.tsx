@@ -1,18 +1,24 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import { useUsage } from "../hooks/useUsage";
+import { useAgents } from "../hooks/useAgents";
 
 interface HyoStatusBarProps {
   model: string;
   permissionMode: string;
+  agent: string;
+  inputTokens: number;
   onModelChange: (model: string) => void;
   onPermissionModeChange: (mode: string) => void;
+  onAgentChange: (agent: string) => void;
+  onCompact: () => void;
 }
 
 const MODEL_OPTIONS = [
+  { id: "claude-opus-4-7", name: "Opus 4.7", context: "200K" },
   { id: "claude-opus-4-6[1m]", name: "Opus 4.6", context: "1M" },
   { id: "claude-opus-4-6", name: "Opus 4.6", context: "200K" },
-  { id: "claude-sonnet-4-5-20250929[1m]", name: "Sonnet 4.5", context: "1M" },
-  { id: "claude-sonnet-4-5-20250929", name: "Sonnet 4.5", context: "200K" },
+  { id: "claude-sonnet-4-6[1m]", name: "Sonnet 4.6", context: "1M" },
+  { id: "claude-sonnet-4-6", name: "Sonnet 4.6", context: "200K" },
   { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", context: "200K" },
 ];
 
@@ -56,12 +62,27 @@ function formatResetTime(isoString: string): string {
   return `${hrs}h ${rem}m`;
 }
 
+function getContextLimit(modelId: string): number {
+  return modelId.includes("[1m]") ? 1_048_576 : 200_000;
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1000) return Math.round(n / 1000) + "K";
+  return String(n);
+}
+
 export function HyoStatusBar({
   model,
   permissionMode,
+  agent,
+  inputTokens,
   onModelChange,
   onPermissionModeChange,
+  onAgentChange,
+  onCompact,
 }: HyoStatusBarProps) {
+  const agents = useAgents();
+  const activeAgent = agents.find((a) => a.name === agent) || agents[0];
   const {
     usage,
     sessionPct,
@@ -74,11 +95,13 @@ export function HyoStatusBar({
 
   const [popup, setPopup] = useState<string | null>(null);
   const [popupBottom, setPopupBottom] = useState(0);
+  const [customModel, setCustomModel] = useState("");
 
   const statusBarRef = useRef<HTMLDivElement>(null);
   const usageRef = useRef<HTMLDivElement>(null);
   const modelRef = useRef<HTMLButtonElement>(null);
   const permRef = useRef<HTMLButtonElement>(null);
+  const agentRef = useRef<HTMLButtonElement>(null);
 
   // Compute fixed position whenever a popup opens
   const openPopup = useCallback((name: string) => {
@@ -118,6 +141,14 @@ export function HyoStatusBar({
     [onModelChange]
   );
 
+  const selectAgent = useCallback(
+    (name: string) => {
+      onAgentChange(name);
+      setPopup(null);
+    },
+    [onAgentChange]
+  );
+
   const selectPermission = useCallback(
     (id: string) => {
       onPermissionModeChange(id);
@@ -133,6 +164,10 @@ export function HyoStatusBar({
   const permName =
     PERMISSION_MODES.find((m) => m.id === permissionMode)?.name ||
     permissionMode;
+
+  const contextLimit = getContextLimit(model);
+  const contextPct = inputTokens > 0 ? Math.min(100, (inputTokens / contextLimit) * 100) : 0;
+  const contextBarClass = contextPct > 80 ? "danger" : contextPct > 50 ? "warning" : "";
 
   const sonnetPct = usage?.seven_day_sonnet
     ? Math.min(100, Math.max(0, usage.seven_day_sonnet.utilization || 0))
@@ -185,7 +220,33 @@ export function HyoStatusBar({
         </span>
       </div>
 
+      {inputTokens > 0 && (
+        <ContextRing
+          pct={contextPct}
+          barClass={contextBarClass}
+          inputTokens={inputTokens}
+          contextLimit={contextLimit}
+          open={popup === "context"}
+          popupBottom={popupBottom}
+          onToggle={() => openPopup("context")}
+          onCompact={() => { onCompact(); setPopup(null); }}
+        />
+      )}
+
       <span style={{ flex: 1 }} />
+
+      {agents.length > 1 && (
+        <button
+          ref={agentRef}
+          className="hyo-agent-selector"
+          title={activeAgent?.description || "Switch agent"}
+          onClick={() => openPopup("agent")}
+          style={{ "--agent-color": activeAgent?.color } as React.CSSProperties}
+        >
+          <span className="hyo-agent-dot" />
+          <span className="hyo-agent-name">{activeAgent?.name || agent}</span>
+        </button>
+      )}
 
       <button
         ref={permRef}
@@ -320,6 +381,53 @@ export function HyoStatusBar({
               <span className="hyo-model-popup-context">{opt.context}</span>
             </div>
           ))}
+          <div className="hyo-model-popup-divider" />
+          <form
+            className="hyo-model-custom-row"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const id = customModel.trim();
+              if (id) { selectModel(id); setCustomModel(""); }
+            }}
+          >
+            <input
+              className="hyo-model-custom-input"
+              placeholder="Custom model ID…"
+              value={customModel}
+              onChange={(e) => setCustomModel(e.target.value)}
+            />
+            <button type="submit" className="hyo-model-custom-btn" disabled={!customModel.trim()}>Use</button>
+          </form>
+        </div>
+      )}
+
+      {popup === "agent" && (
+        <div
+          className="hyo-agent-popup"
+          style={{ position: "fixed", bottom: popupBottom, right: 120 }}
+        >
+          {agents.map((a) => (
+            <div
+              key={a.name}
+              className={`hyo-agent-popup-item ${a.name === agent ? "active" : ""}`}
+              onClick={() => selectAgent(a.name)}
+            >
+              <span
+                className="hyo-agent-popup-dot"
+                style={{ background: a.color }}
+              />
+              <div className="hyo-agent-popup-text">
+                <div className="hyo-agent-popup-name">
+                  {a.name}
+                  {a.isDefault && <span className="hyo-agent-popup-default"> · default</span>}
+                </div>
+                {a.description && (
+                  <div className="hyo-agent-popup-desc">{a.description}</div>
+                )}
+              </div>
+              {a.name === agent && <span className="hyo-agent-popup-check">✓</span>}
+            </div>
+          ))}
         </div>
       )}
 
@@ -343,5 +451,70 @@ export function HyoStatusBar({
         </div>
       )}
     </div>
+  );
+}
+
+interface ContextRingProps {
+  pct: number;
+  barClass: string;
+  inputTokens: number;
+  contextLimit: number;
+  open: boolean;
+  popupBottom: number;
+  onToggle: () => void;
+  onCompact: () => void;
+}
+
+function ContextRing({ pct, barClass, inputTokens, contextLimit, open, popupBottom, onToggle, onCompact }: ContextRingProps) {
+  const r = 6;
+  const circ = 2 * Math.PI * r;
+  const dash = circ * (pct / 100);
+  const ringColor = barClass === "danger" ? "#e74c3c" : barClass === "warning" ? "#f39c12" : "var(--text-muted)";
+  const remaining = Math.max(0, 100 - Math.round(pct));
+
+  return (
+    <>
+      <button
+        className="hyo-context-ring-btn"
+        title={`Context: ${formatTokens(inputTokens)} / ${formatTokens(contextLimit)}`}
+        onClick={onToggle}
+      >
+        <svg width="16" height="16" viewBox="0 0 16 16" style={{ display: "block" }}>
+          <circle cx="8" cy="8" r={r} fill="none" stroke="var(--background-modifier-border)" strokeWidth="2" />
+          <circle
+            cx="8" cy="8" r={r}
+            fill="none"
+            stroke={ringColor}
+            strokeWidth="2"
+            strokeDasharray={`${dash} ${circ}`}
+            strokeLinecap="round"
+            transform="rotate(-90 8 8)"
+          />
+        </svg>
+      </button>
+      {open && (
+        <div className="hyo-context-popup" style={{ position: "fixed", bottom: popupBottom, left: 12 }}>
+          <div className="hyo-usage-popup-title">CONTEXT WINDOW</div>
+          <div className="hyo-usage-divider" />
+          <div className="hyo-usage-row">
+            <span className="hyo-usage-label">Used</span>
+            <span className="hyo-usage-value">{formatTokens(inputTokens)} / {formatTokens(contextLimit)}</span>
+          </div>
+          <div className="hyo-usage-bar-inline-wrap">
+            <div className="hyo-usage-bar-inline">
+              <div className={`hyo-usage-bar-inline-fill ${barClass}`} style={{ width: pct + "%" }} />
+            </div>
+          </div>
+          <div className="hyo-usage-row small">
+            <span className="hyo-usage-label">Remaining until auto-compact</span>
+            <span className="hyo-usage-value">{remaining}%</span>
+          </div>
+          <div className="hyo-usage-divider" />
+          <button className="hyo-compact-now-btn" onClick={onCompact}>
+            Compact now
+          </button>
+        </div>
+      )}
+    </>
   );
 }
