@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.6
+## 0.1.7
 
 ### Fixes
 - **Accurate context window ring** — usage now read from individual assistant events (not aggregated results), with subagent events filtered out; ratios no longer double-count
@@ -8,8 +8,6 @@
 - **Strip inline `<thinking>` tags** — Claude 4.7's adaptive thinking occasionally emits `<thinking>…</thinking>` as text inside a normal response; these are now stripped at render so internal reasoning doesn't leak into the chat
 - **Default agent no longer leaks between users** — `data.json` is no longer tracked in git and a migration clears stale `defaultAgent` if no matching agent file exists on disk
 - **Past sessions open with your default agent** — previously opened with the generic "Default" regardless of settings
-- **BRAT version mismatch fixed** — manifest version matches the release tag
-- **Agent picker cleanup** — removed hardcoded personal colour map; dot colours are now fully hash-generated from agent name
 
 ### Features
 - **PDF attachments** — PDFs sent as native document blocks, no text extraction
@@ -18,10 +16,14 @@
 - **Attachment size on chips** — chips show estimated token size; large (reference-mode) files have a dashed border so routing is visible before sending
 - **Auto-cleanup of old attachments** — files older than 1 day are swept on plugin load
 - **Auto-compact continuation** — after an auto-compact, Hyo nudges the CLI with "Please continue." so the conversation resumes instead of stalling
-- **Settings refresh without restart** — changes apply to the chat panel immediately
-- **Auto-detect CLI path** — settings button finds the local Claude installation automatically
-- **Default agent setting** — choose which agent is loaded for new conversations
-- **Per-field saved indicator** — "✓ Saved" appears next to the field that changed
+
+## 0.1.6
+- **Settings refresh without restart** — changing settings now updates the chat panel immediately (no restart required)
+- **Auto-detect CLI path** — new button in settings finds your Claude installation automatically
+- **Default agent setting** — choose which agent to use for new conversations in settings
+- **Per-field saved indicator** — "✓ Saved" now appears next to the field that changed, not just at the top of settings
+- **Fixed agent picker** — removed hardcoded personal defaults; "Default" option is now a clean generic entry
+- **Fixed BRAT version mismatch** — manifest version now correctly matches release tag
 
 ## 0.1.5
 - Agent dot colours now fully hash-generated from agent name (no hardcoded colour map)
