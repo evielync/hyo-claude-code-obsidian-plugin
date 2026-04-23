@@ -8,7 +8,7 @@ import { HIDDEN_TOOLS } from "../hooks/useChatEngine";
 
 interface StreamingMessageProps {
   message: Message;
-  onPermissionResponse: (requestId: string, allowed: boolean) => void;
+  onPermissionResponse: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
   onQuestionAnswer: (questionId: string, answer: string) => void;
 }
 
@@ -17,9 +17,31 @@ export function StreamingMessage({
   onPermissionResponse,
   onQuestionAnswer,
 }: StreamingMessageProps) {
+  if (message.isCompaction) {
+    return (
+      <div className="hyo-compaction-line">
+        <span className="hyo-compaction-rule" />
+        <span className="hyo-compaction-label">
+          <span className="hyo-thinking-dot" />
+          <span className="hyo-thinking-dot" />
+          <span className="hyo-thinking-dot" />
+          {" "}Compacting…
+        </span>
+        <span className="hyo-compaction-rule" />
+      </div>
+    );
+  }
+
   const blocks = message.orderedBlocks || [];
   const toolCalls = message.toolCalls || [];
   const activityLabel = getActivityLabel(message);
+
+  // Hide text blocks at the same turn index as any Skill tool call.
+  const skillTurnIndices = new Set(
+    blocks
+      .filter((b) => b.type === "tool" && toolCalls.find((t) => t.id === b.toolId)?.name === "Skill")
+      .map((b) => b.turnIndex)
+  );
 
   return (
     <div className="hyo-message hyo-message-assistant hyo-streaming">
@@ -36,7 +58,8 @@ export function StreamingMessage({
             );
           }
           if (block.type === "text") {
-            const isLast = !blocks.slice(i + 1).some((b) => b.type === "text");
+            if (block.isSkillOutput || skillTurnIndices.has(block.turnIndex)) return null;
+            const isLast = !blocks.slice(i + 1).some((b) => b.type === "text" && !b.isSkillOutput && !skillTurnIndices.has(b.turnIndex));
             return (
               <span key={i}>
                 <MarkdownBlock content={block.content || ""} />

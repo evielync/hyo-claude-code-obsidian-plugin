@@ -8,13 +8,20 @@ import { HyoStatusBar } from "./HyoStatusBar";
 import type { useSessionManager } from "../hooks/useSessionManager";
 import { useSkills, type Skill } from "../hooks/useSkills";
 import type HyoPlugin from "../main";
+import {
+  estimateTokens,
+  formatTokens,
+  shouldInline,
+  writeAttachmentToDisk,
+} from "../attachments";
+import * as path from "path";
 
 interface AttachedFile {
   name: string;
-  fileType: "text" | "image";
+  fileType: "text" | "image" | "pdf";
   content?: string;       // text files
-  mediaType?: string;     // image files
-  data?: string;          // image files — base64
+  mediaType?: string;     // image files / pdf
+  data?: string;          // image files / pdf — base64
 }
 
 interface ChatPanelProps {
@@ -31,16 +38,22 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     activeGenerating,
     activeModel,
     activePermissionMode,
+    activeAgent,
+    activeTabHasSession,
+    activeInputTokens,
+    activeContextWindow,
     newTab,
     closeTab,
     switchTab,
     renameTab,
     setTabModel,
     setTabPermissionMode,
+    setTabAgent,
     sendMessage,
     sendPermissionResponse,
     sendQuestionAnswer,
     stopGeneration,
+    compact,
     pastSessions,
     openPastSession,
     refreshPastSessions,
@@ -66,6 +79,13 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
       )
     : vaultPath;
 
+  // Where large file attachments get written. Inside the plugin's own folder
+  // so Obsidian keeps it tidy and Claude's Read tool can access absolute paths.
+  const attachmentsDir = useMemo(
+    () => path.join(vaultPath, plugin.manifest.dir || "", "attachments"),
+    [vaultPath, plugin.manifest.dir]
+  );
+
   // Slash command state (checks both .claude/skills and skills/)
   const skills = useSkills(workingDirectory);
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
@@ -73,12 +93,18 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
   const [slashSelectedIdx, setSlashSelectedIdx] = useState(0);
   const slashMenuRef = useRef<HTMLDivElement>(null);
 
-  const filteredSkills = useMemo(() => {
-    if (!slashFilter) return skills;
-    return skills.filter((s) =>
-      s.name.toLowerCase().includes(slashFilter.toLowerCase())
-    );
-  }, [skills, slashFilter]);
+  const BUILTIN_COMMANDS = useMemo(() => [
+    { name: "compact", description: "Summarise and compress conversation history", builtin: true },
+    { name: "context", description: "Show current context window usage breakdown", builtin: true },
+  ], []);
+
+  // Unified slash items: builtins first, then skills
+  const slashItems = useMemo(() => {
+    const filter = slashFilter.toLowerCase();
+    const builtins = BUILTIN_COMMANDS.filter((c) => !filter || c.name.includes(filter));
+    const filtered = skills.filter((s) => !filter || s.name.toLowerCase().includes(filter));
+    return [...builtins, ...filtered];
+  }, [skills, slashFilter, BUILTIN_COMMANDS]);
 
   // Reset textarea height when switching tabs
   useEffect(() => {
@@ -135,7 +161,9 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
   }, [activeTabId]);
 
   const readAndAddFile = useCallback((file: File) => {
-    // Images — read as base64 and send as image content blocks
+    const ext = "." + (file.name.split(".").pop() ?? "").toLowerCase();
+
+    // Images — base64 as image content blocks
     if (file.type.startsWith("image/")) {
       const reader = new FileReader();
       reader.onload = (ev) => {
@@ -148,8 +176,49 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
       return;
     }
 
+    // PDFs — base64 as document content blocks (Claude API native support)
+    if (ext === ".pdf" || file.type === "application/pdf") {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const dataUrl = ev.target?.result as string;
+        const data = dataUrl.split(",")[1];
+        addFile({ name: file.name, fileType: "pdf", mediaType: "application/pdf", data });
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+
+    // Excel — parse to CSV text via exceljs
+    if (ext === ".xlsx" || ext === ".xls" || ext === ".xlsm") {
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+        try {
+          const buf = ev.target?.result as ArrayBuffer;
+          const ExcelJS = await import("exceljs");
+          const workbook = new ExcelJS.Workbook();
+          await workbook.xlsx.load(buf);
+          const parts: string[] = [];
+          workbook.eachSheet((sheet) => {
+            parts.push(`# Sheet: ${sheet.name}`);
+            sheet.eachRow({ includeEmpty: false }, (row) => {
+              const values = (row.values as any[]).slice(1).map((v) =>
+                v === null || v === undefined ? "" : String(v)
+              );
+              parts.push(values.join(","));
+            });
+            parts.push("");
+          });
+          addFile({ name: file.name, fileType: "text", content: parts.join("\n") });
+        } catch (err) {
+          console.error("[hyo] Failed to parse Excel file:", err);
+          new Notice(`Could not read "${file.name}" — file may be corrupt or password-protected`);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+      return;
+    }
+
     // Text files — check extension
-    const ext = "." + (file.name.split(".").pop() ?? "").toLowerCase();
     const textExtensions = new Set([
       ".txt", ".md", ".markdown", ".json", ".csv", ".yaml", ".yml",
       ".toml", ".xml", ".html", ".htm", ".css", ".js", ".jsx",
@@ -226,13 +295,23 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     }
   }, [readAndAddFile]);
 
-  const selectSkill = useCallback(
-    (skill: Skill) => {
+  const selectSlashItem = useCallback(
+    (item: { name: string; builtin?: boolean }) => {
       setSlashMenuOpen(false);
-      setInputValues((prev) => ({ ...prev, [activeTabId]: `/${skill.name} ` }));
+      if (item.builtin && item.name === "compact") {
+        setInputValues((prev) => ({ ...prev, [activeTabId]: "" }));
+        compact();
+        return;
+      }
+      if (item.builtin && item.name === "context") {
+        setInputValues((prev) => ({ ...prev, [activeTabId]: "" }));
+        sendMessage("/context");
+        return;
+      }
+      setInputValues((prev) => ({ ...prev, [activeTabId]: `/${item.name} ` }));
       inputRef.current?.focus();
     },
-    [activeTabId]
+    [activeTabId, compact]
   );
 
   const handleInput = useCallback(
@@ -267,41 +346,70 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
       ? { displayText: text, attachedFileNames: attachedFiles.map((f) => f.name) }
       : undefined;
 
-    const hasImages = attachedFiles.some((f) => f.fileType === "image");
+    const textFiles = attachedFiles.filter((f) => f.fileType === "text");
+    const imageFiles = attachedFiles.filter((f) => f.fileType === "image");
+    const pdfFiles = attachedFiles.filter((f) => f.fileType === "pdf");
 
-    if (hasImages) {
-      // Build a content block array: text block first, then image blocks
-      const textFiles = attachedFiles.filter((f) => f.fileType === "text");
-      const imageFiles = attachedFiles.filter((f) => f.fileType === "image");
-      const textParts = [
-        ...(text ? [text] : []),
-        ...textFiles.map((f) => `[File: ${f.name}]\n${f.content}`),
-      ].join("\n\n");
+    // Split text files: small ones go inline, large ones get written to disk
+    // and Claude reads them via the Read tool.
+    const smallTextFiles = textFiles.filter((f) => shouldInline(f.content || ""));
+    const largeTextFiles = textFiles.filter((f) => !shouldInline(f.content || ""));
+
+    const references: { name: string; tokens: number; filePath: string }[] = [];
+    for (const f of largeTextFiles) {
+      try {
+        const filePath = writeAttachmentToDisk(attachmentsDir, f.name, f.content || "");
+        references.push({
+          name: f.name,
+          tokens: estimateTokens(f.content || ""),
+          filePath,
+        });
+      } catch (e) {
+        console.error("[hyo] Failed to write attachment:", e);
+        new Notice(`Could not save "${f.name}" for reference — sending inline instead`);
+        // Fall back to inline
+        smallTextFiles.push(f);
+      }
+    }
+
+    const textParts: string[] = [];
+    if (text) textParts.push(text);
+    for (const f of smallTextFiles) {
+      textParts.push(`[File: ${f.name}]\n${f.content}`);
+    }
+    if (references.length > 0) {
+      const refList = references
+        .map((r) => `- ${r.name} (~${r.tokens.toLocaleString()} tokens) — ${r.filePath}`)
+        .join("\n");
+      textParts.push(
+        `I've attached the following files. Use the Read tool to access their contents when needed:\n\n${refList}`
+      );
+    }
+    const messageText = textParts.join("\n\n");
+
+    setAttachedFilesMap((prev) => ({ ...prev, [activeTabId]: [] }));
+
+    if (imageFiles.length > 0 || pdfFiles.length > 0) {
       const blocks: any[] = [];
-      if (textParts) blocks.push({ type: "text", text: textParts });
+      if (messageText) blocks.push({ type: "text", text: messageText });
       for (const img of imageFiles) {
         blocks.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
       }
-      setAttachedFilesMap((prev) => ({ ...prev, [activeTabId]: [] }));
+      for (const pdf of pdfFiles) {
+        blocks.push({ type: "document", source: { type: "base64", media_type: pdf.mediaType, data: pdf.data } });
+      }
       sendMessage(blocks as any, meta);
-    } else if (attachedFiles.length > 0) {
-      const fileBlocks = attachedFiles
-        .map((f) => `[File: ${f.name}]\n${f.content}`)
-        .join("\n\n");
-      const fullText = `${text}\n\n${fileBlocks}`;
-      setAttachedFilesMap((prev) => ({ ...prev, [activeTabId]: [] }));
-      sendMessage(fullText, meta);
     } else {
-      sendMessage(text, meta);
+      sendMessage(messageText, meta);
     }
-  }, [inputValues, activeTabId, attachedFiles, sendMessage]);
+  }, [inputValues, activeTabId, attachedFiles, sendMessage, attachmentsDir]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (slashMenuOpen && filteredSkills.length > 0) {
+      if (slashMenuOpen && slashItems.length > 0) {
         if (e.key === "ArrowDown") {
           e.preventDefault();
-          setSlashSelectedIdx((i) => Math.min(i + 1, filteredSkills.length - 1));
+          setSlashSelectedIdx((i) => Math.min(i + 1, slashItems.length - 1));
           return;
         }
         if (e.key === "ArrowUp") {
@@ -311,7 +419,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
         }
         if (e.key === "Enter" || e.key === "Tab") {
           e.preventDefault();
-          selectSkill(filteredSkills[slashSelectedIdx]);
+          selectSlashItem(slashItems[slashSelectedIdx]);
           return;
         }
         if (e.key === "Escape") {
@@ -326,7 +434,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
         handleSend();
       }
     },
-    [slashMenuOpen, filteredSkills, slashSelectedIdx, selectSkill, handleSend]
+    [slashMenuOpen, slashItems, slashSelectedIdx, selectSlashItem, handleSend]
   );
 
   return (
@@ -365,15 +473,15 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
 
       <div className="hyo-input-area">
         {/* Slash command menu — floats above input */}
-        {slashMenuOpen && filteredSkills.length > 0 && (
+        {slashMenuOpen && slashItems.length > 0 && (
           <div className="hyo-slash-menu" ref={slashMenuRef}>
-            {filteredSkills.map((skill, i) => (
+            {slashItems.map((skill, i) => (
               <div
                 key={skill.name}
                 className={`hyo-slash-item${i === slashSelectedIdx ? " hyo-slash-item-selected" : ""}`}
                 onMouseDown={(e) => {
                   e.preventDefault();
-                  selectSkill(skill);
+                  selectSlashItem(skill);
                 }}
               >
                 <span className="hyo-slash-name">/{skill.name}</span>
@@ -387,20 +495,31 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
 
         {attachedFiles.length > 0 && (
           <div className="hyo-attachment-chips">
-            {attachedFiles.map((f) => (
-              <div key={f.name} className="hyo-attachment-chip">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
-                  <polyline points="14 2 14 8 20 8" />
-                </svg>
-                <span className="hyo-attachment-name">{f.name}</span>
-                <button
-                  className="hyo-attachment-remove"
-                  title="Remove attachment"
-                  onClick={() => removeFile(f.name)}
-                >×</button>
-              </div>
-            ))}
+            {attachedFiles.map((f) => {
+              const tokens = f.fileType === "text" ? estimateTokens(f.content || "") : 0;
+              const willReference = f.fileType === "text" && !shouldInline(f.content || "");
+              return (
+                <div
+                  key={f.name}
+                  className={`hyo-attachment-chip${willReference ? " hyo-attachment-chip-ref" : ""}`}
+                  title={willReference ? `Large file — will be read via Claude's Read tool` : undefined}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                    <polyline points="14 2 14 8 20 8" />
+                  </svg>
+                  <span className="hyo-attachment-name">{f.name}</span>
+                  {tokens > 0 && (
+                    <span className="hyo-attachment-tokens">{formatTokens(tokens)}</span>
+                  )}
+                  <button
+                    className="hyo-attachment-remove"
+                    title="Remove attachment"
+                    onClick={() => removeFile(f.name)}
+                  >×</button>
+                </div>
+              );
+            })}
           </div>
         )}
         <div className="hyo-input-row">
@@ -439,7 +558,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
             ref={fileInputRef}
             type="file"
             style={{ display: "none" }}
-            accept="image/*,.txt,.md,.json,.csv,.yaml,.yml,.toml,.xml,.html,.css,.js,.ts,.py,.rb,.go,.rs,.sh,.log"
+            accept="image/*,.pdf,.xlsx,.xls,.xlsm,.txt,.md,.json,.csv,.yaml,.yml,.toml,.xml,.html,.css,.js,.ts,.py,.rb,.go,.rs,.sh,.log"
             multiple
             onChange={handleFileInputChange}
           />
@@ -487,8 +606,13 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
       <HyoStatusBar
         model={activeModel}
         permissionMode={activePermissionMode}
+        agent={activeAgent}
+        inputTokens={activeInputTokens}
+        contextWindow={activeContextWindow}
         onModelChange={handleModelChange}
         onPermissionModeChange={handlePermissionModeChange}
+        onAgentChange={setTabAgent}
+        onCompact={compact}
       />
     </div>
   );

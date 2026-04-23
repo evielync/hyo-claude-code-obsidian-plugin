@@ -1,4 +1,7 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting } from "obsidian";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
 import type HyoPlugin from "./main";
 
 export interface HyoSettings {
@@ -6,14 +9,20 @@ export interface HyoSettings {
   model: string;
   permissionMode: string;
   workingDirectory: string;
+  defaultAgent: string;
 }
 
 export const DEFAULT_SETTINGS: HyoSettings = {
   cliPath: "/usr/local/bin/claude",
   model: "claude-sonnet-4-5-20250929",
   permissionMode: "default",
-  workingDirectory: "", // Empty means use current vault
+  workingDirectory: "",
+  defaultAgent: "",
 };
+
+export function dispatchSettingsChanged(): void {
+  window.dispatchEvent(new CustomEvent("hyo-settings-changed"));
+}
 
 export class HyoSettingTab extends PluginSettingTab {
   plugin: HyoPlugin;
@@ -35,15 +44,33 @@ export class HyoSettingTab extends PluginSettingTab {
     }
   }
 
+  private showSavedNear(nameEl: HTMLElement): void {
+    this.showSaved();
+    const existing = nameEl.querySelector(".hyo-setting-saved");
+    if (existing) existing.remove();
+    const badge = nameEl.createSpan({
+      cls: "hyo-setting-saved",
+      text: "✓ Saved",
+    });
+    badge.style.cssText =
+      "margin-left: 8px; font-size: 0.8em; color: var(--color-green); opacity: 1; transition: opacity 0.5s;";
+    setTimeout(() => (badge.style.opacity = "0"), 1200);
+    setTimeout(() => badge.remove(), 1800);
+  }
+
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
 
-    const header = containerEl.createEl("div", { attr: { style: "display: flex; align-items: baseline; gap: 12px; margin-bottom: 0;" } });
+    const header = containerEl.createEl("div", {
+      attr: { style: "display: flex; align-items: baseline; gap: 12px; margin-bottom: 0;" },
+    });
     header.createEl("h2", { text: "Hyo Plugin", attr: { style: "margin: 0;" } });
     this.savedIndicator = header.createEl("span", {
       text: "Saved",
-      attr: { style: "font-size: 0.8em; color: var(--color-green); opacity: 0; transition: opacity 0.3s;" },
+      attr: {
+        style: "font-size: 0.8em; color: var(--color-green); opacity: 0; transition: opacity 0.3s;",
+      },
     });
 
     const guideLink = containerEl.createEl("p", { attr: { style: "margin: 0 0 20px;" } });
@@ -91,18 +118,45 @@ export class HyoSettingTab extends PluginSettingTab {
           })
       );
 
+    // Default agent — only show if agent files exist
+    const agentDir = path.join(os.homedir(), ".claude", "agents");
+    let agentFiles: string[] = [];
+    try {
+      if (fs.existsSync(agentDir)) {
+        agentFiles = fs
+          .readdirSync(agentDir)
+          .filter((f) => f.endsWith(".md"))
+          .map((f) => f.replace(/\.md$/, "").toLowerCase())
+          .sort();
+      }
+    } catch {}
+
+    if (agentFiles.length > 0) {
+      const agentSetting = new Setting(containerEl)
+        .setName("Default agent")
+        .setDesc("Which agent to use when starting new conversations")
+        .addDropdown((dropdown) => {
+          dropdown.addOption("", "Default (no agent)");
+          agentFiles.forEach((name) => dropdown.addOption(name, name));
+          dropdown.setValue(this.plugin.settings.defaultAgent || "");
+          dropdown.onChange(async (value) => {
+            this.plugin.settings.defaultAgent = value;
+            await this.plugin.saveSettings();
+            this.showSavedNear(
+              agentSetting.nameEl as HTMLElement
+            );
+          });
+        });
+    }
+
     // Advanced Settings
     containerEl.createEl("h3", {
       text: "Advanced",
       attr: { style: "margin-top: 24px; margin-bottom: 12px;" },
     });
-
-    const advancedDesc = containerEl.createEl("p", {
+    containerEl.createEl("p", {
       text: "Optional settings for custom configurations.",
-      attr: {
-        style:
-          "margin: 0 0 16px; color: var(--text-muted); font-size: 0.9em;",
-      },
+      attr: { style: "margin: 0 0 16px; color: var(--text-muted); font-size: 0.9em;" },
     });
 
     // Working directory
@@ -118,7 +172,7 @@ export class HyoSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.workingDirectory = value;
             await this.plugin.saveSettings();
-            this.showSaved();
+            this.showSavedNear(workingDirSetting.nameEl as HTMLElement);
           })
       );
 
@@ -132,8 +186,8 @@ export class HyoSettingTab extends PluginSettingTab {
           const target = e.target as HTMLInputElement;
           const files = target.files;
           if (files && files.length > 0) {
-            const path = files[0].path;
-            const dirPath = path.substring(0, path.lastIndexOf("/"));
+            const filePath = files[0].path;
+            const dirPath = filePath.substring(0, filePath.lastIndexOf("/"));
             this.plugin.settings.workingDirectory = dirPath;
             await this.plugin.saveSettings();
             this.display();
@@ -147,7 +201,7 @@ export class HyoSettingTab extends PluginSettingTab {
     const cliPathSetting = new Setting(containerEl)
       .setName("Claude Code CLI path")
       .setDesc(
-        "Where Claude Code is installed on your machine. The default works for most installations — only change this if you get a 'Claude not found' error."
+        "Where Claude Code is installed on your machine. Click 'Auto-detect' to find it automatically."
       )
       .addText((text) =>
         text
@@ -156,9 +210,61 @@ export class HyoSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.cliPath = value;
             await this.plugin.saveSettings();
-            this.showSaved();
+            this.showSavedNear(cliPathSetting.nameEl as HTMLElement);
           })
       );
+
+    cliPathSetting.addButton((button) =>
+      button.setButtonText("Auto-detect").onClick(async () => {
+        const { execSync } = require("child_process");
+        const home = os.homedir();
+        const isWindows = process.platform === "win32";
+
+        // Try login shell first (picks up full PATH including nvm, npm-global, etc.)
+        const shellCmds = isWindows
+          ? ["where claude"]
+          : [
+              "bash -lc 'which claude'",
+              "zsh -lc 'which claude'",
+            ];
+
+        // Also probe common install locations directly
+        const commonPaths = isWindows
+          ? []
+          : [
+              `${home}/.npm-global/bin/claude`,
+              "/usr/local/bin/claude",
+              "/usr/bin/claude",
+              `${home}/.local/bin/claude`,
+            ];
+
+        let detected = "";
+
+        for (const cmd of shellCmds) {
+          try {
+            const result = execSync(cmd, { encoding: "utf8", timeout: 5000 }).trim();
+            if (result) { detected = result; break; }
+          } catch {}
+        }
+
+        if (!detected) {
+          for (const p of commonPaths) {
+            try {
+              if (fs.existsSync(p)) { detected = p; break; }
+            } catch {}
+          }
+        }
+
+        if (detected) {
+          this.plugin.settings.cliPath = detected;
+          await this.plugin.saveSettings();
+          this.display();
+          new Notice(`✓ Found Claude at ${detected}`);
+        } else {
+          new Notice("Could not find Claude CLI. Check the install guide or set the path manually.");
+        }
+      })
+    );
 
     cliPathSetting.addButton((button) =>
       button.setButtonText("Browse...").onClick(async () => {

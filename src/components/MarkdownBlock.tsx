@@ -6,6 +6,15 @@ interface MarkdownBlockProps {
   sourcePath?: string;
 }
 
+// Claude 4.7's adaptive thinking sometimes emits <thinking>...</thinking>
+// tags inline in text responses instead of using extended thinking blocks.
+// Strip them so they don't leak into the rendered message.
+export function stripInlineThinkingTags(text: string): string {
+  return text
+    .replace(/<thinking>[\s\S]*?<\/thinking>\s*/g, "")
+    .replace(/<thinking>[\s\S]*$/, "");
+}
+
 export function MarkdownBlock({ content, sourcePath = "" }: MarkdownBlockProps) {
   const ref = useRef<HTMLDivElement>(null);
   const componentRef = useRef<Component | null>(null);
@@ -23,7 +32,7 @@ export function MarkdownBlock({ content, sourcePath = "" }: MarkdownBlockProps) 
       ref.current.empty();
       MarkdownRenderer.render(
         app,
-        content,
+        stripInlineThinkingTags(content),
         ref.current,
         sourcePath,
         componentRef.current

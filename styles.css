@@ -699,6 +699,20 @@
   white-space: nowrap;
 }
 
+.hyo-attachment-tokens {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hyo-attachment-chip-ref {
+  border-style: dashed;
+}
+
+.hyo-attachment-chip-ref .hyo-attachment-tokens {
+  color: var(--text-accent);
+}
+
 .hyo-attachment-remove {
   font-size: 14px;
   line-height: 1;

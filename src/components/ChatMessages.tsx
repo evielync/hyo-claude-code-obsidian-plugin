@@ -6,7 +6,7 @@ import type { Message } from "../hooks/useChatEngine";
 interface ChatMessagesProps {
   messages: Message[];
   scrollRef: React.MutableRefObject<{ nearBottom: boolean }>;
-  onPermissionResponse: (requestId: string, allowed: boolean) => void;
+  onPermissionResponse: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
   onQuestionAnswer: (questionId: string, answer: string) => void;
 }
 
@@ -41,14 +41,7 @@ export function ChatMessages({
   return (
     <div className="hyo-messages" ref={containerRef}>
       {messages.map((msg, i) => {
-        if (msg.isCompaction) {
-          return (
-            <div key={`compact-${i}`} className="hyo-compaction-banner">
-              Context compacted
-            </div>
-          );
-        }
-
+        // Streaming compaction: show "Compacting…" animation via StreamingMessage
         if (msg.streaming) {
           return (
             <StreamingMessage
@@ -57,6 +50,15 @@ export function ChatMessages({
               onPermissionResponse={onPermissionResponse}
               onQuestionAnswer={onQuestionAnswer}
             />
+          );
+        }
+
+        // Completed compaction: show static banner
+        if (msg.isCompaction) {
+          return (
+            <div key={`compact-${i}`} className="hyo-compaction-banner">
+              Context compacted
+            </div>
           );
         }
 

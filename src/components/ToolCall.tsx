@@ -8,18 +8,20 @@ interface ToolCallProps {
 export function ToolCall({ tool }: ToolCallProps) {
   const [expanded, setExpanded] = useState(false);
   const summary = getToolSummary(tool);
+  const isSkill = tool.name === "Skill";
 
   return (
     <div className="hyo-tool-call">
       <div
         className="hyo-tool-call-header"
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => !isSkill && setExpanded(!expanded)}
+        style={isSkill ? { cursor: "default" } : undefined}
       >
-        <span className="hyo-tool-call-arrow">{expanded ? "\u25BC" : "\u25B6"}</span>
-        <span className="hyo-tool-call-name">{tool.name}</span>
+        <span className="hyo-tool-call-arrow">{isSkill ? "◆" : expanded ? "\u25BC" : "\u25B6"}</span>
+        <span className="hyo-tool-call-name">{isSkill ? "Skill" : tool.name}</span>
         {summary && <span className="hyo-tool-call-summary">{summary}</span>}
       </div>
-      {expanded && (
+      {!isSkill && expanded && (
         <pre className="hyo-tool-call-body">
           {JSON.stringify(tool.input, null, 2)}
           {tool.result && `\n\n--- Result ---\n${tool.result}`}
@@ -34,6 +36,8 @@ function getToolSummary(tool: ToolCallData): string {
   if (!input) return "";
 
   switch (name) {
+    case "Skill":
+      return input.name || input.skill || "";
     case "Read":
     case "Write":
     case "Edit":

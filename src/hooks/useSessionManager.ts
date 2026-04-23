@@ -31,6 +31,7 @@ export interface TabSession {
   permissionMode: string;
   agent: string;
   inputTokens: number;
+  contextWindow?: number;
 }
 
 interface SessionState {
@@ -43,6 +44,8 @@ interface SessionManagerOptions {
   cwd: string;
   model: string;
   permissionMode: string;
+  defaultAgent: string;
+  settingsVersion?: number;
 }
 
 // ------- utilities -------
@@ -169,7 +172,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           generating: false,
           model: options.model,
           permissionMode: options.permissionMode,
-          agent: "",
+          agent: options.defaultAgent,
           inputTokens: 0,
         },
       ],
@@ -252,13 +255,17 @@ export function useSessionManager(options: SessionManagerOptions) {
 
         // Auto-compaction marker (compact_boundary fires when the CLI auto-compacts)
         if (event.type === "system" && event.subtype === "compact_boundary") {
-          // Only add a marker if this wasn't triggered by a manual /compact
+          // Only handle as auto-compact if this wasn't triggered by a manual /compact
           // (manual compact already has a streaming isCompaction assistant message)
           const currentTab = stateRef.current.tabs.find((t) => t.id === tabId);
           const alreadyHasCompactionMarker = currentTab?.messages.some(
             (m) => m.isCompaction && m.streaming
           );
           if (!alreadyHasCompactionMarker) {
+            // Mark the currently-streaming pre-compact assistant message as complete,
+            // add the compacted marker, then add a new streaming assistant message
+            // to receive the continuation. Reset the stream state so new content
+            // doesn't merge with pre-compact content.
             const markerMsg: Message = {
               role: "assistant",
               content: "compacted",
@@ -267,12 +274,45 @@ export function useSessionManager(options: SessionManagerOptions) {
               toolCalls: [],
               orderedBlocks: [],
             };
+            const continuationMsg: Message = {
+              role: "assistant",
+              content: "",
+              thinking: "",
+              toolCalls: [],
+              orderedBlocks: [],
+              streaming: true,
+            };
             setState((prev) => ({
               ...prev,
-              tabs: prev.tabs.map((tab) =>
-                tab.id === tabId ? { ...tab, messages: [...tab.messages, markerMsg] } : tab
-              ),
+              tabs: prev.tabs.map((tab) => {
+                if (tab.id !== tabId) return tab;
+                const msgs = [...tab.messages];
+                for (let i = msgs.length - 1; i >= 0; i--) {
+                  if (msgs[i].role === "assistant" && msgs[i].streaming) {
+                    msgs[i] = { ...msgs[i], streaming: false };
+                    break;
+                  }
+                }
+                return {
+                  ...tab,
+                  messages: [...msgs, markerMsg, continuationMsg],
+                  generating: true,
+                };
+              }),
             }));
+            streamStatesRef.current[tabId] = {
+              toolCalls: [],
+              orderedBlocks: [],
+              turnIndex: 0,
+              toolResultSinceLastText: false,
+              skillResultPending: false,
+            };
+            // Nudge the CLI to resume what it was doing before compaction.
+            setTimeout(() => {
+              transportsRef.current[tabId]?.sendUserMessage(
+                "Please continue where you left off before the compaction."
+              );
+            }, 100);
           }
           return;
         }
@@ -306,18 +346,23 @@ export function useSessionManager(options: SessionManagerOptions) {
           return;
         }
 
-        // Result — turn complete
+        // Result — turn complete. Only pick up contextWindow here; inputTokens
+        // is tracked from individual assistant events (see below) since result.usage
+        // aggregates across multiple API calls within a turn.
         if (event.type === "result") {
           updateTabLastAssistant(tabId, () => ({ streaming: false }));
-          const u = event.usage || {};
-          const inputTokens = (u.input_tokens ?? 0) +
-            (u.cache_creation_input_tokens ?? 0) +
-            (u.cache_read_input_tokens ?? 0);
+          const mu: any = event.modelUsage || {};
+          const firstModel: any = Object.values(mu)[0];
+          const contextWindow: number | undefined = firstModel?.contextWindow;
           setState((prev) => ({
             ...prev,
             tabs: prev.tabs.map((tab) =>
               tab.id === tabId
-                ? { ...tab, generating: false, ...(inputTokens > 0 ? { inputTokens } : {}) }
+                ? {
+                    ...tab,
+                    generating: false,
+                    ...(contextWindow ? { contextWindow } : {}),
+                  }
                 : tab
             ),
           }));
@@ -334,6 +379,26 @@ export function useSessionManager(options: SessionManagerOptions) {
 
         // Assistant message (complete)
         if (event.type === "assistant") {
+          // Track context window from each main-chain assistant event's usage.
+          // Each assistant API response's usage reflects the context state at that call.
+          // Skip sidechain (subagent) events to avoid out-of-order drops/spikes when
+          // parallel subagents finish.
+          const isSidechain = event.isSidechain || event.parent_tool_use_id;
+          const u = event.message?.usage;
+          if (u && !isSidechain) {
+            const total =
+              (u.input_tokens ?? 0) +
+              (u.cache_creation_input_tokens ?? 0) +
+              (u.cache_read_input_tokens ?? 0);
+            if (total > 0) {
+              setState((prev) => ({
+                ...prev,
+                tabs: prev.tabs.map((tab) =>
+                  tab.id === tabId ? { ...tab, inputTokens: total } : tab
+                ),
+              }));
+            }
+          }
           const contentArr = event.message?.content || [];
           processContentBlocks(contentArr, ss, "assistant");
           updateTabLastAssistant(tabId, () => buildSnapshot(ss));
@@ -459,7 +524,7 @@ export function useSessionManager(options: SessionManagerOptions) {
             generating: false,
             model: activeTab?.model || options.model,
             permissionMode: activeTab?.permissionMode || options.permissionMode,
-            agent: "",
+            agent: options.defaultAgent,
           },
         ],
         activeTabId: id,
@@ -487,7 +552,7 @@ export function useSessionManager(options: SessionManagerOptions) {
               generating: false,
               model: options.model,
               permissionMode: options.permissionMode,
-              agent: "",
+              agent: options.defaultAgent,
             },
           ],
           activeTabId: newId,
@@ -806,13 +871,13 @@ export function useSessionManager(options: SessionManagerOptions) {
             generating: false,
             model: activeTab?.model || options.model,
             permissionMode: activeTab?.permissionMode || options.permissionMode,
-            agent: "",
+            agent: options.defaultAgent,
           },
         ],
         activeTabId: id,
       };
     });
-  }, [options.cwd, options.model, options.permissionMode]);
+  }, [options.cwd, options.model, options.permissionMode, options.defaultAgent]);
 
   const compact = useCallback(() => {
     sendMessage("/compact", { isCompaction: true });
@@ -832,6 +897,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     activeAgent: activeTab?.agent || "",
     activeTabHasSession: !!activeTab?.cliSessionId,
     activeInputTokens: activeTab?.inputTokens || 0,
+    activeContextWindow: activeTab?.contextWindow,
     newTab,
     closeTab,
     switchTab,

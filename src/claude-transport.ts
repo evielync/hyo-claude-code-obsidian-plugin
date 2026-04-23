@@ -6,6 +6,7 @@ export interface TransportOptions {
   cwd: string;
   model: string;
   permissionMode: string;
+  agent?: string;
   sessionId?: string;
   resume?: boolean;
   onMessage: (msg: any) => void;
@@ -24,7 +25,7 @@ export class ClaudeTransport {
   }
 
   spawn(): void {
-    const { cliPath, cwd, model, permissionMode, sessionId, resume } =
+    const { cliPath, cwd, model, permissionMode, agent, sessionId, resume } =
       this.options;
 
     const args = [
@@ -48,6 +49,11 @@ export class ClaudeTransport {
       args.push("--resume", sessionId);
     } else if (sessionId) {
       args.push("--session-id", sessionId);
+    }
+
+    // All agents are loaded via --agent <name> from ~/.claude/agents/.
+    if (agent) {
+      args.push("--agent", agent);
     }
 
     // Build PATH — Electron apps launched from Dock have minimal PATH
@@ -141,8 +147,13 @@ export class ClaudeTransport {
     this.proc.stdin.write(msg);
   }
 
-  sendPermissionResponse(requestId: string, allowed: boolean): void {
+  sendPermissionResponse(requestId: string, behavior: "allow" | "allow_always" | "deny"): void {
     if (!this.proc?.stdin?.writable) return;
+
+    const response =
+      behavior === "deny"
+        ? { behavior: "deny", message: "Denied by user" }
+        : { behavior, updatedInput: {} };
 
     const msg =
       JSON.stringify({
@@ -150,9 +161,7 @@ export class ClaudeTransport {
         response: {
           subtype: "success",
           request_id: requestId,
-          response: allowed
-            ? { behavior: "allow", updatedInput: {} }
-            : { behavior: "deny", message: "Denied by user" },
+          response,
         },
       }) + "\n";
 

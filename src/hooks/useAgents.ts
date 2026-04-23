@@ -7,23 +7,14 @@ export interface Agent {
   name: string;
   description: string;
   color: string;
-  isDefault: boolean;
 }
 
-// Predefined colors for known agents, hash-based for new ones
-const AGENT_COLORS: Record<string, string> = {};
-
 function colorFromName(name: string): string {
-  // Use predefined color if available
-  if (AGENT_COLORS[name]) return AGENT_COLORS[name];
-
-  // Otherwise generate from hash with better distribution
   let hash = 0;
   for (let i = 0; i < name.length; i++) {
     hash = (hash << 5) - hash + name.charCodeAt(i);
     hash |= 0;
   }
-  // Use golden ratio for better color distribution
   const hue = (Math.abs(hash) * 137.508) % 360;
   return `hsl(${hue}, 55%, 55%)`;
 }
@@ -39,8 +30,6 @@ function parseFrontmatter(text: string): { name: string; description: string } {
     description: descMatch ? descMatch[1].trim() : "",
   };
 }
-
-export const DEFAULT_AGENT = "";
 
 export function useAgents(): Agent[] {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -65,26 +54,19 @@ export function useAgents(): Agent[] {
             name: agentName,
             description: description || "",
             color: colorFromName(agentName),
-            isDefault: agentName === DEFAULT_AGENT,
           });
         }
       }
 
-      // Only add chad fallback if at least one other agent was found
-      if (loaded.length > 0 && !loaded.find((a) => a.name === DEFAULT_AGENT)) {
-        loaded.push({
-          name: DEFAULT_AGENT,
-          description: "Default — Ev's Chief of Staff",
-          color: AGENT_COLORS[DEFAULT_AGENT],
-          isDefault: true,
-        });
-      }
+      loaded.sort((a, b) => a.name.localeCompare(b.name));
 
-      loaded.sort((a, b) => {
-        if (a.isDefault) return -1;
-        if (b.isDefault) return 1;
-        return a.name.localeCompare(b.name);
+      // Always prepend the generic "no agent" default
+      loaded.unshift({
+        name: "",
+        description: "Standard Claude without a specific agent",
+        color: "var(--text-muted)",
       });
+
       setAgents(loaded);
     } catch (e) {
       console.warn("[hyo] Failed to load agents:", e);

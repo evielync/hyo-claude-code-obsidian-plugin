@@ -1,6 +1,10 @@
 import { Plugin, WorkspaceLeaf } from "obsidian";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
 import { HyoView, VIEW_TYPE_HYO } from "./HyoView";
-import { HyoSettingTab, HyoSettings, DEFAULT_SETTINGS } from "./settings";
+import { HyoSettingTab, HyoSettings, DEFAULT_SETTINGS, dispatchSettingsChanged } from "./settings";
+import { cleanupOldAttachments } from "./attachments";
 
 export default class HyoPlugin extends Plugin {
   settings: HyoSettings = DEFAULT_SETTINGS;
@@ -22,6 +26,16 @@ export default class HyoPlugin extends Plugin {
     });
 
     this.addSettingTab(new HyoSettingTab(this.app, this));
+
+    // Sweep old attachment files (> 1 day). Safe because active sessions
+    // write far more recently, so only stale files get removed.
+    try {
+      const vaultBase = (this.app.vault.adapter as any).basePath as string;
+      const attachmentsDir = path.join(vaultBase, this.manifest.dir || "", "attachments");
+      cleanupOldAttachments(attachmentsDir);
+    } catch (e) {
+      console.error("[hyo] Attachment cleanup setup failed:", e);
+    }
   }
 
   onunload() {
@@ -43,10 +57,30 @@ export default class HyoPlugin extends Plugin {
       this.settings.model = DEFAULT_SETTINGS.model;
       await this.saveData(this.settings);
     }
+    // Clear defaultAgent if no matching file exists in ~/.claude/agents/.
+    // Fixes stale state from older plugin versions that hardcoded an agent name.
+    if (this.settings.defaultAgent) {
+      try {
+        const agentFile = path.join(
+          os.homedir(),
+          ".claude",
+          "agents",
+          `${this.settings.defaultAgent}.md`
+        );
+        if (!fs.existsSync(agentFile)) {
+          this.settings.defaultAgent = "";
+          await this.saveData(this.settings);
+        }
+      } catch {
+        this.settings.defaultAgent = "";
+        await this.saveData(this.settings);
+      }
+    }
   }
 
   async saveSettings() {
     await this.saveData(this.settings);
+    dispatchSettingsChanged();
   }
 
   async activateView() {

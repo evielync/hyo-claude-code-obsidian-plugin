@@ -7,6 +7,7 @@ interface HyoStatusBarProps {
   permissionMode: string;
   agent: string;
   inputTokens: number;
+  contextWindow?: number;
   onModelChange: (model: string) => void;
   onPermissionModeChange: (mode: string) => void;
   onAgentChange: (agent: string) => void;
@@ -76,6 +77,7 @@ export function HyoStatusBar({
   permissionMode,
   agent,
   inputTokens,
+  contextWindow,
   onModelChange,
   onPermissionModeChange,
   onAgentChange,
@@ -165,7 +167,7 @@ export function HyoStatusBar({
     PERMISSION_MODES.find((m) => m.id === permissionMode)?.name ||
     permissionMode;
 
-  const contextLimit = getContextLimit(model);
+  const contextLimit = contextWindow ?? getContextLimit(model);
   const contextPct = inputTokens > 0 ? Math.min(100, (inputTokens / contextLimit) * 100) : 0;
   const contextBarClass = contextPct > 80 ? "danger" : contextPct > 50 ? "warning" : "";
 
@@ -244,7 +246,7 @@ export function HyoStatusBar({
           style={{ "--agent-color": activeAgent?.color } as React.CSSProperties}
         >
           <span className="hyo-agent-dot" />
-          <span className="hyo-agent-name">{activeAgent?.name || agent}</span>
+          <span className="hyo-agent-name">{activeAgent?.name || "Default"}</span>
         </button>
       )}
 
@@ -418,8 +420,7 @@ export function HyoStatusBar({
               />
               <div className="hyo-agent-popup-text">
                 <div className="hyo-agent-popup-name">
-                  {a.name}
-                  {a.isDefault && <span className="hyo-agent-popup-default"> · default</span>}
+                  {a.name || "Default"}
                 </div>
                 {a.description && (
                   <div className="hyo-agent-popup-desc">{a.description}</div>

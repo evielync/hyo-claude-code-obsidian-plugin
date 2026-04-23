@@ -12,11 +12,18 @@ interface HyoAppProps {
 
 export function HyoApp({ app, plugin }: HyoAppProps) {
   const [cliFound, setCliFound] = useState<boolean | null>(null);
+  const [settingsVersion, setSettingsVersion] = useState(0);
   const vaultPath = (app.vault.adapter as any).basePath as string;
 
   useEffect(() => {
+    const handler = () => setSettingsVersion((v) => v + 1);
+    window.addEventListener("hyo-settings-changed", handler);
+    return () => window.removeEventListener("hyo-settings-changed", handler);
+  }, []);
+
+  useEffect(() => {
     setCliFound(checkCliExists(plugin.settings.cliPath));
-  }, [plugin.settings.cliPath]);
+  }, [plugin.settings.cliPath, settingsVersion]);
 
   // Use custom working directory if set, otherwise use vault path
   const workingDirectory = plugin.settings.workingDirectory
@@ -31,6 +38,8 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
     cwd: workingDirectory,
     model: plugin.settings.model,
     permissionMode: plugin.settings.permissionMode,
+    defaultAgent: plugin.settings.defaultAgent || "",
+    settingsVersion,
   });
 
   if (cliFound === null) {

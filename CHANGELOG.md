@@ -1,0 +1,55 @@
+# Changelog
+
+## 0.1.6
+
+### Fixes
+- **Accurate context window ring** — usage now read from individual assistant events (not aggregated results), with subagent events filtered out; ratios no longer double-count
+- **Auto-detect model context window** — picks up from `modelUsage` so 1M-context models show the correct ceiling
+- **Strip inline `<thinking>` tags** — Claude 4.7's adaptive thinking occasionally emits `<thinking>…</thinking>` as text inside a normal response; these are now stripped at render so internal reasoning doesn't leak into the chat
+- **Default agent no longer leaks between users** — `data.json` is no longer tracked in git and a migration clears stale `defaultAgent` if no matching agent file exists on disk
+- **Past sessions open with your default agent** — previously opened with the generic "Default" regardless of settings
+- **BRAT version mismatch fixed** — manifest version matches the release tag
+- **Agent picker cleanup** — removed hardcoded personal colour map; dot colours are now fully hash-generated from agent name
+
+### Features
+- **PDF attachments** — PDFs sent as native document blocks, no text extraction
+- **Excel/XLSX attachments** — workbooks parsed to CSV using `exceljs` (avoids the SheetJS vulnerability path)
+- **Large file attachment routing** — text attachments over ~5k tokens are saved to disk and Claude reads them on demand via the Read tool; messages stay lean and the content benefits from prompt caching on subsequent turns
+- **Attachment size on chips** — chips show estimated token size; large (reference-mode) files have a dashed border so routing is visible before sending
+- **Auto-cleanup of old attachments** — files older than 1 day are swept on plugin load
+- **Auto-compact continuation** — after an auto-compact, Hyo nudges the CLI with "Please continue." so the conversation resumes instead of stalling
+- **Settings refresh without restart** — changes apply to the chat panel immediately
+- **Auto-detect CLI path** — settings button finds the local Claude installation automatically
+- **Default agent setting** — choose which agent is loaded for new conversations
+- **Per-field saved indicator** — "✓ Saved" appears next to the field that changed
+
+## 0.1.5
+- Agent dot colours now fully hash-generated from agent name (no hardcoded colour map)
+
+## 0.1.4
+- Removed hardcoded default agent name from session manager and agent hook
+
+## 0.1.3
+- Agent picker hidden when no agent files are configured
+
+## 0.1.2
+- Install guide link added to splash screen
+
+## 0.1.1
+- Onboarding screen scroll fix (content no longer clips upward)
+- "Saved" indicator in settings
+- User guide link in settings and splash screen
+- Model list updated (Opus 4.7, Sonnet 4.6, Haiku 4.5)
+
+## 0.1.0
+- Initial release
+- Claude Code CLI integration via stream-json protocol
+- Multi-tab conversations
+- Tool call display with expandable input/output
+- Permission prompts inline in chat
+- File attachments (text and images)
+- Past sessions browser
+- Model and permission mode selector per tab
+- Context window ring
+- `/compact` command
+- Slash command skill picker

@@ -38,6 +38,7 @@ export interface OrderedBlock {
   content?: string;
   toolId?: string;
   turnIndex: number;
+  isSkillOutput?: boolean; // suppress text block emitted by Skill tool result
 }
 
 export interface PermissionRequestData {
@@ -58,6 +59,7 @@ interface StreamState {
   orderedBlocks: OrderedBlock[];
   turnIndex: number;
   toolResultSinceLastText: boolean;
+  suppressNextTextBlock: boolean; // set after Skill tool_result to hide content dump
 }
 
 interface ChatEngineOptions {
@@ -78,6 +80,7 @@ export function useChatEngine(options: ChatEngineOptions) {
     orderedBlocks: [],
     turnIndex: 0,
     toolResultSinceLastText: false,
+    suppressNextTextBlock: false,
   });
   const scrollRef = useRef({ nearBottom: true });
   const messagesRef = useRef<Message[]>([]);
@@ -165,6 +168,7 @@ export function useChatEngine(options: ChatEngineOptions) {
       // User event (tool results sent back by the system)
       if (event.type === "user") {
         const contentArr = event.message?.content || [];
+        console.log("[hyo] user event blocks:", contentArr.map((b: any) => b.type));
         processContentBlocks(contentArr, ss);
         updateStreamingFromState(ss, updateLastAssistant);
         return;
@@ -173,6 +177,7 @@ export function useChatEngine(options: ChatEngineOptions) {
       // Assistant message (complete)
       if (event.type === "assistant") {
         const contentArr = event.message?.content || [];
+        console.log("[hyo] assistant event blocks:", contentArr.map((b: any) => ({ type: b.type, textPreview: b.type === "text" ? (b.text || "").slice(0, 80) : undefined })));
         processContentBlocks(contentArr, ss);
         updateStreamingFromState(ss, updateLastAssistant);
         return;
@@ -200,6 +205,15 @@ export function useChatEngine(options: ChatEngineOptions) {
               toolId: tool.id,
               turnIndex: ss.turnIndex,
             });
+            // Suppress text blocks in the same turn immediately when a Skill call starts.
+            // Skill content may have already streamed as text before this event arrives.
+            if (tool.name === "Skill") {
+              for (const b of ss.orderedBlocks) {
+                if (b.type === "text" && b.turnIndex === ss.turnIndex) {
+                  b.isSkillOutput = true;
+                }
+              }
+            }
             updateStreamingFromState(ss, updateLastAssistant);
           }
         }
@@ -247,10 +261,14 @@ export function useChatEngine(options: ChatEngineOptions) {
             if (existing) {
               existing.content = (existing.content || "") + delta.text;
             } else {
+              const isSkillOutput = ss.suppressNextTextBlock;
+              ss.suppressNextTextBlock = false;
+              console.log("[hyo] stream text block created: turnIndex=", ss.turnIndex, "isSkillOutput=", isSkillOutput, "preview=", delta.text.slice(0, 60));
               ss.orderedBlocks.push({
                 type: "text",
                 content: delta.text,
                 turnIndex: ss.turnIndex,
+                isSkillOutput,
               });
             }
             ss.toolResultSinceLastText = false;
@@ -295,6 +313,7 @@ export function useChatEngine(options: ChatEngineOptions) {
         orderedBlocks: [],
         turnIndex: 0,
         toolResultSinceLastText: false,
+        suppressNextTextBlock: false,
       };
 
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
@@ -331,13 +350,13 @@ export function useChatEngine(options: ChatEngineOptions) {
   );
 
   const sendPermissionResponse = useCallback(
-    (requestId: string, allowed: boolean) => {
-      transportRef.current?.sendPermissionResponse(requestId, allowed);
+    (requestId: string, behavior: "allow" | "allow_always" | "deny") => {
+      transportRef.current?.sendPermissionResponse(requestId, behavior);
       updateLastAssistant((msg) => ({
         permissionRequest: msg.permissionRequest
           ? {
               ...msg.permissionRequest,
-              resolved: allowed ? "allowed" : "denied",
+              resolved: behavior === "deny" ? "denied" : "allowed",
             }
           : null,
       }));
@@ -353,6 +372,7 @@ export function useChatEngine(options: ChatEngineOptions) {
         orderedBlocks: [],
         turnIndex: 0,
         toolResultSinceLastText: false,
+        suppressNextTextBlock: false,
       };
 
       updateLastAssistant(() => ({ askQuestion: null, streaming: false }));
@@ -393,6 +413,7 @@ export function useChatEngine(options: ChatEngineOptions) {
       orderedBlocks: [],
       turnIndex: 0,
       toolResultSinceLastText: false,
+      suppressNextTextBlock: false,
     };
   }, []);
 
@@ -414,16 +435,23 @@ function processContentBlocks(contentArr: any[], ss: StreamState) {
     if (block.type === "text") {
       if (ss.toolResultSinceLastText && ss.orderedBlocks.length > 0)
         ss.turnIndex++;
+      const isSkillOutput = ss.suppressNextTextBlock;
+      ss.suppressNextTextBlock = false;
       const existing = ss.orderedBlocks.find(
         (b) => b.type === "text" && b.turnIndex === ss.turnIndex
       );
-      if (existing) existing.content = block.text || "";
-      else
+      if (existing) {
+        console.log("[hyo] text block UPDATED: turnIndex=", ss.turnIndex, "isSkillOutput=", existing.isSkillOutput, "preview=", (block.text || "").slice(0, 60));
+        existing.content = block.text || "";
+      } else {
+        console.log("[hyo] text block created: turnIndex=", ss.turnIndex, "isSkillOutput=", isSkillOutput, "preview=", (block.text || "").slice(0, 60));
         ss.orderedBlocks.push({
           type: "text",
           content: block.text || "",
           turnIndex: ss.turnIndex,
+          isSkillOutput,
         });
+      }
       ss.toolResultSinceLastText = false;
     } else if (block.type === "thinking") {
       const existing = ss.orderedBlocks.find(
@@ -458,6 +486,21 @@ function processContentBlocks(contentArr: any[], ss: StreamState) {
           typeof block.content === "string"
             ? block.content
             : JSON.stringify(block.content);
+        if (tool.name === "Skill") {
+          ss.suppressNextTextBlock = true;
+          // Retroactively suppress text blocks emitted in the same turn as the Skill call.
+          // The skill content arrives as text deltas before the tool_result event fires.
+          const skillBlock = ss.orderedBlocks.find(
+            (b) => b.type === "tool" && b.toolId === tool.id
+          );
+          if (skillBlock) {
+            for (const b of ss.orderedBlocks) {
+              if (b.type === "text" && b.turnIndex === skillBlock.turnIndex) {
+                b.isSkillOutput = true;
+              }
+            }
+          }
+        }
       }
       ss.toolResultSinceLastText = true;
     }

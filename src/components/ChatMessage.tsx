@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from "react";
 import { ToolCall } from "./ToolCall";
-import { MarkdownBlock } from "./MarkdownBlock";
+import { MarkdownBlock, stripInlineThinkingTags } from "./MarkdownBlock";
 import type { Message } from "../hooks/useChatEngine";
 import { HIDDEN_TOOLS } from "../hooks/useChatEngine";
 
@@ -9,6 +9,9 @@ interface ChatMessageProps {
 }
 
 export function ChatMessage({ message }: ChatMessageProps) {
+  if (message.isCompaction) {
+    return <CompactionMessage message={message} />;
+  }
   if (message.role === "user") {
     return <UserMessage message={message} />;
   }
@@ -16,6 +19,19 @@ export function ChatMessage({ message }: ChatMessageProps) {
     return <AssistantMessage message={message} />;
   }
   return null;
+}
+
+function CompactionMessage({ message }: { message: Message }) {
+  const done = !message.streaming;
+  return (
+    <div className="hyo-compaction-line">
+      <span className="hyo-compaction-rule" />
+      <span className="hyo-compaction-label">
+        {done ? "✓ Compacted" : "Compacting…"}
+      </span>
+      <span className="hyo-compaction-rule" />
+    </div>
+  );
 }
 
 function UserMessage({ message }: { message: Message }) {
@@ -86,11 +102,18 @@ function AssistantMessage({ message }: { message: Message }) {
   const blocks = message.orderedBlocks || [];
   const toolCalls = message.toolCalls || [];
 
+  // Any text block at the same turn index as a Skill tool call is skill content — hide it.
+  const skillTurnIndices = new Set(
+    blocks
+      .filter((b) => b.type === "tool" && toolCalls.find((t) => t.id === b.toolId)?.name === "Skill")
+      .map((b) => b.turnIndex)
+  );
+
   const getTextContent = useCallback(() => {
-    if (blocks.length === 0) return message.content || "";
+    if (blocks.length === 0) return stripInlineThinkingTags(message.content || "");
     return blocks
-      .filter((b) => b.type === "text")
-      .map((b) => b.content || "")
+      .filter((b) => b.type === "text" && !skillTurnIndices.has(b.turnIndex))
+      .map((b) => stripInlineThinkingTags(b.content || ""))
       .join("\n\n");
   }, [blocks, message.content]);
 
@@ -122,6 +145,7 @@ function AssistantMessage({ message }: { message: Message }) {
             );
           }
           if (block.type === "text") {
+            if (block.isSkillOutput || skillTurnIndices.has(block.turnIndex)) return null;
             return <MarkdownBlock key={i} content={block.content || ""} />;
           }
           if (block.type === "tool") {
