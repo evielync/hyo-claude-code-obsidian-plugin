@@ -67,6 +67,7 @@ interface ChatEngineOptions {
   cwd: string;
   model: string;
   permissionMode: string;
+  maxOutputTokens?: number;
 }
 
 export function useChatEngine(options: ChatEngineOptions) {
@@ -329,6 +330,7 @@ export function useChatEngine(options: ChatEngineOptions) {
           permissionMode: options.permissionMode,
           sessionId: sessionId || undefined,
           resume: !!sessionId,
+          maxOutputTokens: options.maxOutputTokens,
           onMessage: processEvent,
           onError: (error) => {
             console.error("[hyo] CLI error:", error);

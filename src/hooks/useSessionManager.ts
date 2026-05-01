@@ -45,6 +45,7 @@ interface SessionManagerOptions {
   model: string;
   permissionMode: string;
   defaultAgent: string;
+  maxOutputTokens?: number;
   settingsVersion?: number;
 }
 
@@ -671,6 +672,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           agent: currentTab?.agent || "",
           sessionId: cliSessionId || undefined,
           resume: !!cliSessionId,
+          maxOutputTokens: options.maxOutputTokens,
           onMessage: makeProcessEvent(tabId),
           onError: (error) => console.error("[hyo] CLI error:", error),
           onClose: (code) => {

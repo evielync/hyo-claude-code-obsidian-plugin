@@ -9,6 +9,7 @@ export interface TransportOptions {
   agent?: string;
   sessionId?: string;
   resume?: boolean;
+  maxOutputTokens?: number;
   onMessage: (msg: any) => void;
   onError: (error: string) => void;
   onClose: (code: number | null) => void;
@@ -58,6 +59,9 @@ export class ClaudeTransport {
 
     // Build PATH — Electron apps launched from Dock have minimal PATH
     const env = { ...process.env };
+    if (this.options.maxOutputTokens && this.options.maxOutputTokens > 0) {
+      env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(this.options.maxOutputTokens);
+    }
     env.PATH = [
       "/usr/local/bin",
       "/opt/homebrew/bin",

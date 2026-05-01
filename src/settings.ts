@@ -10,6 +10,7 @@ export interface HyoSettings {
   permissionMode: string;
   workingDirectory: string;
   defaultAgent: string;
+  maxOutputTokens: number;
 }
 
 export const DEFAULT_SETTINGS: HyoSettings = {
@@ -18,6 +19,7 @@ export const DEFAULT_SETTINGS: HyoSettings = {
   permissionMode: "default",
   workingDirectory: "",
   defaultAgent: "",
+  maxOutputTokens: 64000,
 };
 
 export function dispatchSettingsChanged(): void {
@@ -196,6 +198,26 @@ export class HyoSettingTab extends PluginSettingTab {
         input.click();
       })
     );
+
+    // Max output tokens
+    const maxTokensSetting = new Setting(containerEl)
+      .setName("Max output tokens")
+      .setDesc(
+        "Cap on response length per turn. Default 64000 works for Sonnet. Lower to 32000 if using Opus models."
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("64000")
+          .setValue(String(this.plugin.settings.maxOutputTokens))
+          .onChange(async (value) => {
+            const n = parseInt(value, 10);
+            if (!isNaN(n) && n >= 1024) {
+              this.plugin.settings.maxOutputTokens = n;
+              await this.plugin.saveSettings();
+              this.showSavedNear(maxTokensSetting.nameEl as HTMLElement);
+            }
+          })
+      );
 
     // CLI path
     const cliPathSetting = new Setting(containerEl)

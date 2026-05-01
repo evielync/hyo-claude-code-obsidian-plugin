@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.8
+
+### Fixes
+- **Configurable output token cap** — added a "Max output tokens" setting (Settings → Hyo Plugin → Advanced) that's passed to Claude Code via `CLAUDE_CODE_MAX_OUTPUT_TOKENS`. Default is now 64000 (up from CC's 32000). The previous low cap could truncate large single-shot generations (big HTML files, complex code) and leave an orphaned signed `thinking` block in the session, poisoning every subsequent message with a `messages.N.content.M: thinking blocks cannot be modified` API error. Bumping the default prevents the cap from firing in normal use. Lower to 32000 in settings if using Opus models, which max out at 32k output.
+
 ## 0.1.7
 
 ### Fixes

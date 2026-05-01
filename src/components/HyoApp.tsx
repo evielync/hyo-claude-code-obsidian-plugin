@@ -39,6 +39,7 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
     model: plugin.settings.model,
     permissionMode: plugin.settings.permissionMode,
     defaultAgent: plugin.settings.defaultAgent || "",
+    maxOutputTokens: plugin.settings.maxOutputTokens,
     settingsVersion,
   });
 
