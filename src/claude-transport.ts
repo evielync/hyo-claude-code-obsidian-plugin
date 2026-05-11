@@ -151,13 +151,45 @@ export class ClaudeTransport {
     this.proc.stdin.write(msg);
   }
 
-  sendPermissionResponse(requestId: string, behavior: "allow" | "allow_always" | "deny"): void {
+  sendPermissionResponse(
+    requestId: string,
+    behavior: "allow" | "allow_always" | "deny",
+    toolName?: string,
+  ): void {
     if (!this.proc?.stdin?.writable) return;
 
-    const response =
-      behavior === "deny"
-        ? { behavior: "deny", message: "Denied by user" }
-        : { behavior, updatedInput: {} };
+    let response: Record<string, unknown>;
+
+    if (behavior === "deny") {
+      response = {
+        behavior: "deny",
+        message: "Denied by user",
+        decisionClassification: "user_reject",
+      };
+    } else if (behavior === "allow_always" && toolName) {
+      // Claude Code's schema only accepts "allow" or "deny" as the behavior.
+      // "Always allow" is expressed by adding a session-level permission rule
+      // via the updatedPermissions array on an "allow" response.
+      response = {
+        behavior: "allow",
+        updatedInput: {},
+        decisionClassification: "user_permanent",
+        updatedPermissions: [
+          {
+            type: "addRules",
+            rules: [{ toolName }],
+            behavior: "allow",
+            destination: "session",
+          },
+        ],
+      };
+    } else {
+      response = {
+        behavior: "allow",
+        updatedInput: {},
+        decisionClassification: "user_temporary",
+      };
+    }
 
     const msg =
       JSON.stringify({

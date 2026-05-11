@@ -722,7 +722,12 @@ export function useSessionManager(options: SessionManagerOptions) {
   const sendPermissionResponse = useCallback(
     (requestId: string, behavior: "allow" | "allow_always" | "deny") => {
       const tabId = stateRef.current.activeTabId;
-      transportsRef.current[tabId]?.sendPermissionResponse(requestId, behavior);
+      // Look up the toolName from the pending permission request so the
+      // transport can build the correct updatedPermissions for "always allow".
+      const tab = stateRef.current.tabs.find((t) => t.id === tabId);
+      const lastMsg = tab?.messages[tab.messages.length - 1];
+      const toolName = lastMsg?.permissionRequest?.toolName;
+      transportsRef.current[tabId]?.sendPermissionResponse(requestId, behavior, toolName);
       updateTabLastAssistant(tabId, (msg) => ({
         permissionRequest: msg.permissionRequest
           ? {
