@@ -8,6 +8,7 @@ interface ChatMessagesProps {
   scrollRef: React.MutableRefObject<{ nearBottom: boolean }>;
   onPermissionResponse: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
   onQuestionAnswer: (questionId: string, answer: string) => void;
+  onRecover?: () => void;
 }
 
 export function ChatMessages({
@@ -15,6 +16,7 @@ export function ChatMessages({
   scrollRef,
   onPermissionResponse,
   onQuestionAnswer,
+  onRecover,
 }: ChatMessagesProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -62,7 +64,7 @@ export function ChatMessages({
           );
         }
 
-        return <ChatMessage key={`msg-${i}`} message={msg} />;
+        return <ChatMessage key={`msg-${i}`} message={msg} onRecover={onRecover} />;
       })}
     </div>
   );

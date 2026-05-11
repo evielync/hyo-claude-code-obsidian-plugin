@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.9
+
+### Fixes
+- **Past conversations now work on Windows and non-ASCII paths** — the project directory hash has been rewritten to match Claude Code's exact algorithm (`replace(/[^a-zA-Z0-9]/g, "-")` + truncation with hash suffix for long paths). The old code only replaced forward slashes, which meant Windows backslash paths produced a completely wrong directory lookup — every Windows user saw zero past sessions. Also fixes paths containing dots, underscores, or spaces (e.g. `john.doe`, `My Vault`).
+- **Symlink and Unicode path resolution** — the plugin now resolves symlinks (`realpathSync`) and normalises Unicode to NFC before hashing, matching Claude Code's internal behaviour. Fixes session lookup failures for vaults on iCloud, Dropbox aliases, or paths with accented characters on macOS.
+
+### Features
+- **One-click session recovery** — when a session is poisoned by an orphaned thinking block (output cap mid-stream truncation), a recovery banner appears on the error message. Click "Recover session and continue" to surgically remove the corrupt entries from the JSONL file and resume. Your last attempted message is prefilled in the input.
+
 ## 0.1.8
 
 ### Fixes

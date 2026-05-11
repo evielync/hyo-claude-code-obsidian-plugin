@@ -6,7 +6,9 @@ import type {
   OrderedBlock,
   AskQuestionData,
 } from "./useChatEngine";
-import { listPastSessions, loadSessionHistory, saveCustomTitle, type PastSession } from "../session-parser";
+import { listPastSessions, loadSessionHistory, saveCustomTitle, type PastSession, getProjectDir } from "../session-parser";
+import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
+import * as path from "path";
 
 // Re-export for convenience
 export type { PastSession };
@@ -885,6 +887,75 @@ export function useSessionManager(options: SessionManagerOptions) {
     sendMessage("/compact", { isCompaction: true });
   }, [sendMessage]);
 
+  // Recover a session that's been poisoned by an orphaned `thinking` block
+  // (the result of an output-cap mid-stream truncation). Reads the .jsonl,
+  // surgically removes the orphan + cap-error + failed retries, repairs
+  // parent UUIDs, kills the broken transport so the next send re-spawns
+  // with `--resume` against the cleaned file. Returns the user's last
+  // attempted message text so the UI can prefill the input.
+  const recoverSession = useCallback(
+    (tabId: string): RepairResult => {
+      const tab = stateRef.current.tabs.find((t) => t.id === tabId);
+      if (!tab?.cliSessionId) {
+        return {
+          success: false,
+          linesRemoved: 0,
+          capturedUserText: null,
+          reason: "No session ID for this tab",
+        };
+      }
+
+      const projectDir = getProjectDir(options.cwd);
+      const jsonlPath = path.join(projectDir, `${tab.cliSessionId}.jsonl`);
+      const result = repairSession(jsonlPath);
+      if (!result.success) return result;
+
+      // Kill the existing transport so the next sendMessage spawns a fresh
+      // process that --resumes against the cleaned file.
+      const existing = transportsRef.current[tabId];
+      if (existing) {
+        try {
+          existing.stop();
+        } catch {}
+        delete transportsRef.current[tabId];
+      }
+
+      // Strip the corrupt trailing messages from the in-memory state so the
+      // chat UI matches the file. Walk back from the end, removing assistant
+      // API errors and the user retries that triggered them, plus any
+      // orphaned-cap residue.
+      setState((prev) => ({
+        ...prev,
+        tabs: prev.tabs.map((t) => {
+          if (t.id !== tabId) return t;
+          const msgs = [...t.messages];
+          while (msgs.length > 0) {
+            const last = msgs[msgs.length - 1];
+            const text = (last.content || "").trim();
+            const isApiError =
+              last.role === "assistant" &&
+              (text.startsWith("API Error") ||
+                isThinkingBlockApiError(text));
+            const isFailedUserRetry =
+              last.role === "user" &&
+              msgs.length >= 2 &&
+              ((msgs[msgs.length - 2].content || "").startsWith("API Error") ||
+                isThinkingBlockApiError(msgs[msgs.length - 2].content || ""));
+            if (isApiError || isFailedUserRetry) {
+              msgs.pop();
+            } else {
+              break;
+            }
+          }
+          return { ...t, messages: msgs, generating: false };
+        }),
+      }));
+
+      return result;
+    },
+    [options.cwd]
+  );
+
   // ------- return -------
 
   const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
@@ -912,6 +983,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     sendQuestionAnswer,
     stopGeneration,
     compact,
+    recoverSession,
     pastSessions,
     openPastSession,
     refreshPastSessions,

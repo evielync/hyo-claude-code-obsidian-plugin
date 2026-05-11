@@ -9,9 +9,31 @@ export interface PastSession {
   size: number;
 }
 
+// Match Claude Code's project directory hashing exactly.
+// Claude Code uses: replace all non-alphanumeric chars with "-",
+// then truncate at 200 chars with a hash suffix if too long.
+function hashProjectPath(p: string): string {
+  const sanitised = p.replace(/[^a-zA-Z0-9]/g, "-");
+  if (sanitised.length <= 200) return sanitised;
+  // Java-style string hashCode, same as Claude Code's internal hash
+  let h = 0;
+  for (let i = 0; i < p.length; i++)
+    h = ((h << 5) - h + p.charCodeAt(i)) | 0;
+  return sanitised.slice(0, 200) + "-" + Math.abs(h).toString(36);
+}
+
+// Resolve the cwd the same way Claude Code does before hashing:
+// realpathSync (resolve symlinks) + NFC Unicode normalisation.
+function resolveProjectCwd(cwd: string): string {
+  try {
+    return fs.realpathSync(cwd).normalize("NFC");
+  } catch {
+    return cwd.normalize("NFC");
+  }
+}
+
 export function getProjectDir(cwd: string): string {
-  const hash = cwd.replace(/\//g, "-");
-  return path.join(os.homedir(), ".claude", "projects", hash);
+  return path.join(os.homedir(), ".claude", "projects", hashProjectPath(resolveProjectCwd(cwd)));
 }
 
 function getMetadataPath(cwd: string): string {

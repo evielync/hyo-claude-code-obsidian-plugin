@@ -3,12 +3,14 @@ import { ToolCall } from "./ToolCall";
 import { MarkdownBlock, stripInlineThinkingTags } from "./MarkdownBlock";
 import type { Message } from "../hooks/useChatEngine";
 import { HIDDEN_TOOLS } from "../hooks/useChatEngine";
+import { THINKING_BLOCK_ERROR_RE } from "../session-repair";
 
 interface ChatMessageProps {
   message: Message;
+  onRecover?: () => void;
 }
 
-export function ChatMessage({ message }: ChatMessageProps) {
+export function ChatMessage({ message, onRecover }: ChatMessageProps) {
   if (message.isCompaction) {
     return <CompactionMessage message={message} />;
   }
@@ -16,7 +18,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
     return <UserMessage message={message} />;
   }
   if (message.role === "assistant") {
-    return <AssistantMessage message={message} />;
+    return <AssistantMessage message={message} onRecover={onRecover} />;
   }
   return null;
 }
@@ -98,9 +100,39 @@ function CopyButton({ getText }: { getText: () => string }) {
   );
 }
 
-function AssistantMessage({ message }: { message: Message }) {
+function RecoverBanner({ onRecover }: { onRecover: () => void }) {
+  return (
+    <div className="hyo-recover-banner">
+      <div className="hyo-recover-banner-text">
+        This session hit a known issue (output cap left an orphaned thinking block). Click to clean it up and resume from your last message.
+      </div>
+      <button className="hyo-recover-button" onClick={onRecover}>
+        Recover session and continue
+      </button>
+    </div>
+  );
+}
+
+function isThinkingBlockErrorContent(text: string): boolean {
+  return THINKING_BLOCK_ERROR_RE.test(text);
+}
+
+function AssistantMessage({ message, onRecover }: { message: Message; onRecover?: () => void }) {
   const blocks = message.orderedBlocks || [];
   const toolCalls = message.toolCalls || [];
+
+  // Detect the thinking-block API error from the message content so we can
+  // surface the recovery button. The error arrives as plain text in either
+  // `message.content` or as a text block.
+  const fullText =
+    (message.content || "") +
+    "\n" +
+    blocks
+      .filter((b) => b.type === "text")
+      .map((b) => b.content || "")
+      .join("\n");
+  const showRecover =
+    !message.streaming && !!onRecover && isThinkingBlockErrorContent(fullText);
 
   // Any text block at the same turn index as a Skill tool call is skill content — hide it.
   const skillTurnIndices = new Set(
@@ -123,6 +155,7 @@ function AssistantMessage({ message }: { message: Message }) {
         <div className="hyo-message-content">
           <MarkdownBlock content={message.content} />
         </div>
+        {showRecover && onRecover && <RecoverBanner onRecover={onRecover} />}
         {!message.streaming && (
           <div className="hyo-message-actions">
             <CopyButton getText={getTextContent} />
@@ -156,6 +189,7 @@ function AssistantMessage({ message }: { message: Message }) {
           return null;
         })}
       </div>
+      {showRecover && onRecover && <RecoverBanner onRecover={onRecover} />}
       {!message.streaming && blocks.some((b) => b.type === "text") && (
         <div className="hyo-message-actions">
           <CopyButton getText={getTextContent} />

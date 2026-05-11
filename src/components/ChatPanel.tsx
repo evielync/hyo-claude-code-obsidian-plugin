@@ -54,6 +54,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     sendQuestionAnswer,
     stopGeneration,
     compact,
+    recoverSession,
     pastSessions,
     openPastSession,
     refreshPastSessions,
@@ -462,6 +463,25 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           scrollRef={scrollRef}
           onPermissionResponse={sendPermissionResponse}
           onQuestionAnswer={sendQuestionAnswer}
+          onRecover={() => {
+            const result = recoverSession(activeTabId);
+            if (result.success) {
+              if (result.capturedUserText) {
+                setInputValues((prev) => ({
+                  ...prev,
+                  [activeTabId]: result.capturedUserText!,
+                }));
+                setTimeout(() => inputRef.current?.focus(), 50);
+              }
+              new Notice(
+                `Session recovered (${result.linesRemoved} corrupt entries removed). Review your message and send.`
+              );
+            } else {
+              new Notice(
+                `Couldn't recover session: ${result.reason || "unknown error"}`
+              );
+            }
+          }}
         />
       ) : (
         <div className="hyo-messages">

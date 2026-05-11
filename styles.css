@@ -1695,3 +1695,38 @@
   color: var(--text-muted);
   background: var(--background-modifier-hover);
 }
+
+/* Session recovery banner — shown below an assistant message that's a
+   thinking-block API error. Lets the user heal the session in one click. */
+.hyo-recover-banner {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-m);
+  background: var(--background-modifier-error-hover, rgba(255, 100, 80, 0.08));
+  border: 1px solid var(--background-modifier-border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hyo-recover-banner-text {
+  font-size: 0.9em;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.hyo-recover-button {
+  align-self: flex-start;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+  padding: 6px 14px;
+  border-radius: var(--radius-s);
+  font-size: 0.9em;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.hyo-recover-button:hover {
+  background: var(--interactive-accent-hover);
+}
