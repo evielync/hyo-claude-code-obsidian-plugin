@@ -32,8 +32,67 @@ function resolveProjectCwd(cwd: string): string {
   }
 }
 
+// Strip trailing slashes/backslashes (Windows can add these inconsistently).
+function stripTrailingSlash(p: string): string {
+  return p.replace(/[\\/]+$/, "");
+}
+
+// Generate candidate project directories to check.
+// On Windows, different APIs return paths with different drive letter casing,
+// trailing slashes, or symlink resolution — any of which produces a different
+// hash and a different directory name. We try several normalizations and
+// return unique candidates.
+function getCandidateProjectDirs(cwd: string): string[] {
+  const base = path.join(os.homedir(), ".claude", "projects");
+  const seen = new Set<string>();
+  const dirs: string[] = [];
+
+  const add = (p: string) => {
+    const dir = path.join(base, hashProjectPath(p));
+    if (!seen.has(dir)) {
+      seen.add(dir);
+      dirs.push(dir);
+    }
+  };
+
+  // 1. Primary: realpathSync + NFC (current algorithm, matches Claude Code)
+  const resolved = resolveProjectCwd(cwd);
+  add(stripTrailingSlash(resolved));
+
+  // 2. Without realpathSync (in case symlink resolution differs)
+  const raw = cwd.normalize("NFC");
+  add(stripTrailingSlash(raw));
+
+  // 3. Case-normalized: lowercase entire path before hashing
+  //    Catches Windows drive letter casing differences (C: vs c:)
+  add(stripTrailingSlash(resolved.toLowerCase()));
+  add(stripTrailingSlash(raw.toLowerCase()));
+
+  // 4. Old pre-0.1.9 algorithm (backwards compat: only replaced forward slashes)
+  const oldHash = stripTrailingSlash(cwd).replace(/\//g, "-");
+  const oldDir = path.join(base, oldHash);
+  if (!seen.has(oldDir)) {
+    seen.add(oldDir);
+    dirs.push(oldDir);
+  }
+
+  return dirs;
+}
+
+// Return the project directory for a given cwd.
+// Tries multiple candidate paths and returns the first that exists on disk,
+// falling back to the primary (Claude Code algorithm) if none exist yet.
 export function getProjectDir(cwd: string): string {
-  return path.join(os.homedir(), ".claude", "projects", hashProjectPath(resolveProjectCwd(cwd)));
+  const candidates = getCandidateProjectDirs(cwd);
+  for (const dir of candidates) {
+    try {
+      if (fs.existsSync(dir)) return dir;
+    } catch {
+      continue;
+    }
+  }
+  // None exist yet — return primary so new sessions land in the right place
+  return candidates[0];
 }
 
 function getMetadataPath(cwd: string): string {
@@ -80,29 +139,51 @@ function getCustomTitle(cwd: string, sessionId: string): string | null {
 }
 
 export function listPastSessions(cwd: string): PastSession[] {
-  const dir = getProjectDir(cwd);
-  try {
-    if (!fs.existsSync(dir)) return [];
-  } catch {
-    return [];
+  const candidates = getCandidateProjectDirs(cwd);
+  const seenIds = new Set<string>();
+  const allEntries: { name: string; fullPath: string; stat: fs.Stats }[] = [];
+
+  console.log("[hyo] Looking for past sessions. CWD:", cwd);
+
+  for (const dir of candidates) {
+    try {
+      if (!fs.existsSync(dir)) {
+        console.log("[hyo]   candidate", path.basename(dir), "— not found");
+        continue;
+      }
+    } catch {
+      continue;
+    }
+
+    try {
+      const dirEntries = fs
+        .readdirSync(dir)
+        .filter((f) => f.endsWith(".jsonl"))
+        .map((f) => {
+          const fullPath = path.join(dir, f);
+          return { name: f, fullPath, stat: fs.statSync(fullPath) };
+        })
+        .filter((f) => f.stat.size > 500)
+        .filter((f) => {
+          // Dedupe across candidate dirs (same session ID = same file)
+          if (seenIds.has(f.name)) return false;
+          seenIds.add(f.name);
+          return true;
+        });
+
+      console.log("[hyo]   candidate", path.basename(dir), "—", dirEntries.length, "sessions");
+      allEntries.push(...dirEntries);
+    } catch (e) {
+      console.error("[hyo]   candidate", path.basename(dir), "— error:", e);
+    }
   }
 
-  let entries: { name: string; fullPath: string; stat: fs.Stats }[];
-  try {
-    entries = fs
-      .readdirSync(dir)
-      .filter((f) => f.endsWith(".jsonl"))
-      .map((f) => {
-        const fullPath = path.join(dir, f);
-        return { name: f, fullPath, stat: fs.statSync(fullPath) };
-      })
-      .filter((f) => f.stat.size > 500);
-  } catch {
-    return [];
+  if (allEntries.length === 0) {
+    console.log("[hyo]   No sessions found in any candidate directory");
   }
 
-  entries.sort((a, b) => b.stat.mtime.getTime() - a.stat.mtime.getTime());
-  entries = entries.slice(0, 50);
+  allEntries.sort((a, b) => b.stat.mtime.getTime() - a.stat.mtime.getTime());
+  const entries = allEntries.slice(0, 50);
 
   return entries.map((f) => {
     const sessionId = f.name.replace(".jsonl", "");
