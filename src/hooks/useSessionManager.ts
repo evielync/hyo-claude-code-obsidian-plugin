@@ -8,6 +8,7 @@ import type {
 } from "./useChatEngine";
 import { listPastSessions, loadSessionHistory, saveCustomTitle, type PastSession, getProjectDir } from "../session-parser";
 import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
+import { generateConversationTitle } from "../title-generator";
 import * as path from "path";
 
 // Re-export for convenience
@@ -34,6 +35,7 @@ export interface TabSession {
   agent: string;
   inputTokens: number;
   contextWindow?: number;
+  voiceMode: boolean;
 }
 
 interface SessionState {
@@ -49,6 +51,7 @@ interface SessionManagerOptions {
   defaultAgent: string;
   maxOutputTokens?: number;
   settingsVersion?: number;
+  autoGenerateTitles?: boolean;
 }
 
 // ------- utilities -------
@@ -177,6 +180,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           permissionMode: options.permissionMode,
           agent: options.defaultAgent,
           inputTokens: 0,
+          voiceMode: false,
         },
       ],
       activeTabId: id,
@@ -369,6 +373,54 @@ export function useSessionManager(options: SessionManagerOptions) {
                 : tab
             ),
           }));
+
+          // Auto-generate title after first response if enabled
+          if (options.autoGenerateTitles) {
+            const currentTab = stateRef.current.tabs.find((t) => t.id === tabId);
+            if (
+              currentTab &&
+              currentTab.messages.length === 2 &&
+              currentTab.messages[0]?.role === "user" &&
+              currentTab.messages[1]?.role === "assistant" &&
+              !currentTab.messages[1]?.isCompaction
+            ) {
+              const userText =
+                currentTab.messages[0].displayText ||
+                (typeof currentTab.messages[0].content === "string"
+                  ? currentTab.messages[0].content
+                  : "");
+              const truncatedTitle =
+                userText.slice(0, 40) + (userText.length > 40 ? "..." : "");
+
+              // Only generate if title is still the auto-truncated version
+              if (
+                currentTab.title === truncatedTitle ||
+                currentTab.title === "New conversation"
+              ) {
+                const titleBeforeGeneration = currentTab.title;
+
+                generateConversationTitle({
+                  cliPath: options.cliPath,
+                  userMessage: userText,
+                  assistantMessage:
+                    typeof currentTab.messages[1].content === "string"
+                      ? currentTab.messages[1].content
+                      : "",
+                }).then((generatedTitle) => {
+                  if (!generatedTitle) return;
+
+                  // Check tab still exists and title hasn't been manually changed
+                  const tab = stateRef.current.tabs.find((t) => t.id === tabId);
+                  if (!tab || tab.title !== titleBeforeGeneration) return;
+
+                  renameTab(tabId, generatedTitle);
+                }).catch((err) => {
+                  console.error("[hyo] Title generation error:", err);
+                });
+              }
+            }
+          }
+
           return;
         }
 
@@ -528,6 +580,7 @@ export function useSessionManager(options: SessionManagerOptions) {
             model: activeTab?.model || options.model,
             permissionMode: activeTab?.permissionMode || options.permissionMode,
             agent: options.defaultAgent,
+            voiceMode: false,
           },
         ],
         activeTabId: id,
@@ -556,6 +609,7 @@ export function useSessionManager(options: SessionManagerOptions) {
               model: options.model,
               permissionMode: options.permissionMode,
               agent: options.defaultAgent,
+              voiceMode: false,
             },
           ],
           activeTabId: newId,
@@ -814,6 +868,17 @@ export function useSessionManager(options: SessionManagerOptions) {
     }));
   }, []);
 
+  const toggleVoiceMode = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      tabs: prev.tabs.map((tab) =>
+        tab.id === prev.activeTabId
+          ? { ...tab, voiceMode: !tab.voiceMode }
+          : tab
+      ),
+    }));
+  }, []);
+
   const setTabAgent = useCallback((agent: string) => {
     // Switching agents requires a fresh CLI process — kill the current transport.
     // Next sendMessage will respawn with the new --agent flag.
@@ -881,6 +946,7 @@ export function useSessionManager(options: SessionManagerOptions) {
             model: activeTab?.model || options.model,
             permissionMode: activeTab?.permissionMode || options.permissionMode,
             agent: options.defaultAgent,
+            voiceMode: false,
           },
         ],
         activeTabId: id,
@@ -973,6 +1039,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     activeModel: activeTab?.model || options.model,
     activePermissionMode: activeTab?.permissionMode || options.permissionMode,
     activeAgent: activeTab?.agent || "",
+    activeVoiceMode: activeTab?.voiceMode || false,
     activeTabHasSession: !!activeTab?.cliSessionId,
     activeInputTokens: activeTab?.inputTokens || 0,
     activeContextWindow: activeTab?.contextWindow,
@@ -983,6 +1050,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     setTabModel,
     setTabPermissionMode,
     setTabAgent,
+    toggleVoiceMode,
     sendMessage,
     sendPermissionResponse,
     sendQuestionAnswer,

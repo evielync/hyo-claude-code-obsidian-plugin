@@ -40,6 +40,7 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
     permissionMode: plugin.settings.permissionMode,
     defaultAgent: plugin.settings.defaultAgent || "",
     maxOutputTokens: plugin.settings.maxOutputTokens,
+    autoGenerateTitles: plugin.settings.autoGenerateTitles,
     settingsVersion,
   });
 

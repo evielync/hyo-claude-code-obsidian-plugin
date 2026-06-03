@@ -5,7 +5,9 @@ import { ChatMessages } from "./ChatMessages";
 import { ChatTabs } from "./ChatTabs";
 import { SessionDropdown } from "./SessionDropdown";
 import { HyoStatusBar } from "./HyoStatusBar";
+import { VoiceControls } from "./VoiceControls";
 import type { useSessionManager } from "../hooks/useSessionManager";
+import { useVoiceMode } from "../hooks/useVoiceMode";
 import { useSkills, type Skill } from "../hooks/useSkills";
 import type HyoPlugin from "../main";
 import {
@@ -39,6 +41,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     activeModel,
     activePermissionMode,
     activeAgent,
+    activeVoiceMode,
     activeTabHasSession,
     activeInputTokens,
     activeContextWindow,
@@ -49,6 +52,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     setTabModel,
     setTabPermissionMode,
     setTabAgent,
+    toggleVoiceMode,
     sendMessage,
     sendPermissionResponse,
     sendQuestionAnswer,
@@ -86,6 +90,34 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     () => path.join(vaultPath, plugin.manifest.dir || "", "attachments"),
     [vaultPath, plugin.manifest.dir]
   );
+
+  // Voice mode
+  const hasVoiceApiKey = !!plugin.settings.elevenLabsApiKey;
+  const voiceMode = useVoiceMode({
+    apiKey: plugin.settings.elevenLabsApiKey,
+    voiceId: plugin.settings.voiceId,
+    playbackSpeed: plugin.settings.voicePlaybackSpeed,
+    isVoiceMode: activeVoiceMode,
+    autoSpeak: plugin.settings.voiceAutoSpeak,
+    onTranscript: (text: string) => {
+      sendMessage(text);
+    },
+  });
+
+  // Auto-speak when response completes
+  const prevGeneratingRef = useRef(activeGenerating);
+  useEffect(() => {
+    if (prevGeneratingRef.current && !activeGenerating && activeVoiceMode) {
+      // Generation just finished — find the last assistant message content
+      const lastAssistant = [...activeMessages]
+        .reverse()
+        .find((m) => m.role === "assistant" && !m.isCompaction);
+      if (lastAssistant?.content) {
+        voiceMode.autoSpeak(lastAssistant.content);
+      }
+    }
+    prevGeneratingRef.current = activeGenerating;
+  }, [activeGenerating, activeVoiceMode, activeMessages]);
 
   // Slash command state (checks both .claude/skills and skills/)
   const skills = useSkills(workingDirectory);
@@ -251,7 +283,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     if (!file) return;
     try {
       const content = await app.vault.read(file);
-      addFile({ name: file.name, content });
+      addFile({ name: file.name, fileType: "text", content });
     } catch (e) {
       console.error("[hyo] Failed to read file:", e);
     }
@@ -513,114 +545,130 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           </div>
         )}
 
-        {attachedFiles.length > 0 && (
-          <div className="hyo-attachment-chips">
-            {attachedFiles.map((f) => {
-              const tokens = f.fileType === "text" ? estimateTokens(f.content || "") : 0;
-              const willReference = f.fileType === "text" && !shouldInline(f.content || "");
-              return (
-                <div
-                  key={f.name}
-                  className={`hyo-attachment-chip${willReference ? " hyo-attachment-chip-ref" : ""}`}
-                  title={willReference ? `Large file — will be read via Claude's Read tool` : undefined}
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
-                    <polyline points="14 2 14 8 20 8" />
-                  </svg>
-                  <span className="hyo-attachment-name">{f.name}</span>
-                  {tokens > 0 && (
-                    <span className="hyo-attachment-tokens">{formatTokens(tokens)}</span>
-                  )}
-                  <button
-                    className="hyo-attachment-remove"
-                    title="Remove attachment"
-                    onClick={() => removeFile(f.name)}
-                  >×</button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-        <div className="hyo-input-row">
-          <div className="hyo-attach-wrap" ref={attachBtnRef}>
-            <button
-              className="hyo-attach-btn"
-              title="Attach file"
-              onClick={() => setAttachPopupOpen((v) => !v)}
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-              </svg>
-            </button>
-            {attachPopupOpen && (
-              <div className="hyo-attach-popup">
-                <button className="hyo-attach-popup-item" onClick={handleAttachCurrentFile}>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
-                    <polyline points="14 2 14 8 20 8" />
-                  </svg>
-                  Attach current file
-                </button>
-                <button className="hyo-attach-popup-item" onClick={handleUploadFromComputer}>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="17 8 12 3 7 8" />
-                    <line x1="12" y1="3" x2="12" y2="15" />
-                  </svg>
-                  Upload from computer
-                </button>
+        {activeVoiceMode && hasVoiceApiKey ? (
+          <VoiceControls
+            voiceState={voiceMode.voiceState}
+            isPaused={voiceMode.isPaused}
+            hasLastAudio={voiceMode.hasLastAudio}
+            currentSpeed={voiceMode.currentSpeed}
+            onRecordClick={voiceMode.handleRecordClick}
+            onStop={voiceMode.stopAudio}
+            onTogglePause={voiceMode.togglePause}
+            onReplay={voiceMode.replay}
+            onCycleSpeed={voiceMode.cycleSpeed}
+          />
+        ) : (
+          <>
+            {attachedFiles.length > 0 && (
+              <div className="hyo-attachment-chips">
+                {attachedFiles.map((f) => {
+                  const tokens = f.fileType === "text" ? estimateTokens(f.content || "") : 0;
+                  const willReference = f.fileType === "text" && !shouldInline(f.content || "");
+                  return (
+                    <div
+                      key={f.name}
+                      className={`hyo-attachment-chip${willReference ? " hyo-attachment-chip-ref" : ""}`}
+                      title={willReference ? `Large file — will be read via Claude's Read tool` : undefined}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                        <polyline points="14 2 14 8 20 8" />
+                      </svg>
+                      <span className="hyo-attachment-name">{f.name}</span>
+                      {tokens > 0 && (
+                        <span className="hyo-attachment-tokens">{formatTokens(tokens)}</span>
+                      )}
+                      <button
+                        className="hyo-attachment-remove"
+                        title="Remove attachment"
+                        onClick={() => removeFile(f.name)}
+                      >×</button>
+                    </div>
+                  );
+                })}
               </div>
             )}
-          </div>
+            <div className="hyo-input-row">
+              <div className="hyo-attach-wrap" ref={attachBtnRef}>
+                <button
+                  className="hyo-attach-btn"
+                  title="Attach file"
+                  onClick={() => setAttachPopupOpen((v) => !v)}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                  </svg>
+                </button>
+                {attachPopupOpen && (
+                  <div className="hyo-attach-popup">
+                    <button className="hyo-attach-popup-item" onClick={handleAttachCurrentFile}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                        <polyline points="14 2 14 8 20 8" />
+                      </svg>
+                      Attach current file
+                    </button>
+                    <button className="hyo-attach-popup-item" onClick={handleUploadFromComputer}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="17 8 12 3 7 8" />
+                        <line x1="12" y1="3" x2="12" y2="15" />
+                      </svg>
+                      Upload from computer
+                    </button>
+                  </div>
+                )}
+              </div>
 
-          <input
-            ref={fileInputRef}
-            type="file"
-            style={{ display: "none" }}
-            accept="image/*,.pdf,.xlsx,.xls,.xlsm,.txt,.md,.json,.csv,.yaml,.yml,.toml,.xml,.html,.css,.js,.ts,.py,.rb,.go,.rs,.sh,.log"
-            multiple
-            onChange={handleFileInputChange}
-          />
+              <input
+                ref={fileInputRef}
+                type="file"
+                style={{ display: "none" }}
+                accept="image/*,.pdf,.xlsx,.xls,.xlsm,.txt,.md,.json,.csv,.yaml,.yml,.toml,.xml,.html,.css,.js,.ts,.py,.rb,.go,.rs,.sh,.log"
+                multiple
+                onChange={handleFileInputChange}
+              />
 
-          <textarea
-            ref={inputRef}
-            className="hyo-input"
-            placeholder="Message Claude..."
-            rows={1}
-            value={inputValue}
-            onChange={handleInput}
-            onKeyDown={handleKeyDown}
-            onPaste={handlePaste}
-          />
-          {activeGenerating ? (
-            <button
-              className="hyo-send-btn hyo-stop"
-              title="Stop generation"
-              onClick={stopGeneration}
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16">
-                <rect x="3" y="3" width="10" height="10" rx="1" fill="currentColor" />
-              </svg>
-            </button>
-          ) : (
-            <button
-              className="hyo-send-btn"
-              title="Send (Enter)"
-              onClick={handleSend}
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path
-                  d="M8 14V2M8 2L3 7M8 2L13 7"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
-          )}
-        </div>
+              <textarea
+                ref={inputRef}
+                className="hyo-input"
+                placeholder="Message Claude..."
+                rows={1}
+                value={inputValue}
+                onChange={handleInput}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+              />
+              {activeGenerating ? (
+                <button
+                  className="hyo-send-btn hyo-stop"
+                  title="Stop generation"
+                  onClick={stopGeneration}
+                >
+                  <svg width="16" height="16" viewBox="0 0 16 16">
+                    <rect x="3" y="3" width="10" height="10" rx="1" fill="currentColor" />
+                  </svg>
+                </button>
+              ) : (
+                <button
+                  className="hyo-send-btn"
+                  title="Send (Enter)"
+                  onClick={handleSend}
+                >
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <path
+                      d="M8 14V2M8 2L3 7M8 2L13 7"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       <HyoStatusBar
@@ -629,9 +677,12 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
         agent={activeAgent}
         inputTokens={activeInputTokens}
         contextWindow={activeContextWindow}
+        voiceMode={activeVoiceMode}
+        hasVoiceApiKey={hasVoiceApiKey}
         onModelChange={handleModelChange}
         onPermissionModeChange={handlePermissionModeChange}
         onAgentChange={setTabAgent}
+        onVoiceModeToggle={toggleVoiceMode}
         onCompact={compact}
       />
     </div>

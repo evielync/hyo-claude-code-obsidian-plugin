@@ -1730,3 +1730,136 @@
 .hyo-recover-button:hover {
   background: var(--interactive-accent-hover);
 }
+
+/* ======================= Voice Mode ======================= */
+
+/* Status bar voice toggle */
+.hyo-voice-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  color: var(--text-muted);
+  background: transparent;
+  border-radius: var(--radius-s);
+  font-size: 12px;
+  transition: all 0.1s;
+  cursor: pointer;
+}
+
+.hyo-voice-toggle:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.hyo-voice-toggle.active {
+  color: var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+}
+
+.hyo-voice-toggle.disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.hyo-voice-toggle.disabled:hover {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+/* Voice controls — replaces the text input when voice mode is active */
+.hyo-voice-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+}
+
+/* Mic / record button — big, coloured, obvious CTA */
+.hyo-voice-record-btn {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  border: none;
+  border-radius: 50%;
+  background-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
+  padding: 0;
+  margin: 0;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--interactive-accent) 30%, transparent);
+}
+
+.hyo-voice-record-btn:hover {
+  filter: brightness(1.1);
+  background-color: var(--interactive-accent);
+}
+
+.hyo-voice-record-btn.recording {
+  background: var(--text-error);
+  color: white;
+  animation: hyo-voice-pulse 1.5s ease-in-out infinite;
+}
+
+.hyo-voice-record-btn.disabled {
+  opacity: 0.5;
+  cursor: default;
+  filter: none;
+}
+
+@keyframes hyo-voice-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--text-error) 40%, transparent); }
+  50% { box-shadow: 0 0 0 10px color-mix(in srgb, var(--text-error) 0%, transparent); }
+}
+
+/* Status label */
+.hyo-voice-status-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  flex: 1;
+}
+
+/* Playback controls */
+.hyo-voice-playback {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hyo-voice-ctrl-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  background: var(--background-modifier-border);
+  cursor: pointer;
+  transition: all 0.1s;
+}
+
+.hyo-voice-ctrl-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-border-hover);
+}
+
+.hyo-voice-ctrl-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.hyo-voice-speed-btn {
+  min-width: 40px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-monospace);
+}

@@ -11,6 +11,13 @@ export interface HyoSettings {
   workingDirectory: string;
   defaultAgent: string;
   maxOutputTokens: number;
+  autoGenerateTitles: boolean;
+  // Voice
+  elevenLabsApiKey: string;
+  voiceId: string;
+  voiceName: string;
+  voicePlaybackSpeed: number;
+  voiceAutoSpeak: boolean;
 }
 
 export const DEFAULT_SETTINGS: HyoSettings = {
@@ -20,6 +27,13 @@ export const DEFAULT_SETTINGS: HyoSettings = {
   workingDirectory: "",
   defaultAgent: "",
   maxOutputTokens: 64000,
+  autoGenerateTitles: false,
+  // Voice
+  elevenLabsApiKey: "",
+  voiceId: "",
+  voiceName: "",
+  voicePlaybackSpeed: 1.25,
+  voiceAutoSpeak: true,
 };
 
 export function dispatchSettingsChanged(): void {
@@ -120,6 +134,22 @@ export class HyoSettingTab extends PluginSettingTab {
           })
       );
 
+    // Auto-generate titles
+    new Setting(containerEl)
+      .setName("Auto-generate conversation titles")
+      .setDesc(
+        "Uses a small Claude Haiku call after your first message to name the conversation. Uses your Claude subscription."
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.autoGenerateTitles)
+          .onChange(async (value) => {
+            this.plugin.settings.autoGenerateTitles = value;
+            await this.plugin.saveSettings();
+            this.showSaved();
+          })
+      );
+
     // Default agent — only show if agent files exist
     const agentDir = path.join(os.homedir(), ".claude", "agents");
     let agentFiles: string[] = [];
@@ -150,6 +180,116 @@ export class HyoSettingTab extends PluginSettingTab {
           });
         });
     }
+
+    // Voice Settings
+    containerEl.createEl("h3", {
+      text: "Voice",
+      attr: { style: "margin-top: 24px; margin-bottom: 12px;" },
+    });
+    containerEl.createEl("p", {
+      text: "Connect ElevenLabs to enable voice mode — speak to Claude and hear responses read aloud.",
+      attr: { style: "margin: 0 0 16px; color: var(--text-muted); font-size: 0.9em;" },
+    });
+
+    const apiKeySetting = new Setting(containerEl)
+      .setName("ElevenLabs API key")
+      .setDesc("Get your API key from elevenlabs.io/app/settings/api-keys")
+      .addText((text) => {
+        text.inputEl.type = "password";
+        text.inputEl.style.width = "240px";
+        return text
+          .setPlaceholder("xi_...")
+          .setValue(this.plugin.settings.elevenLabsApiKey)
+          .onChange(async (value) => {
+            this.plugin.settings.elevenLabsApiKey = value.trim();
+            await this.plugin.saveSettings();
+            this.showSavedNear(apiKeySetting.nameEl as HTMLElement);
+            dispatchSettingsChanged();
+          });
+      });
+
+    const voiceSetting = new Setting(containerEl)
+      .setName("Voice")
+      .setDesc("Select a voice from your ElevenLabs library")
+      .addDropdown((dropdown) => {
+        // Start with current selection or placeholder
+        if (this.plugin.settings.voiceId) {
+          dropdown.addOption(this.plugin.settings.voiceId, this.plugin.settings.voiceName || "Selected voice");
+        } else {
+          dropdown.addOption("", "Select a voice...");
+        }
+        dropdown.setValue(this.plugin.settings.voiceId);
+
+        dropdown.onChange(async (value) => {
+          if (!value) return;
+          // Find the voice name from the dropdown's display text
+          const selectEl = dropdown.selectEl;
+          const selectedOption = selectEl.options[selectEl.selectedIndex];
+          this.plugin.settings.voiceId = value;
+          this.plugin.settings.voiceName = selectedOption?.text || "";
+          await this.plugin.saveSettings();
+          this.showSavedNear(voiceSetting.nameEl as HTMLElement);
+          dispatchSettingsChanged();
+        });
+
+        // Async-load voices from ElevenLabs when API key exists
+        const apiKey = this.plugin.settings.elevenLabsApiKey;
+        if (apiKey) {
+          import("./voice/elevenlabs-api").then(({ listVoices }) =>
+            listVoices(apiKey).then((voices) => {
+              // Clear and repopulate
+              const selectEl = dropdown.selectEl;
+              const currentValue = this.plugin.settings.voiceId;
+              selectEl.empty();
+
+              if (!currentValue) {
+                const placeholder = selectEl.createEl("option", { text: "Select a voice...", value: "" });
+                placeholder.disabled = true;
+                placeholder.selected = true;
+              }
+
+              for (const v of voices) {
+                const opt = selectEl.createEl("option", { text: v.name, value: v.voice_id });
+                if (v.voice_id === currentValue) opt.selected = true;
+              }
+            }).catch(() => {
+              new Notice("Could not load voices — check your ElevenLabs API key");
+            })
+          );
+        }
+      });
+
+    new Setting(containerEl)
+      .setName("Playback speed")
+      .setDesc("How fast Hyo reads responses aloud")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("1", "1.0×")
+          .addOption("1.25", "1.25×")
+          .addOption("1.5", "1.5×")
+          .addOption("2", "2.0×")
+          .setValue(String(this.plugin.settings.voicePlaybackSpeed))
+          .onChange(async (value) => {
+            this.plugin.settings.voicePlaybackSpeed = parseFloat(value);
+            await this.plugin.saveSettings();
+            this.showSaved();
+            dispatchSettingsChanged();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Auto-speak responses")
+      .setDesc("Automatically read responses aloud when voice mode is active")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.voiceAutoSpeak)
+          .onChange(async (value) => {
+            this.plugin.settings.voiceAutoSpeak = value;
+            await this.plugin.saveSettings();
+            this.showSaved();
+            dispatchSettingsChanged();
+          })
+      );
 
     // Advanced Settings
     containerEl.createEl("h3", {

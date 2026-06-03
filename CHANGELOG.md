@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.0
+
+### New: Voice Mode
+- **Talk to Claude, hear responses read aloud** — full conversational voice powered by ElevenLabs. Speech-to-text (you speak) + text-to-speech (Hyo speaks).
+- **Voice toggle in status bar** — click to switch between text and voice mode. Per-tab, so different conversations can use different modes.
+- **Settings: ElevenLabs API key, voice picker, playback speed, auto-speak toggle** — configure once in Hyo settings, voices load from your ElevenLabs account.
+- **Streaming TTS with markdown stripping** — responses are cleaned of formatting before speech, and audio streams via ElevenLabs Flash v2.5 for lower latency.
+- **Playback controls** — pause, resume, stop, replay last response, and adjustable speed (1×–2×).
+
+### Fixes
+- **Auto-generate conversation titles** — setting now properly wired to the session manager.
+
+## 0.1.11
+
+### Fixes
+- **"Attach current file" now actually sends the file** — files attached via the paperclip → "Attach current file" were showing as chips in the UI but silently dropped before sending. Root cause: missing `fileType` field on the attachment object, which caused it to be filtered out during message assembly. Fixed.
+
+## 0.1.10
+
+### Fixes
+- **Past sessions now found on Windows** — session lookup tries multiple path normalisations to find sessions regardless of how Windows APIs return the vault path.
+- **Diagnostic logging** — console now shows which directories are checked when looking for past sessions.
+
 ## 0.1.9
 
 ### Fixes
