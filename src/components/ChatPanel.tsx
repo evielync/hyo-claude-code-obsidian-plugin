@@ -104,11 +104,18 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     },
   });
 
-  // Auto-speak when response completes
+  // Auto-speak when response completes — only on genuine generation finish,
+  // not on tab switches (which also change activeGenerating)
   const prevGeneratingRef = useRef(activeGenerating);
+  const prevTabIdRef = useRef(activeTabId);
   useEffect(() => {
-    if (prevGeneratingRef.current && !activeGenerating && activeVoiceMode) {
-      // Generation just finished — find the last assistant message content
+    const tabChanged = prevTabIdRef.current !== activeTabId;
+    if (
+      !tabChanged &&
+      prevGeneratingRef.current &&
+      !activeGenerating &&
+      activeVoiceMode
+    ) {
       const lastAssistant = [...activeMessages]
         .reverse()
         .find((m) => m.role === "assistant" && !m.isCompaction);
@@ -117,7 +124,13 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
       }
     }
     prevGeneratingRef.current = activeGenerating;
-  }, [activeGenerating, activeVoiceMode, activeMessages]);
+    prevTabIdRef.current = activeTabId;
+  }, [activeGenerating, activeVoiceMode, activeMessages, activeTabId]);
+
+  // Stop audio when switching or closing tabs
+  useEffect(() => {
+    voiceMode.stopAudio();
+  }, [activeTabId]);
 
   // Slash command state (checks both .claude/skills and skills/)
   const skills = useSkills(workingDirectory);
