@@ -7,7 +7,7 @@ interface ChatMessagesProps {
   messages: Message[];
   scrollRef: React.MutableRefObject<{ nearBottom: boolean }>;
   onPermissionResponse: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
-  onQuestionAnswer: (questionId: string, answer: string) => void;
+  onQuestionAnswer: (questionId: string, answers: Record<string, string>) => void;
   onRecover?: () => void;
 }
 
@@ -64,7 +64,15 @@ export function ChatMessages({
           );
         }
 
-        return <ChatMessage key={`msg-${i}`} message={msg} onRecover={onRecover} />;
+        return (
+          <ChatMessage
+            key={`msg-${i}`}
+            message={msg}
+            onRecover={onRecover}
+            onPermissionResponse={onPermissionResponse}
+            onQuestionAnswer={onQuestionAnswer}
+          />
+        );
       })}
     </div>
   );

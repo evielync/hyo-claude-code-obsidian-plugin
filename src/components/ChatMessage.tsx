@@ -1,5 +1,7 @@
 import React, { useState, useCallback } from "react";
 import { ToolCall } from "./ToolCall";
+import { AskQuestion } from "./AskQuestion";
+import { PlanReview } from "./PlanReview";
 import { MarkdownBlock, stripInlineThinkingTags } from "./MarkdownBlock";
 import type { Message } from "../hooks/useChatEngine";
 import { HIDDEN_TOOLS } from "../hooks/useChatEngine";
@@ -8,9 +10,11 @@ import { THINKING_BLOCK_ERROR_RE } from "../session-repair";
 interface ChatMessageProps {
   message: Message;
   onRecover?: () => void;
+  onPermissionResponse?: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
+  onQuestionAnswer?: (questionId: string, answers: Record<string, string>) => void;
 }
 
-export function ChatMessage({ message, onRecover }: ChatMessageProps) {
+export function ChatMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer }: ChatMessageProps) {
   if (message.isCompaction) {
     return <CompactionMessage message={message} />;
   }
@@ -18,7 +22,14 @@ export function ChatMessage({ message, onRecover }: ChatMessageProps) {
     return <UserMessage message={message} />;
   }
   if (message.role === "assistant") {
-    return <AssistantMessage message={message} onRecover={onRecover} />;
+    return (
+      <AssistantMessage
+        message={message}
+        onRecover={onRecover}
+        onPermissionResponse={onPermissionResponse}
+        onQuestionAnswer={onQuestionAnswer}
+      />
+    );
   }
   return null;
 }
@@ -117,7 +128,12 @@ function isThinkingBlockErrorContent(text: string): boolean {
   return THINKING_BLOCK_ERROR_RE.test(text);
 }
 
-function AssistantMessage({ message, onRecover }: { message: Message; onRecover?: () => void }) {
+function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer }: {
+  message: Message;
+  onRecover?: () => void;
+  onPermissionResponse?: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
+  onQuestionAnswer?: (questionId: string, answers: Record<string, string>) => void;
+}) {
   const blocks = message.orderedBlocks || [];
   const toolCalls = message.toolCalls || [];
 
@@ -188,6 +204,26 @@ function AssistantMessage({ message, onRecover }: { message: Message; onRecover?
           }
           return null;
         })}
+
+        {message.askQuestion && onQuestionAnswer && (
+          <AskQuestion
+            question={message.askQuestion}
+            onAnswer={onQuestionAnswer}
+          />
+        )}
+
+        {message.planReview && !message.planReview.resolved && onPermissionResponse && (
+          <PlanReview
+            review={message.planReview}
+            onRespond={onPermissionResponse}
+          />
+        )}
+        {message.planReview?.resolved && (
+          <PlanReview
+            review={message.planReview}
+            onRespond={() => {}}
+          />
+        )}
       </div>
       {showRecover && onRecover && <RecoverBanner onRecover={onRecover} />}
       {!message.streaming && blocks.some((b) => b.type === "text") && (

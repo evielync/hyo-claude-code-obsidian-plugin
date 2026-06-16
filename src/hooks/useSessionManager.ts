@@ -5,6 +5,7 @@ import type {
   ToolCallData,
   OrderedBlock,
   AskQuestionData,
+  PlanReviewData,
 } from "./useChatEngine";
 import { listPastSessions, loadSessionHistory, saveCustomTitle, type PastSession, getProjectDir } from "../session-parser";
 import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
@@ -55,6 +56,24 @@ interface SessionManagerOptions {
 }
 
 // ------- utilities -------
+
+function readPlanFile(cwd: string): string | null {
+  try {
+    const fs = require("fs");
+    const planPath = path.join(cwd, ".claude", "plan.md");
+    if (fs.existsSync(planPath)) {
+      return fs.readFileSync(planPath, "utf-8");
+    }
+    // Also check project root
+    const rootPlanPath = path.join(cwd, "plan.md");
+    if (fs.existsSync(rootPlanPath)) {
+      return fs.readFileSync(rootPlanPath, "utf-8");
+    }
+  } catch {
+    // File system not available or file not found
+  }
+  return null;
+}
 
 function genId(): string {
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
@@ -332,18 +351,56 @@ export function useSessionManager(options: SessionManagerOptions) {
           const toolName = req.tool_name || "";
           const requestId = event.request_id || "";
 
+          // AskUserQuestion — hold the control_request. DON'T respond.
+          // The CLI blocks waiting for our control_response.
+          // The assistant event handler already set askQuestion with the
+          // tool's id. Update it to the requestId so sendQuestionAnswer
+          // can send the control_response when the user answers.
           if (toolName === "AskUserQuestion") {
-            transportsRef.current[tabId]?.sendPermissionResponse(
-              requestId,
-              true
-            );
             const input = req.input || {};
-            const askQuestion: AskQuestionData = {
-              id: requestId,
-              questions: input.questions || [{ question: input.question }],
-              answers: {},
-            };
-            updateTabLastAssistant(tabId, () => ({ askQuestion }));
+            updateTabLastAssistant(tabId, (msg) => ({
+              askQuestion: msg.askQuestion
+                ? { ...msg.askQuestion, id: requestId }
+                : {
+                    id: requestId,
+                    questions: input.questions || [{ question: input.question }],
+                    answers: {},
+                  },
+            }));
+            return;
+          }
+
+          // EnterPlanMode — auto-approve silently. No user gate needed.
+          if (toolName === "EnterPlanMode") {
+            transportsRef.current[tabId]?.sendPermissionResponse(requestId, "allow");
+            return;
+          }
+
+          // ExitPlanMode — show plan review UI with plan content.
+          // Claude is blocked until the user approves or rejects.
+          if (toolName === "ExitPlanMode") {
+            // Get plan content: first try the Write tool call that created
+            // the plan (the content is right there in the input), then fall
+            // back to reading from disk.
+            let planContent: string | null = null;
+            const writeCalls = ss.toolCalls.filter(
+              (t) => t.name === "Write" && t.input?.content
+            );
+            if (writeCalls.length > 0) {
+              planContent = writeCalls[writeCalls.length - 1].input.content;
+            }
+            if (!planContent) {
+              planContent = readPlanFile(options.cwd);
+            }
+
+            const allowedPrompts = req.input?.allowedPrompts || [];
+            updateTabLastAssistant(tabId, () => ({
+              planReview: {
+                requestId,
+                planContent,
+                allowedPrompts,
+              },
+            }));
             return;
           }
 
@@ -374,49 +431,51 @@ export function useSessionManager(options: SessionManagerOptions) {
             ),
           }));
 
-          // Auto-generate title after first response if enabled
+          // Auto-generate title after first response
           if (options.autoGenerateTitles) {
             const currentTab = stateRef.current.tabs.find((t) => t.id === tabId);
-            if (
-              currentTab &&
-              currentTab.messages.length === 2 &&
-              currentTab.messages[0]?.role === "user" &&
-              currentTab.messages[1]?.role === "assistant" &&
-              !currentTab.messages[1]?.isCompaction
-            ) {
-              const userText =
-                currentTab.messages[0].displayText ||
-                (typeof currentTab.messages[0].content === "string"
-                  ? currentTab.messages[0].content
-                  : "");
-              const truncatedTitle =
-                userText.slice(0, 40) + (userText.length > 40 ? "..." : "");
+            if (currentTab && currentTab.messages.length >= 2) {
+              const firstUser = currentTab.messages.find((m) => m.role === "user" && !m.isCompaction);
+              const firstAssistant = currentTab.messages.find((m) => m.role === "assistant" && !m.isCompaction);
 
-              // Only generate if title is still the auto-truncated version
-              if (
-                currentTab.title === truncatedTitle ||
-                currentTab.title === "New conversation"
-              ) {
-                const titleBeforeGeneration = currentTab.title;
+              if (firstUser && firstAssistant) {
+                const userText =
+                  firstUser.displayText ||
+                  (typeof firstUser.content === "string" ? firstUser.content : "");
+                const truncatedTitle =
+                  userText.slice(0, 40) + (userText.length > 40 ? "..." : "");
 
-                generateConversationTitle({
-                  cliPath: options.cliPath,
-                  userMessage: userText,
-                  assistantMessage:
-                    typeof currentTab.messages[1].content === "string"
-                      ? currentTab.messages[1].content
-                      : "",
-                }).then((generatedTitle) => {
-                  if (!generatedTitle) return;
+                // Only generate if title hasn't been manually set
+                const needsTitle =
+                  currentTab.title === "New conversation" ||
+                  currentTab.title === truncatedTitle;
 
-                  // Check tab still exists and title hasn't been manually changed
-                  const tab = stateRef.current.tabs.find((t) => t.id === tabId);
-                  if (!tab || tab.title !== titleBeforeGeneration) return;
+                if (needsTitle && userText) {
+                  const titleBeforeGeneration = currentTab.title;
+                  const assistantText =
+                    typeof firstAssistant.content === "string"
+                      ? firstAssistant.content
+                      : "";
 
-                  renameTab(tabId, generatedTitle);
-                }).catch((err) => {
-                  console.error("[hyo] Title generation error:", err);
-                });
+                  console.log("[hyo][title] Generating for tab", tabId);
+
+                  generateConversationTitle({
+                    cliPath: options.cliPath,
+                    userMessage: userText,
+                    assistantMessage: assistantText,
+                  }).then((generatedTitle) => {
+                    if (!generatedTitle) {
+                      console.warn("[hyo][title] Generation returned null");
+                      return;
+                    }
+                    const tab = stateRef.current.tabs.find((t) => t.id === tabId);
+                    if (!tab || tab.title !== titleBeforeGeneration) return;
+                    console.log("[hyo][title] Renamed:", generatedTitle);
+                    renameTab(tabId, generatedTitle);
+                  }).catch((err) => {
+                    console.error("[hyo][title] Error:", err);
+                  });
+                }
               }
             }
           }
@@ -457,6 +516,22 @@ export function useSessionManager(options: SessionManagerOptions) {
           const contentArr = event.message?.content || [];
           processContentBlocks(contentArr, ss, "assistant");
           updateTabLastAssistant(tabId, () => buildSnapshot(ss));
+
+          // Eagerly detect AskUserQuestion from the complete assistant event.
+          // The control_request arrives AFTER this, so set the question UI now.
+          // The control_request handler will update the id to the requestId.
+          const askTool = ss.toolCalls.find(
+            (t) => t.name === "AskUserQuestion" && !t.result && t.input?.questions
+          );
+          if (askTool) {
+            updateTabLastAssistant(tabId, () => ({
+              askQuestion: {
+                id: askTool.id,
+                questions: askTool.input.questions,
+                answers: {},
+              },
+            }));
+          }
           return;
         }
 
@@ -782,58 +857,44 @@ export function useSessionManager(options: SessionManagerOptions) {
       const lastMsg = tab?.messages[tab.messages.length - 1];
       const toolName = lastMsg?.permissionRequest?.toolName;
       transportsRef.current[tabId]?.sendPermissionResponse(requestId, behavior, toolName);
-      updateTabLastAssistant(tabId, (msg) => ({
-        permissionRequest: msg.permissionRequest
-          ? {
-              ...msg.permissionRequest,
-              resolved: behavior === "deny" ? ("denied" as const) : ("allowed" as const),
-            }
-          : null,
-      }));
+      updateTabLastAssistant(tabId, (msg) => {
+        const updates: Partial<Message> = {};
+        if (msg.permissionRequest) {
+          updates.permissionRequest = {
+            ...msg.permissionRequest,
+            resolved: behavior === "deny" ? ("denied" as const) : ("allowed" as const),
+          };
+        }
+        // Also resolve planReview if this requestId matches
+        if (msg.planReview && msg.planReview.requestId === requestId) {
+          updates.planReview = {
+            ...msg.planReview,
+            resolved: behavior === "deny" ? ("rejected" as const) : ("approved" as const),
+          };
+        }
+        return updates;
+      });
     },
     [updateTabLastAssistant]
   );
 
   const sendQuestionAnswer = useCallback(
-    (questionId: string, answer: string) => {
+    (questionId: string, answers: Record<string, string>) => {
       const tabId = stateRef.current.activeTabId;
 
-      streamStatesRef.current[tabId] = {
-        toolCalls: [],
-        orderedBlocks: [],
-        turnIndex: 0,
-        toolResultSinceLastText: false,
-        skillResultPending: false,
-      };
+      // Send control_response with answers as updatedInput.
+      // The CLI was blocked on the control_request — this unblocks it.
+      // Claude receives the answers and continues within the same turn.
+      transportsRef.current[tabId]?.sendPermissionResponse(
+        questionId,
+        "allow",
+        undefined,
+        { answers }
+      );
 
-      updateTabLastAssistant(tabId, () => ({
-        askQuestion: null,
-        streaming: false,
-      }));
-      setState((prev) => ({
-        ...prev,
-        tabs: prev.tabs.map((tab) =>
-          tab.id !== tabId
-            ? tab
-            : {
-                ...tab,
-                messages: [
-                  ...tab.messages,
-                  {
-                    role: "assistant" as const,
-                    content: "",
-                    thinking: "",
-                    toolCalls: [],
-                    orderedBlocks: [],
-                    streaming: true,
-                  },
-                ],
-                generating: true,
-              }
-        ),
-      }));
-
-      transportsRef.current[tabId]?.sendUserMessage(answer);
+      // Clear the question UI. The assistant message stays streaming —
+      // Claude will continue and the result event will finalize it.
+      updateTabLastAssistant(tabId, () => ({ askQuestion: null }));
     },
     [updateTabLastAssistant]
   );

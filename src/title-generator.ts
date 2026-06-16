@@ -13,15 +13,17 @@ function truncate(text: string, max: number): string {
 }
 
 function buildPrompt(userMsg: string, assistantMsg: string): string {
-  const u = truncate(userMsg.trim(), 500);
-  const a = truncate(assistantMsg.trim(), 500);
+  const u = truncate(userMsg.trim(), 300);
+  const a = truncate(assistantMsg.trim(), 300);
   return [
-    "Generate a concise, descriptive title (maximum 6 words) for this conversation.",
-    "Return ONLY the title text — no quotes, no prefix, no formatting.",
+    "TASK: Generate a short title (3-6 words) that describes what this conversation is about.",
+    "RULES: Output ONLY the title. No quotes. No explanation. No preamble. Just the title words.",
     "",
-    `User: ${u}`,
+    "CONVERSATION:",
+    `<user>${u}</user>`,
+    `<assistant>${a}</assistant>`,
     "",
-    `Assistant: ${a}`,
+    "TITLE:",
   ].join("\n");
 }
 
@@ -82,9 +84,10 @@ export async function generateConversationTitle(
       process.env.PATH || "",
     ].join(":");
 
-    console.log("[hyo] Generating conversation title...");
+    console.log("[hyo][title] Spawning CLI for title generation...");
 
     const proc = spawn(cliPath, args, {
+      cwd: "/tmp",
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -93,10 +96,10 @@ export async function generateConversationTitle(
     let stderr = "";
 
     const timeout = setTimeout(() => {
-      console.log("[hyo] Title generation timed out after 10s");
+      console.warn("[hyo][title] Timed out after 30s");
       proc.kill("SIGTERM");
       resolve(null);
-    }, 10_000);
+    }, 30_000);
 
     proc.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -108,7 +111,7 @@ export async function generateConversationTitle(
 
     proc.on("error", (err) => {
       clearTimeout(timeout);
-      console.error("[hyo] Title generation spawn error:", err.message);
+      console.error("[hyo][title] Spawn error:", err.message);
       resolve(null);
     });
 
@@ -117,10 +120,10 @@ export async function generateConversationTitle(
 
       if (code !== 0) {
         console.error(
-          "[hyo] Title generation failed (code",
+          "[hyo][title] CLI exited with code",
           code,
-          "):",
-          stderr.slice(0, 200),
+          "| stderr:",
+          stderr.slice(0, 300),
         );
         resolve(null);
         return;
@@ -128,9 +131,9 @@ export async function generateConversationTitle(
 
       const title = cleanTitle(stdout);
       if (title) {
-        console.log("[hyo] Generated title:", title);
+        console.log("[hyo][title] Generated:", title);
       } else {
-        console.log("[hyo] Title generation returned empty response");
+        console.warn("[hyo][title] CLI returned empty response");
       }
       resolve(title);
     });

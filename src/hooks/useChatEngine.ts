@@ -21,6 +21,7 @@ export interface Message {
   streaming?: boolean;
   permissionRequest?: PermissionRequestData | null;
   askQuestion?: AskQuestionData | null;
+  planReview?: PlanReviewData | null;
   isCompaction?: boolean;
   attachments?: { type: string; name: string; preview?: string }[];
 }
@@ -50,8 +51,15 @@ export interface PermissionRequestData {
 
 export interface AskQuestionData {
   id: string;
-  questions: { question: string; header?: string; options?: { label: string; description?: string }[] }[];
+  questions: { question: string; header?: string; options?: { label: string; description?: string }[]; multiSelect?: boolean }[];
   answers: Record<string, string>;
+}
+
+export interface PlanReviewData {
+  requestId: string;
+  planContent: string | null;
+  allowedPrompts: { tool: string; prompt: string }[];
+  resolved?: "approved" | "rejected";
 }
 
 interface StreamState {
@@ -70,12 +78,33 @@ interface ChatEngineOptions {
   maxOutputTokens?: number;
 }
 
+function readPlanFile(cwd: string): string | null {
+  try {
+    const fs = require("fs");
+    const path = require("path");
+    const candidates = [
+      path.join(cwd, ".claude", "plan.md"),
+      path.join(cwd, "plan.md"),
+    ];
+    for (const p of candidates) {
+      if (fs.existsSync(p)) {
+        return fs.readFileSync(p, "utf-8");
+      }
+    }
+  } catch {
+    // File system not available or file not found
+  }
+  return null;
+}
+
 export function useChatEngine(options: ChatEngineOptions) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [generating, setGenerating] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
 
   const transportRef = useRef<ClaudeTransport | null>(null);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
   const streamRef = useRef<StreamState>({
     toolCalls: [],
     orderedBlocks: [],
@@ -135,17 +164,47 @@ export function useChatEngine(options: ChatEngineOptions) {
         const req = event.request || {};
         const toolName = req.tool_name || "";
         const requestId = event.request_id || "";
+        console.log("[hyo][ask] control_request:", toolName, "requestId:", requestId);
 
-        // AskUserQuestion — auto-approve and surface the question
+        // AskUserQuestion — hold the control_request. DON'T respond.
+        // The CLI blocks waiting for our control_response.
+        // The question UI was set by the assistant event handler.
+        // Update the id to the requestId so sendQuestionAnswer can
+        // send the control_response when the user answers.
         if (toolName === "AskUserQuestion") {
-          transportRef.current?.sendPermissionResponse(requestId, true);
+          console.log("[hyo][ask] Holding AskUserQuestion control_request (NOT auto-approving). requestId:", requestId);
           const input = req.input || {};
-          const askQuestion: AskQuestionData = {
-            id: requestId,
-            questions: input.questions || [{ question: input.question }],
-            answers: {},
-          };
-          updateLastAssistant(() => ({ askQuestion }));
+          updateLastAssistant((msg) => ({
+            askQuestion: msg.askQuestion
+              ? { ...msg.askQuestion, id: requestId }
+              : {
+                  id: requestId,
+                  questions: input.questions || [{ question: input.question }],
+                  answers: {},
+                },
+          }));
+          return;
+        }
+
+        // EnterPlanMode — auto-approve silently. No user gate needed.
+        if (toolName === "EnterPlanMode") {
+          transportRef.current?.sendPermissionResponse(requestId, "allow");
+          return;
+        }
+
+        // ExitPlanMode — show plan review UI with plan content.
+        // Claude is blocked until the user approves or rejects the plan.
+        if (toolName === "ExitPlanMode") {
+          const cwd = optionsRef.current.cwd;
+          const planContent = readPlanFile(cwd);
+          const allowedPrompts = req.input?.allowedPrompts || [];
+          updateLastAssistant(() => ({
+            planReview: {
+              requestId,
+              planContent,
+              allowedPrompts,
+            },
+          }));
           return;
         }
 
@@ -169,7 +228,12 @@ export function useChatEngine(options: ChatEngineOptions) {
       // User event (tool results sent back by the system)
       if (event.type === "user") {
         const contentArr = event.message?.content || [];
-        console.log("[hyo] user event blocks:", contentArr.map((b: any) => b.type));
+        const toolResults = contentArr.filter((b: any) => b.type === "tool_result");
+        console.log("[hyo][ask] user event blocks:", contentArr.map((b: any) => b.type));
+        for (const tr of toolResults) {
+          const matchedTool = ss.toolCalls.find((t) => t.id === tr.tool_use_id);
+          console.log("[hyo][ask] tool_result for:", matchedTool?.name || "unknown", "tool_use_id:", tr.tool_use_id);
+        }
         processContentBlocks(contentArr, ss);
         updateStreamingFromState(ss, updateLastAssistant);
         return;
@@ -178,9 +242,26 @@ export function useChatEngine(options: ChatEngineOptions) {
       // Assistant message (complete)
       if (event.type === "assistant") {
         const contentArr = event.message?.content || [];
-        console.log("[hyo] assistant event blocks:", contentArr.map((b: any) => ({ type: b.type, textPreview: b.type === "text" ? (b.text || "").slice(0, 80) : undefined })));
+        console.log("[hyo] assistant event blocks:", contentArr.map((b: any) => ({ type: b.type, name: b.name, textPreview: b.type === "text" ? (b.text || "").slice(0, 80) : undefined })));
         processContentBlocks(contentArr, ss);
         updateStreamingFromState(ss, updateLastAssistant);
+
+        // Eagerly detect AskUserQuestion from the complete assistant event.
+        // The control_request arrives AFTER this, so we set the question UI
+        // now. The control_request handler will update the id to the requestId.
+        const askTool = ss.toolCalls.find(
+          (t) => t.name === "AskUserQuestion" && !t.result && t.input?.questions
+        );
+        if (askTool) {
+          console.log("[hyo][ask] Detected AskUserQuestion in assistant event. Questions:", askTool.input.questions.length);
+          updateLastAssistant(() => ({
+            askQuestion: {
+              id: askTool.id,
+              questions: askTool.input.questions,
+              answers: {},
+            },
+          }));
+        }
         return;
       }
 
@@ -199,6 +280,7 @@ export function useChatEngine(options: ChatEngineOptions) {
             input: {},
             result: null,
           };
+          console.log("[hyo][ask] tool_use START:", tool.name, tool.id);
           if (!ss.toolCalls.find((t) => t.id === tool.id)) {
             ss.toolCalls.push(tool);
             ss.orderedBlocks.push({
@@ -222,8 +304,36 @@ export function useChatEngine(options: ChatEngineOptions) {
         // Content block stop
         if (evt.type === "content_block_stop") {
           const lastBlock = ss.orderedBlocks[ss.orderedBlocks.length - 1];
+          console.log("[hyo][ask] content_block_stop — lastBlock type:", lastBlock?.type, "toolId:", lastBlock?.toolId);
           if (lastBlock?.type === "tool") {
             ss.toolResultSinceLastText = true;
+
+            const tool = ss.toolCalls[ss.toolCalls.length - 1];
+            console.log("[hyo][ask] content_block_stop for tool:", tool?.name, "id:", tool?.id, "hasInput:", !!tool?.input, "hasQuestions:", !!tool?.input?.questions, "hasInputJson:", !!tool?._inputJson);
+
+            if (tool?.name === "AskUserQuestion") {
+              // Ensure input is fully parsed from accumulated JSON
+              if (tool._inputJson && !tool.input?.questions) {
+                try {
+                  tool.input = JSON.parse(tool._inputJson);
+                  console.log("[hyo][ask] Parsed _inputJson, questions:", !!tool.input?.questions);
+                } catch (e) {
+                  console.log("[hyo][ask] Failed to parse _inputJson:", (e as Error).message);
+                }
+              }
+              if (tool.input?.questions) {
+                console.log("[hyo][ask] ✓ Setting askQuestion and INTERRUPTING. Questions:", tool.input.questions.length);
+                const askQuestion: AskQuestionData = {
+                  id: tool.id,
+                  questions: tool.input.questions,
+                  answers: {},
+                };
+                updateLastAssistant(() => ({ askQuestion }));
+                transportRef.current?.sendInterrupt();
+              } else {
+                console.log("[hyo][ask] ✗ AskUserQuestion but NO questions found. input:", JSON.stringify(tool.input).slice(0, 200));
+              }
+            }
           }
         }
 
@@ -354,45 +464,40 @@ export function useChatEngine(options: ChatEngineOptions) {
   const sendPermissionResponse = useCallback(
     (requestId: string, behavior: "allow" | "allow_always" | "deny") => {
       transportRef.current?.sendPermissionResponse(requestId, behavior);
-      updateLastAssistant((msg) => ({
-        permissionRequest: msg.permissionRequest
-          ? {
-              ...msg.permissionRequest,
-              resolved: behavior === "deny" ? "denied" : "allowed",
-            }
-          : null,
-      }));
+      updateLastAssistant((msg) => {
+        const updates: Partial<Message> = {};
+        if (msg.permissionRequest) {
+          updates.permissionRequest = {
+            ...msg.permissionRequest,
+            resolved: behavior === "deny" ? "denied" : "allowed",
+          };
+        }
+        if (msg.planReview && msg.planReview.requestId === requestId) {
+          updates.planReview = {
+            ...msg.planReview,
+            resolved: behavior === "deny" ? "rejected" : "approved",
+          };
+        }
+        return updates;
+      });
     },
     [updateLastAssistant]
   );
 
   const sendQuestionAnswer = useCallback(
-    (questionId: string, answer: string) => {
-      // Reset stream state for next turn
-      streamRef.current = {
-        toolCalls: [],
-        orderedBlocks: [],
-        turnIndex: 0,
-        toolResultSinceLastText: false,
-        suppressNextTextBlock: false,
-      };
+    (questionId: string, answers: Record<string, string>) => {
+      console.log("[hyo][ask] Sending question answer. requestId:", questionId, "answers:", JSON.stringify(answers));
 
-      updateLastAssistant(() => ({ askQuestion: null, streaming: false }));
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: "",
-          thinking: "",
-          toolCalls: [],
-          orderedBlocks: [],
-          streaming: true,
-        },
-      ]);
-      setGenerating(true);
+      // Send control_response with answers as updatedInput.
+      // The CLI was blocked on the control_request — this unblocks it.
+      // Claude receives the answers as the tool's input and continues.
+      transportRef.current?.sendPermissionResponse(questionId, "allow", undefined, {
+        answers,
+      });
 
-      // Send the answer as a user message through the transport
-      transportRef.current?.sendUserMessage(answer);
+      // Clear the question UI. The assistant message stays streaming —
+      // Claude will continue and the result event will finalize it.
+      updateLastAssistant(() => ({ askQuestion: null }));
     },
     [updateLastAssistant]
   );

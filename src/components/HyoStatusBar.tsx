@@ -98,6 +98,7 @@ export function HyoStatusBar({
     sessionPacePct,
     weeklyPacePct,
     lastUpdated,
+    stale,
     refresh,
   } = useUsage();
 
@@ -192,8 +193,8 @@ export function HyoStatusBar({
     <div className="hyo-status-bar" ref={statusBarRef}>
       <div
         ref={usageRef}
-        className="hyo-usage-bars-group"
-        title="Usage"
+        className={`hyo-usage-bars-group${stale ? " stale" : ""}`}
+        title={stale ? "Usage data may be outdated — click to refresh" : "Usage"}
         onClick={() => openPopup("usage")}
       >
         <span className="hyo-usage-bar-label">5HR</span>
@@ -398,6 +399,11 @@ export function HyoStatusBar({
             </>
           )}
           <div className="hyo-usage-divider" />
+          {stale && (
+            <div className="hyo-usage-stale-notice">
+              ⚠ Couldn't fetch usage data. Try refreshing — if it persists, open the Claude desktop app to re-authenticate.
+            </div>
+          )}
           <button className="hyo-usage-refresh-btn" onClick={refresh}>
             Refresh · Last updated{" "}
             {lastUpdated ? formatTimeAgo(lastUpdated) : "never"}

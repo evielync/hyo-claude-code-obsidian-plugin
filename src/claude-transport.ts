@@ -155,6 +155,7 @@ export class ClaudeTransport {
     requestId: string,
     behavior: "allow" | "allow_always" | "deny",
     toolName?: string,
+    updatedInput?: Record<string, unknown>,
   ): void {
     if (!this.proc?.stdin?.writable) return;
 
@@ -172,7 +173,7 @@ export class ClaudeTransport {
       // via the updatedPermissions array on an "allow" response.
       response = {
         behavior: "allow",
-        updatedInput: {},
+        updatedInput: updatedInput || {},
         decisionClassification: "user_permanent",
         updatedPermissions: [
           {
@@ -186,7 +187,7 @@ export class ClaudeTransport {
     } else {
       response = {
         behavior: "allow",
-        updatedInput: {},
+        updatedInput: updatedInput || {},
         decisionClassification: "user_temporary",
       };
     }

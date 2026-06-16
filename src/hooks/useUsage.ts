@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { requestUrl } from "obsidian";
 
 // Type definitions for the usage API response
 export interface UsageData {
@@ -35,105 +36,84 @@ interface OAuthCreds {
  */
 async function getOAuthCreds(): Promise<OAuthCreds | null> {
   try {
-    const { exec } = require("child_process");
-    const { promisify } = require("util");
-    const execAsync = promisify(exec);
-    const username: string = require("os").userInfo().username;
-    const { stdout } = await execAsync(
-      `security find-generic-password -s "Claude Code-credentials" -a "${username}" -w`,
-      { timeout: 5000, maxBuffer: 1024 * 1024 }
-    );
-    const raw = stdout.trim();
+    const fs = require("fs");
+    const path = require("path");
+    const home = require("os").homedir();
+    const credsPath = path.join(home, ".claude", ".credentials.json");
 
-    // Try normal JSON parse first
-    try {
-      const creds = JSON.parse(raw);
-      return creds?.claudeAiOauth || null;
-    } catch {
-      // Keychain value may be truncated — extract OAuth tokens via regex
-      const accessMatch = raw.match(/"accessToken"\s*:\s*"([^"]+)"/);
-      const refreshMatch = raw.match(/"refreshToken"\s*:\s*"([^"]+)"/);
-      if (accessMatch) {
-        return {
-          accessToken: accessMatch[1],
-          refreshToken: refreshMatch?.[1] || undefined,
-        };
-      }
+    const raw = fs.readFileSync(credsPath, "utf-8");
+    const creds = JSON.parse(raw);
+
+    if (!creds?.claudeAiOauth) {
+      console.warn("[hyo][usage] No claudeAiOauth in credentials file");
       return null;
     }
-  } catch {
+
+    const oauth = creds.claudeAiOauth;
+    if (!oauth.accessToken) {
+      console.warn("[hyo][usage] No accessToken in credentials");
+      return null;
+    }
+
+    return oauth;
+  } catch (e: any) {
+    console.warn("[hyo][usage] Credentials read failed:", e?.message || e);
     return null;
   }
 }
 
 /**
- * Make an HTTPS request using Node's https module (avoids CORS in Obsidian renderer)
- */
-function httpsRequest(
-  url: string,
-  options: { method?: string; headers?: Record<string, string>; body?: string }
-): Promise<{ status: number; body: string }> {
-  return new Promise((resolve, reject) => {
-    const https = require("https");
-    const urlObj = new URL(url);
-    const reqOptions = {
-      hostname: urlObj.hostname,
-      path: urlObj.pathname + urlObj.search,
-      method: options.method || "GET",
-      headers: options.headers || {},
-    };
-    const req = https.request(reqOptions, (res: any) => {
-      let data = "";
-      res.on("data", (chunk: Buffer) => { data += chunk.toString(); });
-      res.on("end", () => resolve({ status: res.statusCode, body: data }));
-    });
-    req.on("error", reject);
-    if (options.body) req.write(options.body);
-    req.end();
-  });
-}
-
-/**
- * Refresh the OAuth access token
+ * Refresh the OAuth access token using Obsidian's requestUrl
  */
 async function refreshOAuthToken(
   refreshToken: string
 ): Promise<string | null> {
   try {
-    const body = JSON.stringify({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: "claude-code",
-    });
-    const res = await httpsRequest("https://claude.ai/api/oauth/token", {
+    const res = await requestUrl({
+      url: "https://claude.ai/api/oauth/token",
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body,
+      body: JSON.stringify({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        client_id: "claude-code",
+      }),
+      throw: false,
     });
-    if (res.status !== 200) return null;
-    const data = JSON.parse(res.body);
-    return data.access_token || null;
-  } catch {
+    if (res.status !== 200) {
+      console.warn("[hyo][usage] Token refresh failed:", res.status);
+      return null;
+    }
+    return res.json?.access_token || null;
+  } catch (e: any) {
+    console.warn("[hyo][usage] Token refresh error:", e?.message || e);
     return null;
   }
 }
 
 /**
- * Fetch usage data from the Anthropic API
+ * Fetch usage data from the Anthropic API using Obsidian's requestUrl
  */
 async function fetchUsageWithToken(
   token: string
 ): Promise<{ status: number; data: UsageData | null }> {
   try {
-    const res = await httpsRequest("https://api.anthropic.com/api/oauth/usage", {
+    const res = await requestUrl({
+      url: "https://api.anthropic.com/api/oauth/usage",
+      method: "GET",
       headers: {
         Authorization: `Bearer ${token}`,
         "anthropic-beta": "oauth-2025-04-20",
       },
+      throw: false,
     });
-    if (res.status !== 200) return { status: res.status, data: null };
-    return { status: 200, data: JSON.parse(res.body) };
-  } catch {
+    if (res.status !== 200) {
+      console.warn("[hyo][usage] API returned status:", res.status);
+      return { status: res.status, data: null };
+    }
+    return { status: 200, data: res.json };
+  } catch (e: any) {
+    console.warn("[hyo][usage] API request error:", e?.message || e);
     return { status: 0, data: null };
   }
 }
@@ -143,22 +123,37 @@ async function fetchUsageWithToken(
  */
 async function fetchUsage(): Promise<UsageData | null> {
   const creds = await getOAuthCreds();
-  if (!creds?.accessToken) return null;
+  if (!creds?.accessToken) {
+    console.warn("[hyo][usage] No credentials available");
+    return null;
+  }
 
   try {
     // Try with current token
     let result = await fetchUsageWithToken(creds.accessToken);
 
     // If expired, refresh and retry
-    if (result.status === 401 && creds.refreshToken) {
-      const newToken = await refreshOAuthToken(creds.refreshToken);
-      if (newToken) {
-        result = await fetchUsageWithToken(newToken);
+    if (result.status === 401) {
+      console.log("[hyo][usage] Got 401 — refreshToken?", !!creds.refreshToken, "type:", typeof creds.refreshToken, "len:", creds.refreshToken?.length);
+      if (creds.refreshToken) {
+        console.log("[hyo][usage] Attempting token refresh...");
+        const newToken = await refreshOAuthToken(creds.refreshToken);
+        if (newToken) {
+          console.log("[hyo][usage] Refresh succeeded, retrying...");
+          result = await fetchUsageWithToken(newToken);
+        } else {
+          console.warn("[hyo][usage] Refresh returned null");
+        }
       }
     }
 
+    if (result.data) {
+      console.log("[hyo][usage] Fetch OK — 5hr:", result.data.five_hour?.utilization, "7d:", result.data.seven_day?.utilization);
+    }
+
     return result.data;
-  } catch {
+  } catch (e: any) {
+    console.warn("[hyo][usage] fetchUsage error:", e?.message || e);
     return null;
   }
 }
@@ -192,6 +187,7 @@ function calcWeeklyPacePct(resetsAt: string | undefined): number | null {
 export function useUsage() {
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [stale, setStale] = useState(false);
 
   const poll = useCallback(async () => {
     try {
@@ -199,10 +195,13 @@ export function useUsage() {
       if (data) {
         setUsage(data);
         setLastUpdated(new Date());
+        setStale(false);
       } else {
+        setStale(true);
         console.warn("[hyo] Usage fetch returned null — check keychain or token");
       }
     } catch (e) {
+      setStale(true);
       console.error("[hyo] Usage fetch failed:", e);
     }
   }, []);
@@ -211,6 +210,13 @@ export function useUsage() {
     poll();
     const interval = setInterval(poll, 300000); // 5 minutes
     return () => clearInterval(interval);
+  }, [poll]);
+
+  // Re-poll when window regains visibility (catches stale token after long idle)
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === "visible") poll(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, [poll]);
 
   const sessionPct = usage?.five_hour
@@ -230,6 +236,7 @@ export function useUsage() {
     sessionPacePct,
     weeklyPacePct,
     lastUpdated,
+    stale,
     refresh: poll,
   };
 }

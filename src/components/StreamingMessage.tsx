@@ -2,6 +2,7 @@ import React from "react";
 import { ToolCall } from "./ToolCall";
 import { PermissionRequest } from "./PermissionRequest";
 import { AskQuestion } from "./AskQuestion";
+import { PlanReview } from "./PlanReview";
 import { MarkdownBlock } from "./MarkdownBlock";
 import type { Message } from "../hooks/useChatEngine";
 import { HIDDEN_TOOLS } from "../hooks/useChatEngine";
@@ -9,7 +10,7 @@ import { HIDDEN_TOOLS } from "../hooks/useChatEngine";
 interface StreamingMessageProps {
   message: Message;
   onPermissionResponse: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
-  onQuestionAnswer: (questionId: string, answer: string) => void;
+  onQuestionAnswer: (questionId: string, answers: Record<string, string>) => void;
 }
 
 export function StreamingMessage({
@@ -90,6 +91,13 @@ export function StreamingMessage({
           />
         )}
 
+        {message.planReview && !message.planReview.resolved && (
+          <PlanReview
+            review={message.planReview}
+            onRespond={onPermissionResponse}
+          />
+        )}
+
         {activityLabel && (
           <div className="hyo-activity-indicator">
             <span className="hyo-thinking-dot" />
@@ -115,6 +123,9 @@ function getActivityLabel(message: Message): string | null {
 
   if (permissionRequest && !permissionRequest.resolved) return null;
   if (askQuestion) return null;
+
+  const planReview = message.planReview;
+  if (planReview && !planReview.resolved) return null;
 
   const pendingAgent = toolCalls.find(
     (t) => (t.name === "Agent" || t.name === "Task") && !t.result
