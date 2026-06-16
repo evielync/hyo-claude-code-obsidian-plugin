@@ -401,7 +401,7 @@ export function HyoStatusBar({
           <div className="hyo-usage-divider" />
           {stale && (
             <div className="hyo-usage-stale-notice">
-              ⚠ Couldn't fetch usage data. Try refreshing — if it persists, open the Claude desktop app to re-authenticate.
+              ⚠ Waiting for credentials — start a conversation or click Refresh.
             </div>
           )}
           <button className="hyo-usage-refresh-btn" onClick={refresh}>

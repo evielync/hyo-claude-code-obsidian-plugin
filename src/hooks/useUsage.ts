@@ -34,24 +34,59 @@ interface OAuthCreds {
 /**
  * Read OAuth credentials from macOS Keychain (async — does not block UI)
  */
+const CACHE_DIR = require("path").join(require("os").homedir(), ".hyo");
+const CACHE_PATH = require("path").join(CACHE_DIR, "oauth-cache.json");
+
+function cacheOAuthCreds(oauth: OAuthCreds): void {
+  try {
+    const fs = require("fs");
+    if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
+    fs.writeFileSync(CACHE_PATH, JSON.stringify(oauth), { mode: 0o600 });
+  } catch {
+    // Non-critical — cache is best-effort
+  }
+}
+
+function readCachedOAuthCreds(): OAuthCreds | null {
+  try {
+    const fs = require("fs");
+    const raw = fs.readFileSync(CACHE_PATH, "utf-8");
+    const oauth = JSON.parse(raw);
+    if (oauth?.accessToken) return oauth;
+  } catch {
+    // No cache yet
+  }
+  return null;
+}
+
 async function getOAuthCreds(): Promise<OAuthCreds | null> {
   const fs = require("fs");
   const path = require("path");
   const home = require("os").homedir();
 
-  // Try 1: Read from Claude Code's credentials file (full data, no truncation)
+  // Try 1: Claude Code's credentials file (full data, exists while CLI runs)
   try {
     const credsPath = path.join(home, ".claude", ".credentials.json");
     const raw = fs.readFileSync(credsPath, "utf-8");
     const creds = JSON.parse(raw);
     const oauth = creds?.claudeAiOauth;
-    if (oauth?.accessToken) return oauth;
+    if (oauth?.accessToken) {
+      cacheOAuthCreds(oauth);
+      console.log("[hyo][usage] Creds from: credentials file | hasRefresh:", !!oauth.refreshToken);
+      return oauth;
+    }
   } catch {
-    // File may not exist when Claude Code isn't running — fall through
+    // File may not exist — fall through
   }
 
-  // Try 2: Read from macOS keychain via security CLI
-  // Note: security -w truncates at ~2KB — refreshToken may be missing
+  // Try 2: Our own cache (persists across sessions)
+  const cached = readCachedOAuthCreds();
+  if (cached) {
+    console.log("[hyo][usage] Creds from: cache | hasRefresh:", !!cached.refreshToken);
+    return cached;
+  }
+
+  // Try 3: macOS keychain (truncated fallback — may lack refreshToken)
   try {
     const { execFile } = require("child_process");
     const { promisify } = require("util");
@@ -67,23 +102,19 @@ async function getOAuthCreds(): Promise<OAuthCreds | null> {
     try {
       const creds = JSON.parse(raw);
       const oauth = creds?.claudeAiOauth;
-      if (oauth?.accessToken) return oauth;
-    } catch {
-      // JSON truncated — extract what we can via regex
-      const accessMatch = raw.match(/"accessToken"\s*:\s*"([^"]+)"/);
-      const refreshMatch = raw.match(/"refreshToken"\s*:\s*"([^"]+)"/);
-      if (accessMatch) {
-        return {
-          accessToken: accessMatch[1],
-          refreshToken: refreshMatch?.[1] || undefined,
-        };
+      if (oauth?.accessToken) {
+        cacheOAuthCreds(oauth);
+        console.log("[hyo][usage] Creds from: keychain (full parse) | hasRefresh:", !!oauth.refreshToken);
+        return oauth;
       }
+    } catch {
+      console.warn("[hyo][usage] Keychain truncated (", raw.length, "bytes) — claudeAiOauth not reachable");
     }
   } catch {
-    // Keychain not available (Linux/Windows) — that's OK
+    // Keychain not available (Linux/Windows)
   }
 
-  console.warn("[hyo][usage] No credentials found");
+  console.warn("[hyo][usage] No credentials found from any source");
   return null;
 }
 
@@ -165,6 +196,8 @@ async function fetchUsage(): Promise<UsageData | null> {
         const newToken = await refreshOAuthToken(creds.refreshToken);
         if (newToken) {
           console.log("[hyo][usage] Refresh succeeded, retrying...");
+          // Update cache with new access token
+          cacheOAuthCreds({ ...creds, accessToken: newToken });
           result = await fetchUsageWithToken(newToken);
         } else {
           console.warn("[hyo][usage] Refresh returned null");
@@ -233,9 +266,10 @@ export function useUsage() {
 
   useEffect(() => {
     poll();
-    const interval = setInterval(poll, 300000); // 5 minutes
+    // Poll every 5 minutes when healthy, every 15 seconds when stale
+    const interval = setInterval(poll, stale ? 15_000 : 300_000);
     return () => clearInterval(interval);
-  }, [poll]);
+  }, [poll, stale]);
 
   // Re-poll when window regains visibility (catches stale token after long idle)
   useEffect(() => {
