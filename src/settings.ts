@@ -27,7 +27,7 @@ export const DEFAULT_SETTINGS: HyoSettings = {
   workingDirectory: "",
   defaultAgent: "",
   maxOutputTokens: 64000,
-  autoGenerateTitles: false,
+  autoGenerateTitles: true,
   // Voice
   elevenLabsApiKey: "",
   voiceId: "",
