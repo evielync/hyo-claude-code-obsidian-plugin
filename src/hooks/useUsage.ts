@@ -35,31 +35,56 @@ interface OAuthCreds {
  * Read OAuth credentials from macOS Keychain (async — does not block UI)
  */
 async function getOAuthCreds(): Promise<OAuthCreds | null> {
-  try {
-    const fs = require("fs");
-    const path = require("path");
-    const home = require("os").homedir();
-    const credsPath = path.join(home, ".claude", ".credentials.json");
+  const fs = require("fs");
+  const path = require("path");
+  const home = require("os").homedir();
 
+  // Try 1: Read from Claude Code's credentials file (full data, no truncation)
+  try {
+    const credsPath = path.join(home, ".claude", ".credentials.json");
     const raw = fs.readFileSync(credsPath, "utf-8");
     const creds = JSON.parse(raw);
-
-    if (!creds?.claudeAiOauth) {
-      console.warn("[hyo][usage] No claudeAiOauth in credentials file");
-      return null;
-    }
-
-    const oauth = creds.claudeAiOauth;
-    if (!oauth.accessToken) {
-      console.warn("[hyo][usage] No accessToken in credentials");
-      return null;
-    }
-
-    return oauth;
-  } catch (e: any) {
-    console.warn("[hyo][usage] Credentials read failed:", e?.message || e);
-    return null;
+    const oauth = creds?.claudeAiOauth;
+    if (oauth?.accessToken) return oauth;
+  } catch {
+    // File may not exist when Claude Code isn't running — fall through
   }
+
+  // Try 2: Read from macOS keychain via security CLI
+  // Note: security -w truncates at ~2KB — refreshToken may be missing
+  try {
+    const { execFile } = require("child_process");
+    const { promisify } = require("util");
+    const execFileAsync = promisify(execFile);
+    const username: string = require("os").userInfo().username;
+    const { stdout } = await execFileAsync(
+      "security",
+      ["find-generic-password", "-s", "Claude Code-credentials", "-a", username, "-w"],
+      { timeout: 5000, maxBuffer: 1024 * 1024 }
+    );
+    const raw = stdout.trim();
+
+    try {
+      const creds = JSON.parse(raw);
+      const oauth = creds?.claudeAiOauth;
+      if (oauth?.accessToken) return oauth;
+    } catch {
+      // JSON truncated — extract what we can via regex
+      const accessMatch = raw.match(/"accessToken"\s*:\s*"([^"]+)"/);
+      const refreshMatch = raw.match(/"refreshToken"\s*:\s*"([^"]+)"/);
+      if (accessMatch) {
+        return {
+          accessToken: accessMatch[1],
+          refreshToken: refreshMatch?.[1] || undefined,
+        };
+      }
+    }
+  } catch {
+    // Keychain not available (Linux/Windows) — that's OK
+  }
+
+  console.warn("[hyo][usage] No credentials found");
+  return null;
 }
 
 /**
