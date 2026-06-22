@@ -320,22 +320,18 @@ export class HyoSettingTab extends PluginSettingTab {
 
     workingDirSetting.addButton((button) =>
       button.setButtonText("Browse...").onClick(async () => {
-        const input = document.createElement("input");
-        input.type = "file";
-        input.setAttribute("webkitdirectory", "");
-        input.setAttribute("directory", "");
-        input.onchange = async (e: Event) => {
-          const target = e.target as HTMLInputElement;
-          const files = target.files;
-          if (files && files.length > 0) {
-            const filePath = files[0].path;
-            const dirPath = filePath.substring(0, filePath.lastIndexOf("/"));
-            this.plugin.settings.workingDirectory = dirPath;
-            await this.plugin.saveSettings();
-            this.display();
-          }
-        };
-        input.click();
+        // @ts-ignore
+        // @ts-ignore
+        const { dialog } = require("electron").remote;
+        const result = await dialog.showOpenDialog({
+          properties: ["openDirectory"],
+          defaultPath: this.plugin.settings.workingDirectory || os.homedir(),
+        });
+        if (!result.canceled && result.filePaths.length > 0) {
+          this.plugin.settings.workingDirectory = result.filePaths[0];
+          await this.plugin.saveSettings();
+          this.display();
+        }
       })
     );
 
@@ -430,18 +426,18 @@ export class HyoSettingTab extends PluginSettingTab {
 
     cliPathSetting.addButton((button) =>
       button.setButtonText("Browse...").onClick(async () => {
-        const input = document.createElement("input");
-        input.type = "file";
-        input.onchange = async (e: Event) => {
-          const target = e.target as HTMLInputElement;
-          const files = target.files;
-          if (files && files.length > 0) {
-            this.plugin.settings.cliPath = files[0].path;
-            await this.plugin.saveSettings();
-            this.display();
-          }
-        };
-        input.click();
+        // @ts-ignore
+        // @ts-ignore
+        const { dialog } = require("electron").remote;
+        const result = await dialog.showOpenDialog({
+          properties: ["openFile"],
+          defaultPath: path.dirname(this.plugin.settings.cliPath || "/usr/local/bin"),
+        });
+        if (!result.canceled && result.filePaths.length > 0) {
+          this.plugin.settings.cliPath = result.filePaths[0];
+          await this.plugin.saveSettings();
+          this.display();
+        }
       })
     );
   }
