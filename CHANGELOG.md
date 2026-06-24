@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.4
+
+### Features
+- **Attached vault files now include the full path** — when you use "Attach current file", Claude receives the vault-relative path (e.g. `02 Projects/My Note.md`) not just the filename. Makes it possible for Claude to locate, update, or reference the file without you having to say where it lives.
+- **AskUserQuestion UI** — when Claude uses the AskUserQuestion tool, questions now appear as interactive UI with option buttons and free-text input. Claude waits for your answer before continuing (previously it steamrolled through without pausing).
+- **Plan mode review** — ExitPlanMode now shows the full plan as formatted markdown with Approve and Reject buttons. EnterPlanMode auto-approves silently.
+- **Auto-naming conversations** — new conversations are automatically named based on the first exchange.
+
+### Fixes
+- **Usage monitor reliability** — improved credential caching and faster recovery when the usage API is slow or temporarily unavailable. Added fallback when `.credentials.json` is absent (e.g. fresh installs or Claude CLI not yet authenticated).
+- **Browse buttons in settings use native file picker** — Browse buttons now open the system file dialog (Electron native) instead of a web input, matching OS conventions.
+
 ## 0.2.0
 
 ### New: Voice Mode

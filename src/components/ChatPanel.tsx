@@ -24,6 +24,7 @@ interface AttachedFile {
   content?: string;       // text files
   mediaType?: string;     // image files / pdf
   data?: string;          // image files / pdf — base64
+  vaultPath?: string;     // vault-relative path (only set for "Attach current file")
 }
 
 interface ChatPanelProps {
@@ -296,7 +297,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     if (!file) return;
     try {
       const content = await app.vault.read(file);
-      addFile({ name: file.name, fileType: "text", content });
+      addFile({ name: file.name, fileType: "text", content, vaultPath: file.path });
     } catch (e) {
       console.error("[hyo] Failed to read file:", e);
     }
@@ -421,7 +422,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     const textParts: string[] = [];
     if (text) textParts.push(text);
     for (const f of smallTextFiles) {
-      textParts.push(`[File: ${f.name}]\n${f.content}`);
+      textParts.push(`[File: ${f.vaultPath || f.name}]\n${f.content}`);
     }
     if (references.length > 0) {
       const refList = references
