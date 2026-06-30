@@ -18,6 +18,7 @@ interface HyoStatusBarProps {
 }
 
 const MODEL_OPTIONS = [
+  { id: "claude-sonnet-5[1m]", name: "Sonnet 5", context: "1M" },
   { id: "claude-opus-4-7", name: "Opus 4.7", context: "200K" },
   { id: "claude-opus-4-6[1m]", name: "Opus 4.6", context: "1M" },
   { id: "claude-opus-4-6", name: "Opus 4.6", context: "200K" },
