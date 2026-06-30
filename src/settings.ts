@@ -105,6 +105,7 @@ export class HyoSettingTab extends PluginSettingTab {
           .addOption("claude-opus-4-7", "Opus 4.7 (200K)")
           .addOption("claude-opus-4-6[1m]", "Opus 4.6 (1M)")
           .addOption("claude-opus-4-6", "Opus 4.6 (200K)")
+          .addOption("claude-sonnet-5", "Sonnet 5 (1M)")
           .addOption("claude-sonnet-4-6[1m]", "Sonnet 4.6 (1M)")
           .addOption("claude-sonnet-4-6", "Sonnet 4.6 (200K)")
           .addOption("claude-haiku-4-5-20251001", "Haiku 4.5 (200K)")
