@@ -18,10 +18,10 @@ interface HyoStatusBarProps {
 }
 
 const MODEL_OPTIONS = [
-  { id: "claude-sonnet-5[1m]", name: "Sonnet 5", context: "1M" },
   { id: "claude-opus-4-7", name: "Opus 4.7", context: "200K" },
   { id: "claude-opus-4-6[1m]", name: "Opus 4.6", context: "1M" },
   { id: "claude-opus-4-6", name: "Opus 4.6", context: "200K" },
+  { id: "claude-sonnet-5", name: "Sonnet 5", context: "1M" },
   { id: "claude-sonnet-4-6[1m]", name: "Sonnet 4.6", context: "1M" },
   { id: "claude-sonnet-4-6", name: "Sonnet 4.6", context: "200K" },
   { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", context: "200K" },
@@ -68,6 +68,8 @@ function formatResetTime(isoString: string): string {
 }
 
 function getContextLimit(modelId: string): number {
+  // Sonnet 5 always runs at 1M context on the API — no [1m] suffix needed or accepted.
+  if (modelId.includes("claude-sonnet-5")) return 1_048_576;
   return modelId.includes("[1m]") ? 1_048_576 : 200_000;
 }
 
