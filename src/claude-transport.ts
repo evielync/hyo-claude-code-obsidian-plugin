@@ -1,6 +1,20 @@
 import { spawn, ChildProcess } from "child_process";
 import { randomUUID } from "crypto";
 
+// Sonnet 5 runs 1M context natively and doesn't accept a "[1m]" suffix —
+// the API doesn't recognize it as a valid variant and silently falls back
+// to 200K context instead of erroring. Any model string carrying that stale
+// suffix (e.g. from a tab created before the 0.3.6 ID fix, or typed into the
+// custom model field by analogy with Opus/Sonnet 4.6, which DO need it) gets
+// normalized here, right at the CLI boundary, so it can never silently
+// degrade context again.
+export function normalizeModelId(id: string): string {
+  if (id.startsWith("claude-sonnet-5") && id.includes("[1m]")) {
+    return "claude-sonnet-5";
+  }
+  return id;
+}
+
 export interface TransportOptions {
   cliPath: string;
   cwd: string;
@@ -36,7 +50,7 @@ export class ClaudeTransport {
       "stream-json",
       "--verbose",
       "--model",
-      model,
+      normalizeModelId(model),
       "--max-thinking-tokens",
       "31999",
       "--permission-mode",

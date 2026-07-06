@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { ClaudeTransport } from "../claude-transport";
+import { ClaudeTransport, normalizeModelId } from "../claude-transport";
 import type {
   Message,
   ToolCallData,
@@ -912,10 +912,11 @@ export function useSessionManager(options: SessionManagerOptions) {
   }, [updateTabLastAssistant]);
 
   const setTabModel = useCallback((model: string) => {
+    const normalized = normalizeModelId(model);
     setState((prev) => ({
       ...prev,
       tabs: prev.tabs.map((tab) =>
-        tab.id === prev.activeTabId ? { ...tab, model } : tab
+        tab.id === prev.activeTabId ? { ...tab, model: normalized } : tab
       ),
     }));
   }, []);

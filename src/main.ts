@@ -57,6 +57,14 @@ export default class HyoPlugin extends Plugin {
       this.settings.model = DEFAULT_SETTINGS.model;
       await this.saveData(this.settings);
     }
+    // Sonnet 5 shipped in 0.3.5 with a "[1m]" suffix in its model ID. 0.3.6
+    // dropped the suffix (Sonnet 5 runs 1M natively and doesn't accept it —
+    // the API silently drops to 200K context if you pass it), but settings
+    // saved under 0.3.5 still have the old string. Migrate it forward.
+    if (this.settings.model === "claude-sonnet-5[1m]") {
+      this.settings.model = "claude-sonnet-5";
+      await this.saveData(this.settings);
+    }
     // Clear defaultAgent if no matching file exists in ~/.claude/agents/.
     // Fixes stale state from older plugin versions that hardcoded an agent name.
     if (this.settings.defaultAgent) {
