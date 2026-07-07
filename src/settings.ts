@@ -23,7 +23,7 @@ export interface HyoSettings {
 export const DEFAULT_SETTINGS: HyoSettings = {
   cliPath: "/usr/local/bin/claude",
   model: "claude-sonnet-4-5-20250929",
-  permissionMode: "default",
+  permissionMode: "manual",
   workingDirectory: "",
   defaultAgent: "",
   maxOutputTokens: 64000,
@@ -123,7 +123,7 @@ export class HyoSettingTab extends PluginSettingTab {
       .setDesc("How Claude handles tool permissions")
       .addDropdown((dropdown) =>
         dropdown
-          .addOption("default", "Default (ask for each)")
+          .addOption("manual", "Default (ask for each)")
           .addOption("acceptEdits", "Accept edits")
           .addOption("bypassPermissions", "Bypass all")
           .addOption("plan", "Plan mode")

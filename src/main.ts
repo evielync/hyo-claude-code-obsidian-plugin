@@ -65,6 +65,14 @@ export default class HyoPlugin extends Plugin {
       this.settings.model = "claude-sonnet-5";
       await this.saveData(this.settings);
     }
+    // The CLI renamed the "default" permission mode to "manual" at some
+    // point after 2.1.32. Settings saved under the old CLI still have the
+    // old string, which the new CLI rejects as an invalid --permission-mode
+    // value. Migrate it forward.
+    if (this.settings.permissionMode === "default") {
+      this.settings.permissionMode = "manual";
+      await this.saveData(this.settings);
+    }
     // Clear defaultAgent if no matching file exists in ~/.claude/agents/.
     // Fixes stale state from older plugin versions that hardcoded an agent name.
     if (this.settings.defaultAgent) {

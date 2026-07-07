@@ -194,7 +194,7 @@ export class ClaudeTransport {
             type: "addRules",
             rules: [{ toolName }],
             behavior: "allow",
-            destination: "session",
+            destination: "localSettings",
           },
         ],
       };

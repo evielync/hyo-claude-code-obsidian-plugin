@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.9
+
+### Fixes
+- **Permission prompts and AskUserQuestion stopped working after a Claude Code CLI update** — the CLI renamed its `default` permission mode to `manual`. Hyo was still sending the old value, which the current CLI rejects, breaking the whole permission/question-prompt flow. Existing installs are migrated automatically.
+- **"Always Allow" wasn't actually persisting** — clicking Always Allow only granted the permission for that one running session; it was gone the moment you opened a new tab or restarted Obsidian. Grants now save to `.claude/settings.local.json` so they actually stick.
+
 ## 0.3.4
 
 ### Features
