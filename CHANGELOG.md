@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.11
+
+### Fixes
+- **Context ring could show 200K on a brand-new Sonnet 5 tab, then correctly show 1M after closing and reopening it** — the CLI reports a more conservative context figure on a freshly-started session (`--session-id`) than on a resumed one (`--resume`), same account, same model. This wasn't just cosmetic: auto-compact is driven by this number, so a fresh tab could trigger unnecessary compaction near 160K instead of the real ~1M ceiling. The displayed/enforced ceiling is now clamped to never drop below what's already known true for the model, so a conservative early report can't cost you context.
+- **Permission mode picker (status bar dropdown) still offered the old "default" value** — missed in the 0.3.9 fix. Selecting "Ask first" from the status bar would silently reintroduce the exact CLI-mismatch bug 0.3.9 fixed. Now uses "manual" throughout.
+
 ## 0.3.10
 
 ### Fixes

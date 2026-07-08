@@ -29,7 +29,7 @@ const MODEL_OPTIONS = [
 
 const PERMISSION_MODES = [
   {
-    id: "default",
+    id: "manual",
     name: "Ask first",
     desc: "Asks before tools not in your allow list",
   },
@@ -177,7 +177,12 @@ export function HyoStatusBar({
     PERMISSION_MODES.find((m) => m.id === permissionMode)?.name ||
     permissionMode;
 
-  const contextLimit = contextWindow ?? getContextLimit(model);
+  // The CLI sometimes under-reports contextWindow early in a fresh session
+  // (--session-id) versus a resumed one (--resume) — same model, same
+  // account, different number. Never let the displayed/auto-compact ceiling
+  // drop below what's already known to be true for the model, so a
+  // conservative early report can't trigger premature compaction.
+  const contextLimit = Math.max(contextWindow ?? 0, getContextLimit(model));
   const contextPct = inputTokens > 0 ? Math.min(100, (inputTokens / contextLimit) * 100) : 0;
   const contextBarClass = contextPct > 80 ? "danger" : contextPct > 50 ? "warning" : "";
 
