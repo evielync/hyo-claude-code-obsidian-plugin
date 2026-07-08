@@ -882,14 +882,24 @@ export function useSessionManager(options: SessionManagerOptions) {
     (questionId: string, answers: Record<string, string>) => {
       const tabId = stateRef.current.activeTabId;
 
-      // Send control_response with answers as updatedInput.
+      // AskUserQuestion's input schema requires "questions" — updatedInput
+      // must satisfy the tool's original input schema, not just carry the
+      // answers. Echo back the questions we already have from the tab's
+      // askQuestion state alongside the answers.
+      const tab = stateRef.current.tabs.find((t) => t.id === tabId);
+      const lastAssistant = [...(tab?.messages || [])]
+        .reverse()
+        .find((m) => m.role === "assistant");
+      const questions = lastAssistant?.askQuestion?.questions || [];
+
+      // Send control_response with questions + answers as updatedInput.
       // The CLI was blocked on the control_request — this unblocks it.
       // Claude receives the answers and continues within the same turn.
       transportsRef.current[tabId]?.sendPermissionResponse(
         questionId,
         "allow",
         undefined,
-        { answers }
+        { questions, answers }
       );
 
       // Clear the question UI. The assistant message stays streaming —

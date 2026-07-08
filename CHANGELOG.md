@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.10
+
+### Fixes
+- **AskUserQuestion answers were rejected outright** — answering a question box failed with a schema validation error, because Hyo only sent the answers back and dropped the required `questions` field. The CLI rejects any response to AskUserQuestion that doesn't echo the original questions alongside the answers. Fixed.
+
 ## 0.3.9
 
 ### Fixes
