@@ -102,6 +102,7 @@ export class HyoSettingTab extends PluginSettingTab {
       .setDesc("Default model for new conversations")
       .addDropdown((dropdown) =>
         dropdown
+          .addOption("claude-opus-4-8", "Opus 4.8 (1M)")
           .addOption("claude-opus-4-7", "Opus 4.7 (200K)")
           .addOption("claude-opus-4-6[1m]", "Opus 4.6 (1M)")
           .addOption("claude-opus-4-6", "Opus 4.6 (200K)")
