@@ -1,3 +1,4 @@
+import { debug } from "./debug";
 import { spawn, ChildProcess } from "child_process";
 import { randomUUID } from "crypto";
 
@@ -90,8 +91,8 @@ export class ClaudeTransport {
       process.env.PATH || "",
     ].join(":");
 
-    console.log("[hyo] Spawning CLI:", cliPath, args.join(" "));
-    console.log("[hyo] CWD:", cwd);
+    debug("[hyo] Spawning CLI:", cliPath, args.join(" "));
+    debug("[hyo] CWD:", cwd);
 
     this.proc = spawn(cliPath, args, {
       cwd,
@@ -111,19 +112,19 @@ export class ClaudeTransport {
           const parsed = JSON.parse(line);
 
           if (parsed.type === "system" && parsed.subtype === "init") {
-            console.log("[hyo] CLI ready, session:", parsed.session_id);
+            debug("[hyo] CLI ready, session:", parsed.session_id);
           }
 
           this.options.onMessage(parsed);
         } catch {
-          console.log("[hyo] Non-JSON line:", line.slice(0, 200));
+          debug("[hyo] Non-JSON line:", line.slice(0, 200));
         }
       }
     });
 
     this.proc.stderr?.on("data", (chunk: Buffer) => {
       const text = chunk.toString();
-      console.log("[hyo] stderr:", text.slice(0, 500));
+      debug("[hyo] stderr:", text.slice(0, 500));
       if (!text.includes("[debug]")) {
         this.options.onError(text);
       }
@@ -136,7 +137,7 @@ export class ClaudeTransport {
     });
 
     this.proc.on("close", (code) => {
-      console.log("[hyo] CLI closed with code:", code);
+      debug("[hyo] CLI closed with code:", code);
       // Flush remaining buffer
       if (this.buffer.trim()) {
         try {

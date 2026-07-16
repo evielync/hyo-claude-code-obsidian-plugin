@@ -1,3 +1,4 @@
+import { debug } from "../debug";
 import { useState, useCallback, useRef } from "react";
 import { ClaudeTransport } from "../claude-transport";
 
@@ -138,10 +139,10 @@ export function useChatEngine(options: ChatEngineOptions) {
       if (event.type === "stream_event") {
         const evt = event.event || event;
         if (evt.type !== "content_block_delta") {
-          console.log("[hyo] event:", event.type, evt.type);
+          debug("[hyo] event:", event.type, evt.type);
         }
       } else {
-        console.log("[hyo] event:", event.type, event.subtype || event.request?.subtype || "");
+        debug("[hyo] event:", event.type, event.subtype || event.request?.subtype || "");
       }
 
       const ss = streamRef.current;
@@ -164,7 +165,7 @@ export function useChatEngine(options: ChatEngineOptions) {
         const req = event.request || {};
         const toolName = req.tool_name || "";
         const requestId = event.request_id || "";
-        console.log("[hyo][ask] control_request:", toolName, "requestId:", requestId);
+        debug("[hyo][ask] control_request:", toolName, "requestId:", requestId);
 
         // AskUserQuestion — hold the control_request. DON'T respond.
         // The CLI blocks waiting for our control_response.
@@ -172,7 +173,7 @@ export function useChatEngine(options: ChatEngineOptions) {
         // Update the id to the requestId so sendQuestionAnswer can
         // send the control_response when the user answers.
         if (toolName === "AskUserQuestion") {
-          console.log("[hyo][ask] Holding AskUserQuestion control_request (NOT auto-approving). requestId:", requestId);
+          debug("[hyo][ask] Holding AskUserQuestion control_request (NOT auto-approving). requestId:", requestId);
           const input = req.input || {};
           updateLastAssistant((msg) => ({
             askQuestion: msg.askQuestion
@@ -229,10 +230,10 @@ export function useChatEngine(options: ChatEngineOptions) {
       if (event.type === "user") {
         const contentArr = event.message?.content || [];
         const toolResults = contentArr.filter((b: any) => b.type === "tool_result");
-        console.log("[hyo][ask] user event blocks:", contentArr.map((b: any) => b.type));
+        debug("[hyo][ask] user event blocks:", contentArr.map((b: any) => b.type));
         for (const tr of toolResults) {
           const matchedTool = ss.toolCalls.find((t) => t.id === tr.tool_use_id);
-          console.log("[hyo][ask] tool_result for:", matchedTool?.name || "unknown", "tool_use_id:", tr.tool_use_id);
+          debug("[hyo][ask] tool_result for:", matchedTool?.name || "unknown", "tool_use_id:", tr.tool_use_id);
         }
         processContentBlocks(contentArr, ss);
         updateStreamingFromState(ss, updateLastAssistant);
@@ -242,7 +243,7 @@ export function useChatEngine(options: ChatEngineOptions) {
       // Assistant message (complete)
       if (event.type === "assistant") {
         const contentArr = event.message?.content || [];
-        console.log("[hyo] assistant event blocks:", contentArr.map((b: any) => ({ type: b.type, name: b.name, textPreview: b.type === "text" ? (b.text || "").slice(0, 80) : undefined })));
+        debug("[hyo] assistant event blocks:", contentArr.map((b: any) => ({ type: b.type, name: b.name, textPreview: b.type === "text" ? (b.text || "").slice(0, 80) : undefined })));
         processContentBlocks(contentArr, ss);
         updateStreamingFromState(ss, updateLastAssistant);
 
@@ -253,7 +254,7 @@ export function useChatEngine(options: ChatEngineOptions) {
           (t) => t.name === "AskUserQuestion" && !t.result && t.input?.questions
         );
         if (askTool) {
-          console.log("[hyo][ask] Detected AskUserQuestion in assistant event. Questions:", askTool.input.questions.length);
+          debug("[hyo][ask] Detected AskUserQuestion in assistant event. Questions:", askTool.input.questions.length);
           updateLastAssistant(() => ({
             askQuestion: {
               id: askTool.id,
@@ -280,7 +281,7 @@ export function useChatEngine(options: ChatEngineOptions) {
             input: {},
             result: null,
           };
-          console.log("[hyo][ask] tool_use START:", tool.name, tool.id);
+          debug("[hyo][ask] tool_use START:", tool.name, tool.id);
           if (!ss.toolCalls.find((t) => t.id === tool.id)) {
             ss.toolCalls.push(tool);
             ss.orderedBlocks.push({
@@ -304,25 +305,25 @@ export function useChatEngine(options: ChatEngineOptions) {
         // Content block stop
         if (evt.type === "content_block_stop") {
           const lastBlock = ss.orderedBlocks[ss.orderedBlocks.length - 1];
-          console.log("[hyo][ask] content_block_stop — lastBlock type:", lastBlock?.type, "toolId:", lastBlock?.toolId);
+          debug("[hyo][ask] content_block_stop — lastBlock type:", lastBlock?.type, "toolId:", lastBlock?.toolId);
           if (lastBlock?.type === "tool") {
             ss.toolResultSinceLastText = true;
 
             const tool = ss.toolCalls[ss.toolCalls.length - 1];
-            console.log("[hyo][ask] content_block_stop for tool:", tool?.name, "id:", tool?.id, "hasInput:", !!tool?.input, "hasQuestions:", !!tool?.input?.questions, "hasInputJson:", !!tool?._inputJson);
+            debug("[hyo][ask] content_block_stop for tool:", tool?.name, "id:", tool?.id, "hasInput:", !!tool?.input, "hasQuestions:", !!tool?.input?.questions, "hasInputJson:", !!tool?._inputJson);
 
             if (tool?.name === "AskUserQuestion") {
               // Ensure input is fully parsed from accumulated JSON
               if (tool._inputJson && !tool.input?.questions) {
                 try {
                   tool.input = JSON.parse(tool._inputJson);
-                  console.log("[hyo][ask] Parsed _inputJson, questions:", !!tool.input?.questions);
+                  debug("[hyo][ask] Parsed _inputJson, questions:", !!tool.input?.questions);
                 } catch (e) {
-                  console.log("[hyo][ask] Failed to parse _inputJson:", (e as Error).message);
+                  debug("[hyo][ask] Failed to parse _inputJson:", (e as Error).message);
                 }
               }
               if (tool.input?.questions) {
-                console.log("[hyo][ask] ✓ Setting askQuestion and INTERRUPTING. Questions:", tool.input.questions.length);
+                debug("[hyo][ask] ✓ Setting askQuestion and INTERRUPTING. Questions:", tool.input.questions.length);
                 const askQuestion: AskQuestionData = {
                   id: tool.id,
                   questions: tool.input.questions,
@@ -331,7 +332,7 @@ export function useChatEngine(options: ChatEngineOptions) {
                 updateLastAssistant(() => ({ askQuestion }));
                 transportRef.current?.sendInterrupt();
               } else {
-                console.log("[hyo][ask] ✗ AskUserQuestion but NO questions found. input:", JSON.stringify(tool.input).slice(0, 200));
+                debug("[hyo][ask] ✗ AskUserQuestion but NO questions found. input:", JSON.stringify(tool.input).slice(0, 200));
               }
             }
           }
@@ -374,7 +375,7 @@ export function useChatEngine(options: ChatEngineOptions) {
             } else {
               const isSkillOutput = ss.suppressNextTextBlock;
               ss.suppressNextTextBlock = false;
-              console.log("[hyo] stream text block created: turnIndex=", ss.turnIndex, "isSkillOutput=", isSkillOutput, "preview=", delta.text.slice(0, 60));
+              debug("[hyo] stream text block created: turnIndex=", ss.turnIndex, "isSkillOutput=", isSkillOutput, "preview=", delta.text.slice(0, 60));
               ss.orderedBlocks.push({
                 type: "text",
                 content: delta.text,
@@ -446,7 +447,7 @@ export function useChatEngine(options: ChatEngineOptions) {
             console.error("[hyo] CLI error:", error);
           },
           onClose: (code) => {
-            console.log("[hyo] CLI closed with code:", code);
+            debug("[hyo] CLI closed with code:", code);
             setGenerating(false);
             updateLastAssistant(() => ({ streaming: false }));
             transportRef.current = null;
@@ -486,7 +487,7 @@ export function useChatEngine(options: ChatEngineOptions) {
 
   const sendQuestionAnswer = useCallback(
     (questionId: string, answers: Record<string, string>) => {
-      console.log("[hyo][ask] Sending question answer. requestId:", questionId, "answers:", JSON.stringify(answers));
+      debug("[hyo][ask] Sending question answer. requestId:", questionId, "answers:", JSON.stringify(answers));
 
       // Send control_response with answers as updatedInput.
       // The CLI was blocked on the control_request — this unblocks it.
@@ -548,10 +549,10 @@ function processContentBlocks(contentArr: any[], ss: StreamState) {
         (b) => b.type === "text" && b.turnIndex === ss.turnIndex
       );
       if (existing) {
-        console.log("[hyo] text block UPDATED: turnIndex=", ss.turnIndex, "isSkillOutput=", existing.isSkillOutput, "preview=", (block.text || "").slice(0, 60));
+        debug("[hyo] text block UPDATED: turnIndex=", ss.turnIndex, "isSkillOutput=", existing.isSkillOutput, "preview=", (block.text || "").slice(0, 60));
         existing.content = block.text || "";
       } else {
-        console.log("[hyo] text block created: turnIndex=", ss.turnIndex, "isSkillOutput=", isSkillOutput, "preview=", (block.text || "").slice(0, 60));
+        debug("[hyo] text block created: turnIndex=", ss.turnIndex, "isSkillOutput=", isSkillOutput, "preview=", (block.text || "").slice(0, 60));
         ss.orderedBlocks.push({
           type: "text",
           content: block.text || "",

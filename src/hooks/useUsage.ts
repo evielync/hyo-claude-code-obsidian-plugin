@@ -1,3 +1,4 @@
+import { debug } from "../debug";
 import { useState, useEffect, useCallback } from "react";
 import { requestUrl } from "obsidian";
 
@@ -72,7 +73,7 @@ async function getOAuthCreds(): Promise<OAuthCreds | null> {
     const oauth = creds?.claudeAiOauth;
     if (oauth?.accessToken) {
       cacheOAuthCreds(oauth);
-      console.log("[hyo][usage] Creds from: credentials file | hasRefresh:", !!oauth.refreshToken);
+      debug("[hyo][usage] Creds from: credentials file | hasRefresh:", !!oauth.refreshToken);
       return oauth;
     }
   } catch {
@@ -82,7 +83,7 @@ async function getOAuthCreds(): Promise<OAuthCreds | null> {
   // Try 2: Our own cache (persists across sessions)
   const cached = readCachedOAuthCreds();
   if (cached) {
-    console.log("[hyo][usage] Creds from: cache | hasRefresh:", !!cached.refreshToken);
+    debug("[hyo][usage] Creds from: cache | hasRefresh:", !!cached.refreshToken);
     return cached;
   }
 
@@ -104,7 +105,7 @@ async function getOAuthCreds(): Promise<OAuthCreds | null> {
       const oauth = creds?.claudeAiOauth;
       if (oauth?.accessToken) {
         cacheOAuthCreds(oauth);
-        console.log("[hyo][usage] Creds from: keychain (full parse) | hasRefresh:", !!oauth.refreshToken);
+        debug("[hyo][usage] Creds from: keychain (full parse) | hasRefresh:", !!oauth.refreshToken);
         return oauth;
       }
     } catch {
@@ -190,12 +191,12 @@ async function fetchUsage(): Promise<UsageData | null> {
 
     // If expired, refresh and retry
     if (result.status === 401) {
-      console.log("[hyo][usage] Got 401 — refreshToken?", !!creds.refreshToken, "type:", typeof creds.refreshToken, "len:", creds.refreshToken?.length);
+      debug("[hyo][usage] Got 401 — refreshToken?", !!creds.refreshToken, "type:", typeof creds.refreshToken, "len:", creds.refreshToken?.length);
       if (creds.refreshToken) {
-        console.log("[hyo][usage] Attempting token refresh...");
+        debug("[hyo][usage] Attempting token refresh...");
         const newToken = await refreshOAuthToken(creds.refreshToken);
         if (newToken) {
-          console.log("[hyo][usage] Refresh succeeded, retrying...");
+          debug("[hyo][usage] Refresh succeeded, retrying...");
           // Update cache with new access token
           cacheOAuthCreds({ ...creds, accessToken: newToken });
           result = await fetchUsageWithToken(newToken);
@@ -206,7 +207,7 @@ async function fetchUsage(): Promise<UsageData | null> {
     }
 
     if (result.data) {
-      console.log("[hyo][usage] Fetch OK — 5hr:", result.data.five_hour?.utilization, "7d:", result.data.seven_day?.utilization);
+      debug("[hyo][usage] Fetch OK — 5hr:", result.data.five_hour?.utilization, "7d:", result.data.seven_day?.utilization);
     }
 
     return result.data;

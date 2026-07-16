@@ -1,3 +1,4 @@
+import { debug } from "../debug";
 import { useState, useCallback, useRef, useEffect } from "react";
 import { ClaudeTransport, normalizeModelId } from "../claude-transport";
 import type {
@@ -251,10 +252,10 @@ export function useSessionManager(options: SessionManagerOptions) {
         if (event.type === "stream_event") {
           const evt = event.event || event;
           if (evt.type !== "content_block_delta") {
-            console.log("[hyo] event:", event.type, evt.type);
+            debug("[hyo] event:", event.type, evt.type);
           }
         } else {
-          console.log(
+          debug(
             "[hyo] event:",
             event.type,
             event.subtype || event.request?.subtype || ""
@@ -457,7 +458,7 @@ export function useSessionManager(options: SessionManagerOptions) {
                       ? firstAssistant.content
                       : "";
 
-                  console.log("[hyo][title] Generating for tab", tabId);
+                  debug("[hyo][title] Generating for tab", tabId);
 
                   generateConversationTitle({
                     cliPath: options.cliPath,
@@ -470,7 +471,7 @@ export function useSessionManager(options: SessionManagerOptions) {
                     }
                     const tab = stateRef.current.tabs.find((t) => t.id === tabId);
                     if (!tab || tab.title !== titleBeforeGeneration) return;
-                    console.log("[hyo][title] Renamed:", generatedTitle);
+                    debug("[hyo][title] Renamed:", generatedTitle);
                     renameTab(tabId, generatedTitle);
                   }).catch((err) => {
                     console.error("[hyo][title] Error:", err);

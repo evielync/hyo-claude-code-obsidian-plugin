@@ -1,3 +1,4 @@
+import { debug } from "./debug";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -143,12 +144,12 @@ export function listPastSessions(cwd: string): PastSession[] {
   const seenIds = new Set<string>();
   const allEntries: { name: string; fullPath: string; stat: fs.Stats }[] = [];
 
-  console.log("[hyo] Looking for past sessions. CWD:", cwd);
+  debug("[hyo] Looking for past sessions. CWD:", cwd);
 
   for (const dir of candidates) {
     try {
       if (!fs.existsSync(dir)) {
-        console.log("[hyo]   candidate", path.basename(dir), "— not found");
+        debug("[hyo]   candidate", path.basename(dir), "— not found");
         continue;
       }
     } catch {
@@ -171,7 +172,7 @@ export function listPastSessions(cwd: string): PastSession[] {
           return true;
         });
 
-      console.log("[hyo]   candidate", path.basename(dir), "—", dirEntries.length, "sessions");
+      debug("[hyo]   candidate", path.basename(dir), "—", dirEntries.length, "sessions");
       allEntries.push(...dirEntries);
     } catch (e) {
       console.error("[hyo]   candidate", path.basename(dir), "— error:", e);
@@ -179,7 +180,7 @@ export function listPastSessions(cwd: string): PastSession[] {
   }
 
   if (allEntries.length === 0) {
-    console.log("[hyo]   No sessions found in any candidate directory");
+    debug("[hyo]   No sessions found in any candidate directory");
   }
 
   allEntries.sort((a, b) => b.stat.mtime.getTime() - a.stat.mtime.getTime());

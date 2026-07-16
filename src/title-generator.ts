@@ -1,3 +1,4 @@
+import { debug } from "./debug";
 import { spawn } from "child_process";
 import * as os from "os";
 
@@ -84,7 +85,7 @@ export async function generateConversationTitle(
       process.env.PATH || "",
     ].join(":");
 
-    console.log("[hyo][title] Spawning CLI for title generation...");
+    debug("[hyo][title] Spawning CLI for title generation...");
 
     const proc = spawn(cliPath, args, {
       cwd: "/tmp",
@@ -131,7 +132,7 @@ export async function generateConversationTitle(
 
       const title = cleanTitle(stdout);
       if (title) {
-        console.log("[hyo][title] Generated:", title);
+        debug("[hyo][title] Generated:", title);
       } else {
         console.warn("[hyo][title] CLI returned empty response");
       }

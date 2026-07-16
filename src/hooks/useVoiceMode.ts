@@ -1,3 +1,4 @@
+import { debug } from "../debug";
 import { useState, useCallback, useRef } from "react";
 import {
   textToSpeech,
@@ -80,7 +81,7 @@ export function useVoiceMode({
       const blob = new Blob(chunksRef.current, { type: "audio/webm" });
 
       if (blob.size < 1000) {
-        console.log("[hyo-voice] Recording too short");
+        debug("[hyo-voice] Recording too short");
         setVoiceState("idle");
         return;
       }

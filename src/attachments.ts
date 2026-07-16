@@ -1,3 +1,4 @@
+import { debug } from "./debug";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -56,7 +57,7 @@ export function cleanupOldAttachments(attachmentsDir: string, maxAgeDays = 1): v
       }
     }
     if (removed > 0) {
-      console.log(`[hyo] Cleaned up ${removed} old attachment file(s)`);
+      debug(`[hyo] Cleaned up ${removed} old attachment file(s)`);
     }
   } catch (e) {
     console.error("[hyo] Attachment cleanup failed:", e);
