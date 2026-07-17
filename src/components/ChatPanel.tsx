@@ -105,6 +105,39 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     },
   });
 
+  // AI Commands seam: expose `runCommand` so an external trigger (the AI
+  // Commands companion plugin) can open a new chat pre-loaded with a prompt
+  // and note. The prompt is queued, a fresh tab is opened, and the queued
+  // text is flushed once that tab becomes active. See main.ts.
+  const pendingCommandPromptRef = useRef<string | null>(null);
+  useEffect(() => {
+    const run = (prompt: string, notePath?: string) => {
+      let text = prompt;
+      if (notePath) {
+        text += `\n\nUse the note at \`${notePath}\` as the source for this task.`;
+      }
+      pendingCommandPromptRef.current = text;
+      newTab();
+    };
+    plugin.runCommand = run;
+    if (plugin.pendingCommand) {
+      const c = plugin.pendingCommand;
+      plugin.pendingCommand = null;
+      run(c.prompt, c.notePath);
+    }
+    return () => {
+      if (plugin.runCommand === run) plugin.runCommand = null;
+    };
+  }, [newTab, plugin]);
+
+  useEffect(() => {
+    if (pendingCommandPromptRef.current) {
+      const text = pendingCommandPromptRef.current;
+      pendingCommandPromptRef.current = null;
+      sendMessage(text);
+    }
+  }, [activeTabId, sendMessage]);
+
   // Auto-speak when response completes — only on genuine generation finish,
   // not on tab switches (which also change activeGenerating)
   const prevGeneratingRef = useRef(activeGenerating);

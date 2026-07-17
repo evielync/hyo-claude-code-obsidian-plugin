@@ -9,10 +9,34 @@ import { cleanupOldAttachments } from "./attachments";
 export default class HyoPlugin extends Plugin {
   settings: HyoSettings = DEFAULT_SETTINGS;
 
+  // AI Commands seam: a command that arrived before the chat panel was
+  // mounted is parked here and consumed by ChatPanel on mount. When the
+  // panel is already open, `runCommand` is set and we call it directly.
+  pendingCommand: { prompt: string; notePath?: string } | null = null;
+  runCommand: ((prompt: string, notePath?: string) => void) | null = null;
+
   async onload() {
     await this.loadSettings();
 
     this.registerView(VIEW_TYPE_HYO, (leaf) => new HyoView(leaf, this));
+
+    // External trigger (e.g. the AI Commands companion plugin): open a new
+    // chat pre-loaded with a prompt + note. Generic seam — anything can fire
+    // `hyo-run-command` with { prompt, notePath }.
+    this.registerDomEvent(window, "hyo-run-command", async (evt: Event) => {
+      const detail = (evt as CustomEvent).detail || {};
+      const prompt: string = detail.prompt || "";
+      if (!prompt) return;
+      this.pendingCommand = { prompt, notePath: detail.notePath };
+      await this.activateView();
+      // If the panel is already mounted it wires up `runCommand`; consume here.
+      // Otherwise ChatPanel's mount effect consumes `pendingCommand`.
+      if (this.runCommand && this.pendingCommand) {
+        const cmd = this.pendingCommand;
+        this.pendingCommand = null;
+        this.runCommand(cmd.prompt, cmd.notePath);
+      }
+    });
 
     this.addRibbonIcon("message-circle", "Open Hyo", () => {
       this.activateView();
