@@ -3,10 +3,12 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import type HyoPlugin from "./main";
+import { MODEL_OPTIONS } from "./models";
 
 export interface HyoSettings {
   cliPath: string;
   model: string;
+  customModels: string[];
   permissionMode: string;
   workingDirectory: string;
   defaultAgent: string;
@@ -23,6 +25,7 @@ export interface HyoSettings {
 export const DEFAULT_SETTINGS: HyoSettings = {
   cliPath: "/usr/local/bin/claude",
   model: "claude-sonnet-4-5-20250929",
+  customModels: [],
   permissionMode: "manual",
   workingDirectory: "",
   defaultAgent: "",
@@ -100,23 +103,33 @@ export class HyoSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Model")
       .setDesc("Default model for new conversations")
-      .addDropdown((dropdown) =>
+      .addDropdown((dropdown) => {
+        // Built-in models, then any the user added via the picker's custom
+        // field. Both come from the shared MODEL_OPTIONS / settings so the
+        // dropdown never drifts from the picker.
+        for (const m of MODEL_OPTIONS) {
+          dropdown.addOption(m.id, `${m.name} (${m.context})`);
+        }
+        for (const id of this.plugin.settings.customModels) {
+          dropdown.addOption(id, id);
+        }
+        // If the saved default isn't in either list (e.g. an older model kept
+        // from a previous version), surface it so the dropdown reflects reality
+        // instead of silently showing the first option.
+        const known =
+          MODEL_OPTIONS.some((m) => m.id === this.plugin.settings.model) ||
+          this.plugin.settings.customModels.includes(this.plugin.settings.model);
+        if (!known && this.plugin.settings.model) {
+          dropdown.addOption(this.plugin.settings.model, this.plugin.settings.model);
+        }
         dropdown
-          .addOption("claude-opus-4-8", "Opus 4.8 (1M)")
-          .addOption("claude-opus-4-7", "Opus 4.7 (200K)")
-          .addOption("claude-opus-4-6[1m]", "Opus 4.6 (1M)")
-          .addOption("claude-opus-4-6", "Opus 4.6 (200K)")
-          .addOption("claude-sonnet-5", "Sonnet 5 (1M)")
-          .addOption("claude-sonnet-4-6[1m]", "Sonnet 4.6 (1M)")
-          .addOption("claude-sonnet-4-6", "Sonnet 4.6 (200K)")
-          .addOption("claude-haiku-4-5-20251001", "Haiku 4.5 (200K)")
           .setValue(this.plugin.settings.model)
           .onChange(async (value) => {
             this.plugin.settings.model = value;
             await this.plugin.saveSettings();
             this.showSaved();
-          })
-      );
+          });
+      });
 
     // Permission mode
     new Setting(containerEl)
@@ -442,5 +455,38 @@ export class HyoSettingTab extends PluginSettingTab {
         }
       })
     );
+
+    // Custom models — its own section at the bottom. These are models the user
+    // added via the picker's "Custom model ID" field; managed (removed) here,
+    // while adding happens in the picker, in the flow of work. Only rendered
+    // once at least one has been added, so it never shows as an empty section.
+    if (this.plugin.settings.customModels.length > 0) {
+      new Setting(containerEl).setName("Custom models").setHeading();
+      new Setting(containerEl).setDesc(
+        "Models you've added from the picker. Remove any you no longer want here."
+      );
+      for (const id of [...this.plugin.settings.customModels]) {
+        new Setting(containerEl)
+          .setName(id)
+          .setDesc("Added from the model picker")
+          .addExtraButton((btn) =>
+            btn
+              .setIcon("trash")
+              .setTooltip("Remove")
+              .onClick(async () => {
+                this.plugin.settings.customModels =
+                  this.plugin.settings.customModels.filter((m) => m !== id);
+                // If the removed model was the current default, fall back to
+                // the first built-in so nothing points at a now-absent entry.
+                if (this.plugin.settings.model === id) {
+                  this.plugin.settings.model = MODEL_OPTIONS[0].id;
+                }
+                await this.plugin.saveSettings();
+                this.showSaved();
+                this.display();
+              })
+          );
+      }
+    }
   }
 }

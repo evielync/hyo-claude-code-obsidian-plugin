@@ -5,6 +5,7 @@ import { ChatMessages } from "./ChatMessages";
 import { ChatTabs } from "./ChatTabs";
 import { SessionDropdown } from "./SessionDropdown";
 import { HyoStatusBar } from "./HyoStatusBar";
+import { MODEL_OPTIONS } from "../models";
 import { VoiceControls } from "./VoiceControls";
 import type { useSessionManager } from "../hooks/useSessionManager";
 import { useVoiceMode } from "../hooks/useVoiceMode";
@@ -218,6 +219,37 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     async (model: string) => {
       setTabModel(model);
       plugin.settings.model = model;
+      await plugin.saveSettings();
+    },
+    [setTabModel, plugin]
+  );
+
+  // Custom models added via the picker's "Custom model ID" field. Kept in
+  // React state so the picker re-renders when one is added; the source of
+  // truth is plugin.settings.customModels (removed in the settings panel).
+  const [customModels, setCustomModels] = useState<string[]>(
+    plugin.settings.customModels ?? []
+  );
+
+  // Re-sync when a custom model is removed in Settings (settings-changed event)
+  useEffect(() => {
+    const sync = () => setCustomModels([...(plugin.settings.customModels ?? [])]);
+    window.addEventListener("hyo-settings-changed", sync);
+    return () => window.removeEventListener("hyo-settings-changed", sync);
+  }, [plugin]);
+
+  const handleAddCustomModel = useCallback(
+    async (rawId: string) => {
+      const id = rawId.trim();
+      if (!id) return;
+      const isBuiltIn = MODEL_OPTIONS.some((m) => m.id === id);
+      const isKnown = plugin.settings.customModels.includes(id);
+      if (!isBuiltIn && !isKnown) {
+        plugin.settings.customModels = [...plugin.settings.customModels, id];
+        setCustomModels(plugin.settings.customModels);
+      }
+      setTabModel(id);
+      plugin.settings.model = id;
       await plugin.saveSettings();
     },
     [setTabModel, plugin]
@@ -726,7 +758,9 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
         contextWindow={activeContextWindow}
         voiceMode={activeVoiceMode}
         hasVoiceApiKey={hasVoiceApiKey}
+        customModels={customModels}
         onModelChange={handleModelChange}
+        onAddCustomModel={handleAddCustomModel}
         onPermissionModeChange={handlePermissionModeChange}
         onAgentChange={setTabAgent}
         onVoiceModeToggle={toggleVoiceMode}

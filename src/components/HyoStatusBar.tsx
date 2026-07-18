@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import { useUsage } from "../hooks/useUsage";
 import { useAgents } from "../hooks/useAgents";
+import { MODEL_OPTIONS } from "../models";
 
 interface HyoStatusBarProps {
   model: string;
@@ -10,23 +11,14 @@ interface HyoStatusBarProps {
   contextWindow?: number;
   voiceMode: boolean;
   hasVoiceApiKey: boolean;
+  customModels: string[];
   onModelChange: (model: string) => void;
+  onAddCustomModel: (id: string) => void;
   onPermissionModeChange: (mode: string) => void;
   onAgentChange: (agent: string) => void;
   onVoiceModeToggle: () => void;
   onCompact: () => void;
 }
-
-const MODEL_OPTIONS = [
-  { id: "claude-opus-4-8", name: "Opus 4.8", context: "1M" },
-  { id: "claude-opus-4-7", name: "Opus 4.7", context: "200K" },
-  { id: "claude-opus-4-6[1m]", name: "Opus 4.6", context: "1M" },
-  { id: "claude-opus-4-6", name: "Opus 4.6", context: "200K" },
-  { id: "claude-sonnet-5", name: "Sonnet 5", context: "1M" },
-  { id: "claude-sonnet-4-6[1m]", name: "Sonnet 4.6", context: "1M" },
-  { id: "claude-sonnet-4-6", name: "Sonnet 4.6", context: "200K" },
-  { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", context: "200K" },
-];
 
 const PERMISSION_MODES = [
   {
@@ -87,7 +79,9 @@ export function HyoStatusBar({
   contextWindow,
   voiceMode,
   hasVoiceApiKey,
+  customModels,
   onModelChange,
+  onAddCustomModel,
   onPermissionModeChange,
   onAgentChange,
   onVoiceModeToggle,
@@ -170,9 +164,17 @@ export function HyoStatusBar({
     [onPermissionModeChange]
   );
 
-  const modelOpt = MODEL_OPTIONS.find((m) => m.id === model);
+  // Built-in models plus any the user added via the custom field. Custom
+  // entries show their raw ID (no friendly name / context label) and are
+  // filtered so a custom ID that matches a built-in never double-lists.
+  const customOpts = customModels
+    .filter((id) => !MODEL_OPTIONS.some((m) => m.id === id))
+    .map((id) => ({ id, name: id, context: "" }));
+  const allModelOpts = [...MODEL_OPTIONS, ...customOpts];
+
+  const modelOpt = allModelOpts.find((m) => m.id === model);
   const modelName = modelOpt
-    ? `${modelOpt.name} ${modelOpt.context}`
+    ? `${modelOpt.name} ${modelOpt.context}`.trim()
     : model;
   const permName =
     PERMISSION_MODES.find((m) => m.id === permissionMode)?.name ||
@@ -422,7 +424,7 @@ export function HyoStatusBar({
 
       {popup === "model" && (
         <div className="hyo-model-popup" style={{ position: "fixed", bottom: popupBottom, right: 12 }}>
-          {MODEL_OPTIONS.map((opt) => (
+          {allModelOpts.map((opt) => (
             <div
               key={opt.id}
               className={`hyo-model-popup-item ${opt.id === model ? "active" : ""}`}
@@ -441,7 +443,9 @@ export function HyoStatusBar({
             onSubmit={(e) => {
               e.preventDefault();
               const id = customModel.trim();
-              if (id) { selectModel(id); setCustomModel(""); }
+              // Persist the model into the list (managed/removed in Settings)
+              // and select it, rather than using it once and forgetting it.
+              if (id) { onAddCustomModel(id); setCustomModel(""); setPopup(null); }
             }}
           >
             <input
