@@ -1142,13 +1142,44 @@ button.hyo-ask-send:disabled {
   opacity: 1;
 }
 
+/* Working — Claude is running. Green "go" dot with a calm scale pulse: alive,
+   but ambient (this is the constant background state, so it stays gentle). */
 .hyo-tab-dot {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--interactive-accent);
+  background: var(--color-green, #4bb377);
   flex-shrink: 0;
-  animation: hyo-dot-pulse 1.4s ease-in-out infinite;
+  animation: hyo-dot-working-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes hyo-dot-working-pulse {
+  0%, 100% { transform: scale(1);    opacity: 0.55; }
+  50%      { transform: scale(1.15); opacity: 1; }
+}
+
+/* Waiting on you — Claude is blocked awaiting a permission, answer, or plan
+   approval. Warm peach "your turn" colour + an assertive scale-and-glow pulse
+   that pulls the eye from another tab, unlike the calm green working dot. */
+.hyo-tab-dot-waiting {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f0a875;
+  animation: hyo-dot-waiting-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes hyo-dot-waiting-pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 2px rgba(240, 168, 117, 0.4);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.25);
+    box-shadow: 0 0 0 6px rgba(240, 168, 117, 0);
+    opacity: 1;
+  }
 }
 
 .hyo-tab-rename-input {

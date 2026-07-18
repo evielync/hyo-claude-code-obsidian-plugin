@@ -3,6 +3,20 @@ import type { TabSession } from "../hooks/useSessionManager";
 import type { PastSession } from "../session-parser";
 import { SessionDropdown } from "./SessionDropdown";
 
+// A tab is "waiting on you" when Claude is blocked on the user: an unresolved
+// permission request, an open question, or a plan awaiting approval. These are
+// the same conditions the chat surface uses to render its blocked prompts, so
+// the tab dot stays in lockstep with what's actually on screen.
+function tabAwaitingInput(tab: TabSession): boolean {
+  for (const m of tab.messages) {
+    if (m.role !== "assistant") continue;
+    if (m.permissionRequest && !m.permissionRequest.resolved) return true;
+    if (m.askQuestion) return true;
+    if (m.planReview && !m.planReview.resolved) return true;
+  }
+  return false;
+}
+
 interface ChatTabsProps {
   tabs: TabSession[];
   activeTabId: string;
@@ -60,7 +74,9 @@ export function ChatTabs({
   return (
     <div className="hyo-tabs">
       <div className="hyo-tabs-left">
-        {tabs.map((tab) => (
+        {tabs.map((tab) => {
+          const awaiting = tabAwaitingInput(tab);
+          return (
           <div
             key={tab.id}
             className={`hyo-tab ${tab.id === activeTabId ? "hyo-tab-active" : ""}`}
@@ -79,7 +95,14 @@ export function ChatTabs({
               />
             ) : (
               <>
-                {tab.generating && <span className="hyo-tab-dot" />}
+                {awaiting ? (
+                  <span
+                    className="hyo-tab-dot hyo-tab-dot-waiting"
+                    title="Waiting for you"
+                  />
+                ) : tab.generating ? (
+                  <span className="hyo-tab-dot" title="Working…" />
+                ) : null}
                 <span className="hyo-tab-title">{tab.title}</span>
                 <button
                   className="hyo-tab-close"
@@ -91,7 +114,8 @@ export function ChatTabs({
               </>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="hyo-tabs-actions">
