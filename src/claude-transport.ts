@@ -34,6 +34,12 @@ export class ClaudeTransport {
   private proc: ChildProcess | null = null;
   private buffer = "";
   private stopped = false;
+  /**
+   * request_id -> the tool input the CLI asked permission for. Entries are
+   * consumed when the corresponding permission response is sent; the whole map
+   * dies with the transport, so it can't grow unbounded across sessions.
+   */
+  private pendingToolInput = new Map<string, Record<string, unknown>>();
   private options: TransportOptions;
 
   constructor(options: TransportOptions) {
@@ -115,6 +121,19 @@ export class ClaudeTransport {
             debug("[hyo] CLI ready, session:", parsed.session_id);
           }
 
+          // Remember the input the CLI asked permission for, keyed by
+          // request_id so concurrent tool calls can't clobber each other.
+          // sendPermissionResponse must echo this back — see the note there.
+          if (
+            parsed.type === "control_request" &&
+            parsed.request?.subtype === "can_use_tool"
+          ) {
+            this.pendingToolInput.set(
+              parsed.request_id,
+              parsed.request.input ?? {},
+            );
+          }
+
           this.options.onMessage(parsed);
         } catch {
           debug("[hyo] Non-JSON line:", line.slice(0, 200));
@@ -174,6 +193,17 @@ export class ClaudeTransport {
   ): void {
     if (!this.proc?.stdin?.writable) return;
 
+    // `updatedInput` is authoritative in the CLI's permission protocol: on an
+    // allow it REPLACES the tool's original input rather than merging with it,
+    // and it is required (omitting it fails schema validation). Defaulting it
+    // to `{}` therefore ran every approved tool call with its arguments
+    // stripped — "path must be of type string, received undefined" and friends.
+    // Callers only pass an explicit input when the user genuinely edited it
+    // (e.g. AskUserQuestion answers); otherwise echo back what the CLI sent us.
+    const originalInput = this.pendingToolInput.get(requestId) ?? {};
+    this.pendingToolInput.delete(requestId);
+    const resolvedInput = updatedInput ?? originalInput;
+
     let response: Record<string, unknown>;
 
     if (behavior === "deny") {
@@ -188,7 +218,7 @@ export class ClaudeTransport {
       // via the updatedPermissions array on an "allow" response.
       response = {
         behavior: "allow",
-        updatedInput: updatedInput || {},
+        updatedInput: resolvedInput,
         decisionClassification: "user_permanent",
         updatedPermissions: [
           {
@@ -202,7 +232,7 @@ export class ClaudeTransport {
     } else {
       response = {
         behavior: "allow",
-        updatedInput: updatedInput || {},
+        updatedInput: resolvedInput,
         decisionClassification: "user_temporary",
       };
     }
