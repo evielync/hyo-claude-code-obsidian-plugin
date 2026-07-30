@@ -6,6 +6,7 @@ import { HyoView, VIEW_TYPE_HYO } from "./HyoView";
 import { HyoSettingTab, HyoSettings, DEFAULT_SETTINGS, dispatchSettingsChanged } from "./settings";
 import { cleanupOldAttachments } from "./attachments";
 import { setDebug } from "./debug";
+import { probeCliCapabilities } from "./cli-capabilities";
 
 export default class HyoPlugin extends Plugin {
   settings: HyoSettings = DEFAULT_SETTINGS;
@@ -24,6 +25,12 @@ export default class HyoPlugin extends Plugin {
     //   hyoDebug(true)  → start logging (spawn args, effort level, CLI errors)
     //   hyoDebug(false) → stop
     (window as any).hyoDebug = setDebug;
+
+    // Detect CLI capabilities up front so the first message can already use
+    // `--effort` where it's supported, rather than falling back to the
+    // environment variable for one turn. Fire-and-forget — the transport
+    // re-probes if this hasn't landed yet.
+    void probeCliCapabilities(this.settings.cliPath);
 
     this.registerView(VIEW_TYPE_HYO, (leaf) => new HyoView(leaf, this));
 

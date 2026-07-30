@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.24
+
+### Fixes
+- **Fresh installs started on a model that isn't in the picker** — the default was Sonnet 4.5, which was removed from the model list a while back. A new install showed a raw model ID in the status bar with nothing ticked in the picker, which looked broken on first launch. Default is now Sonnet 5. Existing installs are unaffected — your saved model is untouched.
+
+### Improvements
+- **Effort now uses the CLI's `--effort` flag where available**, falling back to the `CLAUDE_CODE_EFFORT_LEVEL` environment variable on older CLIs that don't have it. Support is detected from the CLI's own help output rather than a version number, so it stays correct as the CLI changes. The flag can't simply be passed unconditionally: a CLI that doesn't recognise it refuses to start, whereas an unknown environment variable is harmlessly ignored — hence detection plus a fallback rather than one or the other.
+
 ## 0.3.23
 
 ### Features

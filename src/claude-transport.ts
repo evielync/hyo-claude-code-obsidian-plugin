@@ -2,6 +2,7 @@ import { debug } from "./debug";
 import { spawn, ChildProcess } from "child_process";
 import { randomUUID } from "crypto";
 import { isNative1M, baseModelId } from "./models";
+import { supportsEffortFlag, probeCliCapabilities } from "./cli-capabilities";
 
 // Current models run 1M context natively and don't accept a "[1m]" suffix —
 // the API doesn't recognize it as a valid variant and silently falls back to
@@ -81,21 +82,36 @@ export class ClaudeTransport {
       args.push("--agent", agent);
     }
 
+    // Reasoning effort, via the flag where the CLI supports it. Older builds
+    // have no such flag and would refuse to start, so those fall back to the
+    // environment variable below. See cli-capabilities.ts for why detection
+    // runs off `--help` rather than a version comparison.
+    const effort = this.options.effort;
+    const useEffortFlag = !!effort && supportsEffortFlag(cliPath);
+    if (useEffortFlag) {
+      args.push("--effort", effort!);
+    }
+    // Kick off a probe if this CLI hasn't been checked yet, so later spawns in
+    // this session can use the flag. Fire-and-forget: the fallback below keeps
+    // effort working in the meantime.
+    void probeCliCapabilities(cliPath);
+
     // Build PATH — Electron apps launched from Dock have minimal PATH
     const env = { ...process.env };
     if (this.options.maxOutputTokens && this.options.maxOutputTokens > 0) {
       env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(this.options.maxOutputTokens);
     }
-    // Reasoning effort. The CLI exposes no argv flag for this — it reads the
-    // level off the environment — so it rides here rather than in `args`.
+    // Effort fallback for CLIs without the flag — an unrecognised env var is
+    // ignored, so this is safe on every version. Skipped when the flag was
+    // already passed, to avoid setting the same thing two ways.
     //
-    // This replaces the "--max-thinking-tokens 31999" that used to be pinned
+    // Effort replaced the "--max-thinking-tokens 31999" that used to be pinned
     // onto every spawn. Both control the same thing (how much the model thinks
     // before answering), and a hardcoded thinking budget would have overridden
     // whatever the user picked, leaving the selector doing nothing. Effort owns
     // reasoning depth now; there is deliberately no second dial.
-    if (this.options.effort) {
-      env.CLAUDE_CODE_EFFORT_LEVEL = this.options.effort;
+    if (effort && !useEffortFlag) {
+      env.CLAUDE_CODE_EFFORT_LEVEL = effort;
     }
     env.PATH = [
       "/usr/local/bin",
@@ -115,7 +131,11 @@ export class ClaudeTransport {
     debug("[hyo] CWD:", cwd);
     // Effort is passed via the environment, not argv, so it wouldn't show up
     // in the spawn line above — log it explicitly or it's unverifiable.
-    debug("[hyo] Effort:", env.CLAUDE_CODE_EFFORT_LEVEL ?? "(unset — CLI default)");
+    debug(
+      "[hyo] Effort:",
+      effort ?? "(unset — CLI default)",
+      useEffortFlag ? "via --effort flag" : "via CLAUDE_CODE_EFFORT_LEVEL"
+    );
 
     this.proc = spawn(cliPath, args, {
       cwd,

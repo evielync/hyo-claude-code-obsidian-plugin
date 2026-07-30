@@ -25,7 +25,9 @@ export interface HyoSettings {
 
 export const DEFAULT_SETTINGS: HyoSettings = {
   cliPath: "/usr/local/bin/claude",
-  model: "claude-sonnet-4-5-20250929",
+  // Must be a model the picker actually offers — otherwise a fresh install
+  // shows a raw model ID in the status bar with nothing ticked in the picker.
+  model: "claude-sonnet-5",
   effortLevel: DEFAULT_EFFORT,
   customModels: [],
   permissionMode: "manual",
