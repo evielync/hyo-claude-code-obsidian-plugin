@@ -405,9 +405,19 @@ export function useSessionManager(options: SessionManagerOptions) {
             return;
           }
 
-          updateTabLastAssistant(tabId, () => ({
-            permissionRequest: { requestId, toolName, input: req.input },
-          }));
+          updateTabLastAssistant(tabId, (msg) => {
+            const existing = msg.permissionRequests || [];
+            // Guard against a re-delivered control_request for the same id.
+            if (existing.some((r) => r.requestId === requestId)) {
+              return {};
+            }
+            return {
+              permissionRequests: [
+                ...existing,
+                { requestId, toolName, input: req.input },
+              ],
+            };
+          });
           return;
         }
 
@@ -856,15 +866,21 @@ export function useSessionManager(options: SessionManagerOptions) {
       // transport can build the correct updatedPermissions for "always allow".
       const tab = stateRef.current.tabs.find((t) => t.id === tabId);
       const lastMsg = tab?.messages[tab.messages.length - 1];
-      const toolName = lastMsg?.permissionRequest?.toolName;
+      const toolName = lastMsg?.permissionRequests?.find(
+        (r) => r.requestId === requestId
+      )?.toolName;
       transportsRef.current[tabId]?.sendPermissionResponse(requestId, behavior, toolName);
       updateTabLastAssistant(tabId, (msg) => {
         const updates: Partial<Message> = {};
-        if (msg.permissionRequest) {
-          updates.permissionRequest = {
-            ...msg.permissionRequest,
-            resolved: behavior === "deny" ? ("denied" as const) : ("allowed" as const),
-          };
+        if (msg.permissionRequests?.some((r) => r.requestId === requestId)) {
+          updates.permissionRequests = msg.permissionRequests.map((r) =>
+            r.requestId === requestId
+              ? {
+                  ...r,
+                  resolved: behavior === "deny" ? ("denied" as const) : ("allowed" as const),
+                }
+              : r
+          );
         }
         // Also resolve planReview if this requestId matches
         if (msg.planReview && msg.planReview.requestId === requestId) {

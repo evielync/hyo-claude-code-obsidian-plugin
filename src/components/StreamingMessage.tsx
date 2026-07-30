@@ -76,13 +76,15 @@ export function StreamingMessage({
           return null;
         })}
 
-        {message.permissionRequest &&
-          !message.permissionRequest.resolved && (
+        {message.permissionRequests
+          ?.filter((r) => !r.resolved)
+          .map((request) => (
             <PermissionRequest
-              request={message.permissionRequest}
+              key={request.requestId}
+              request={request}
               onRespond={onPermissionResponse}
             />
-          )}
+          ))}
 
         {message.askQuestion && (
           <AskQuestion
@@ -117,11 +119,11 @@ function getActivityLabel(message: Message): string | null {
     toolCalls = [],
     orderedBlocks = [],
     content,
-    permissionRequest,
+    permissionRequests,
     askQuestion,
   } = message;
 
-  if (permissionRequest && !permissionRequest.resolved) return null;
+  if (permissionRequests?.some((r) => !r.resolved)) return null;
   if (askQuestion) return null;
 
   const planReview = message.planReview;

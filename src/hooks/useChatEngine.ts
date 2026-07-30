@@ -20,7 +20,7 @@ export interface Message {
   toolCalls?: ToolCallData[];
   orderedBlocks?: OrderedBlock[];
   streaming?: boolean;
-  permissionRequest?: PermissionRequestData | null;
+  permissionRequests?: PermissionRequestData[];
   askQuestion?: AskQuestionData | null;
   planReview?: PlanReviewData | null;
   isCompaction?: boolean;
@@ -209,13 +209,19 @@ export function useChatEngine(options: ChatEngineOptions) {
           return;
         }
 
-        updateLastAssistant(() => ({
-          permissionRequest: {
-            requestId,
-            toolName,
-            input: req.input,
-          },
-        }));
+        updateLastAssistant((msg) => {
+          const existing = msg.permissionRequests || [];
+          // Guard against a re-delivered control_request for the same id.
+          if (existing.some((r) => r.requestId === requestId)) {
+            return {};
+          }
+          return {
+            permissionRequests: [
+              ...existing,
+              { requestId, toolName, input: req.input },
+            ],
+          };
+        });
         return;
       }
 
@@ -467,11 +473,15 @@ export function useChatEngine(options: ChatEngineOptions) {
       transportRef.current?.sendPermissionResponse(requestId, behavior);
       updateLastAssistant((msg) => {
         const updates: Partial<Message> = {};
-        if (msg.permissionRequest) {
-          updates.permissionRequest = {
-            ...msg.permissionRequest,
-            resolved: behavior === "deny" ? "denied" : "allowed",
-          };
+        if (msg.permissionRequests?.some((r) => r.requestId === requestId)) {
+          updates.permissionRequests = msg.permissionRequests.map((r) =>
+            r.requestId === requestId
+              ? {
+                  ...r,
+                  resolved: behavior === "deny" ? "denied" : "allowed",
+                }
+              : r
+          );
         }
         if (msg.planReview && msg.planReview.requestId === requestId) {
           updates.planReview = {

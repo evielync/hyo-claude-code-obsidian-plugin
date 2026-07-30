@@ -10,7 +10,7 @@ import { SessionDropdown } from "./SessionDropdown";
 function tabAwaitingInput(tab: TabSession): boolean {
   for (const m of tab.messages) {
     if (m.role !== "assistant") continue;
-    if (m.permissionRequest && !m.permissionRequest.resolved) return true;
+    if (m.permissionRequests?.some((r) => !r.resolved)) return true;
     if (m.askQuestion) return true;
     if (m.planReview && !m.planReview.resolved) return true;
   }
