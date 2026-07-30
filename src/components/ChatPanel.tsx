@@ -41,6 +41,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     activeMessages,
     activeGenerating,
     activeModel,
+    activeEffort,
     activePermissionMode,
     activeAgent,
     activeVoiceMode,
@@ -52,6 +53,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     switchTab,
     renameTab,
     setTabModel,
+    setTabEffort,
     setTabPermissionMode,
     setTabAgent,
     toggleVoiceMode,
@@ -222,6 +224,15 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
       await plugin.saveSettings();
     },
     [setTabModel, plugin]
+  );
+
+  const handleEffortChange = useCallback(
+    async (effort: string) => {
+      setTabEffort(effort);
+      plugin.settings.effortLevel = effort;
+      await plugin.saveSettings();
+    },
+    [setTabEffort, plugin]
   );
 
   // Custom models added via the picker's "Custom model ID" field. Kept in
@@ -752,6 +763,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
 
       <HyoStatusBar
         model={activeModel}
+        effort={activeEffort}
         permissionMode={activePermissionMode}
         agent={activeAgent}
         inputTokens={activeInputTokens}
@@ -760,6 +772,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
         hasVoiceApiKey={hasVoiceApiKey}
         customModels={customModels}
         onModelChange={handleModelChange}
+        onEffortChange={handleEffortChange}
         onAddCustomModel={handleAddCustomModel}
         onPermissionModeChange={handlePermissionModeChange}
         onAgentChange={setTabAgent}

@@ -4,6 +4,7 @@ import type HyoPlugin from "../main";
 import { ChatPanel } from "./ChatPanel";
 import { useSessionManager } from "../hooks/useSessionManager";
 import { checkCliExists } from "../claude-transport";
+import { DEFAULT_EFFORT } from "../models";
 
 interface HyoAppProps {
   app: App;
@@ -37,6 +38,7 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
     cliPath: plugin.settings.cliPath,
     cwd: workingDirectory,
     model: plugin.settings.model,
+    effort: plugin.settings.effortLevel || DEFAULT_EFFORT,
     permissionMode: plugin.settings.permissionMode,
     defaultAgent: plugin.settings.defaultAgent || "",
     maxOutputTokens: plugin.settings.maxOutputTokens,

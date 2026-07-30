@@ -33,6 +33,7 @@ export interface TabSession {
   messages: Message[];
   generating: boolean;
   model: string;
+  effort: string;
   permissionMode: string;
   agent: string;
   inputTokens: number;
@@ -49,6 +50,7 @@ interface SessionManagerOptions {
   cliPath: string;
   cwd: string;
   model: string;
+  effort: string;
   permissionMode: string;
   defaultAgent: string;
   maxOutputTokens?: number;
@@ -197,6 +199,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           messages: [],
           generating: false,
           model: options.model,
+          effort: options.effort,
           permissionMode: options.permissionMode,
           agent: options.defaultAgent,
           inputTokens: 0,
@@ -664,6 +667,7 @@ export function useSessionManager(options: SessionManagerOptions) {
             messages: [],
             generating: false,
             model: activeTab?.model || options.model,
+            effort: activeTab?.effort || options.effort,
             permissionMode: activeTab?.permissionMode || options.permissionMode,
             agent: options.defaultAgent,
             voiceMode: false,
@@ -672,7 +676,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         activeTabId: id,
       };
     });
-  }, [options.model, options.permissionMode]);
+  }, [options.model, options.effort, options.permissionMode]);
 
   const closeTab = useCallback((tabIdToClose: string) => {
     transportsRef.current[tabIdToClose]?.stop();
@@ -693,6 +697,7 @@ export function useSessionManager(options: SessionManagerOptions) {
               messages: [],
               generating: false,
               model: options.model,
+              effort: options.effort,
               permissionMode: options.permissionMode,
               agent: options.defaultAgent,
               voiceMode: false,
@@ -810,6 +815,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           cliPath: options.cliPath,
           cwd: options.cwd,
           model: currentTab?.model || options.model,
+          effort: currentTab?.effort || options.effort,
           permissionMode: currentTab?.permissionMode || options.permissionMode,
           agent: currentTab?.agent || "",
           sessionId: cliSessionId || undefined,
@@ -948,6 +954,15 @@ export function useSessionManager(options: SessionManagerOptions) {
     }));
   }, []);
 
+  const setTabEffort = useCallback((effort: string) => {
+    setState((prev) => ({
+      ...prev,
+      tabs: prev.tabs.map((tab) =>
+        tab.id === prev.activeTabId ? { ...tab, effort } : tab
+      ),
+    }));
+  }, []);
+
   const setTabPermissionMode = useCallback((permissionMode: string) => {
     setState((prev) => ({
       ...prev,
@@ -1033,6 +1048,7 @@ export function useSessionManager(options: SessionManagerOptions) {
             messages,
             generating: false,
             model: activeTab?.model || options.model,
+            effort: activeTab?.effort || options.effort,
             permissionMode: activeTab?.permissionMode || options.permissionMode,
             agent: options.defaultAgent,
             voiceMode: false,
@@ -1041,7 +1057,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         activeTabId: id,
       };
     });
-  }, [options.cwd, options.model, options.permissionMode, options.defaultAgent]);
+  }, [options.cwd, options.model, options.effort, options.permissionMode, options.defaultAgent]);
 
   const compact = useCallback(() => {
     sendMessage("/compact", { isCompaction: true });
@@ -1126,6 +1142,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     activeMessages: activeTab?.messages || [],
     activeGenerating: activeTab?.generating || false,
     activeModel: activeTab?.model || options.model,
+    activeEffort: activeTab?.effort || options.effort,
     activePermissionMode: activeTab?.permissionMode || options.permissionMode,
     activeAgent: activeTab?.agent || "",
     activeVoiceMode: activeTab?.voiceMode || false,
@@ -1137,6 +1154,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     switchTab,
     renameTab,
     setTabModel,
+    setTabEffort,
     setTabPermissionMode,
     setTabAgent,
     toggleVoiceMode,

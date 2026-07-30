@@ -1,10 +1,16 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import { useUsage } from "../hooks/useUsage";
 import { useAgents } from "../hooks/useAgents";
-import { MODEL_OPTIONS } from "../models";
+import {
+  MODEL_OPTIONS,
+  EFFORT_OPTIONS,
+  DEFAULT_EFFORT,
+  getContextLimit,
+} from "../models";
 
 interface HyoStatusBarProps {
   model: string;
+  effort: string;
   permissionMode: string;
   agent: string;
   inputTokens: number;
@@ -13,6 +19,7 @@ interface HyoStatusBarProps {
   hasVoiceApiKey: boolean;
   customModels: string[];
   onModelChange: (model: string) => void;
+  onEffortChange: (effort: string) => void;
   onAddCustomModel: (id: string) => void;
   onPermissionModeChange: (mode: string) => void;
   onAgentChange: (agent: string) => void;
@@ -60,12 +67,6 @@ function formatResetTime(isoString: string): string {
   return `${hrs}h ${rem}m`;
 }
 
-function getContextLimit(modelId: string): number {
-  // Sonnet 5 always runs at 1M context on the API — no [1m] suffix needed or accepted.
-  if (modelId.includes("claude-sonnet-5")) return 1_048_576;
-  return modelId.includes("[1m]") ? 1_048_576 : 200_000;
-}
-
 function formatTokens(n: number): string {
   if (n >= 1000) return Math.round(n / 1000) + "K";
   return String(n);
@@ -73,6 +74,7 @@ function formatTokens(n: number): string {
 
 export function HyoStatusBar({
   model,
+  effort,
   permissionMode,
   agent,
   inputTokens,
@@ -81,6 +83,7 @@ export function HyoStatusBar({
   hasVoiceApiKey,
   customModels,
   onModelChange,
+  onEffortChange,
   onAddCustomModel,
   onPermissionModeChange,
   onAgentChange,
@@ -148,6 +151,14 @@ export function HyoStatusBar({
     [onModelChange]
   );
 
+  const selectEffort = useCallback(
+    (id: string) => {
+      onEffortChange(id);
+      setPopup(null);
+    },
+    [onEffortChange]
+  );
+
   const selectAgent = useCallback(
     (name: string) => {
       onAgentChange(name);
@@ -179,6 +190,13 @@ export function HyoStatusBar({
   const permName =
     PERMISSION_MODES.find((m) => m.id === permissionMode)?.name ||
     permissionMode;
+
+  // Effort falls back to the default rather than echoing an unknown value —
+  // the CLI silently ignores anything outside EFFORT_OPTIONS, so showing a
+  // stray value would claim a level that isn't actually in effect.
+  const effortOpt =
+    EFFORT_OPTIONS.find((e) => e.id === effort) ||
+    EFFORT_OPTIONS.find((e) => e.id === DEFAULT_EFFORT)!;
 
   // The CLI sometimes under-reports contextWindow early in a fresh session
   // (--session-id) versus a resumed one (--resume) — same model, same
@@ -314,10 +332,11 @@ export function HyoStatusBar({
       <button
         ref={modelRef}
         className="hyo-model-selector"
-        title="Switch model"
+        title="Switch model or effort"
         onClick={() => openPopup("model")}
       >
         <span className="hyo-model-selector-name">{modelName}</span>
+        <span className="hyo-model-selector-effort">{effortOpt.name}</span>
         <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
           <path d="M4 6l4 4 4-4z" />
         </svg>
@@ -438,6 +457,16 @@ export function HyoStatusBar({
             </div>
           ))}
           <div className="hyo-model-popup-divider" />
+          <div
+            className="hyo-model-popup-item hyo-effort-row"
+            onClick={() => setPopup("effort")}
+          >
+            <span className="hyo-model-check" />
+            <span className="hyo-model-popup-name">Effort</span>
+            <span className="hyo-effort-row-value">{effortOpt.name}</span>
+            <span className="hyo-effort-row-chevron">›</span>
+          </div>
+          <div className="hyo-model-popup-divider" />
           <form
             className="hyo-model-custom-row"
             onSubmit={(e) => {
@@ -456,6 +485,41 @@ export function HyoStatusBar({
             />
             <button type="submit" className="hyo-model-custom-btn" disabled={!customModel.trim()}>Use</button>
           </form>
+        </div>
+      )}
+
+      {popup === "effort" && (
+        <div className="hyo-model-popup hyo-effort-popup" style={{ position: "fixed", bottom: popupBottom, right: 12 }}>
+          <div className="hyo-effort-popup-header">
+            Higher effort means more thorough responses, but takes longer and
+            uses your limits faster.
+          </div>
+          {EFFORT_OPTIONS.map((opt) => (
+            <div
+              key={opt.id}
+              className={`hyo-model-popup-item ${opt.id === effortOpt.id ? "active" : ""}`}
+              onClick={() => selectEffort(opt.id)}
+            >
+              <span className="hyo-model-check">
+                {opt.id === effortOpt.id ? "✓" : ""}
+              </span>
+              <span className="hyo-model-popup-name">
+                {opt.name}
+                {opt.id === DEFAULT_EFFORT && (
+                  <span className="hyo-effort-default-badge">Default</span>
+                )}
+              </span>
+              <span className="hyo-effort-desc">{opt.desc}</span>
+            </div>
+          ))}
+          <div className="hyo-model-popup-divider" />
+          <div
+            className="hyo-model-popup-item hyo-effort-row"
+            onClick={() => setPopup("model")}
+          >
+            <span className="hyo-model-check">‹</span>
+            <span className="hyo-model-popup-name">Back to models</span>
+          </div>
         </div>
       )}
 

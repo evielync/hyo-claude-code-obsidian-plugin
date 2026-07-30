@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.23
+
+### Features
+- **Reasoning effort selector** — choose how hard the model works before answering, alongside the model itself. An Effort row at the bottom of the model picker opens Low / Medium / High / Max, and the status bar now shows model and effort together. Effort is per-tab, like model and permission mode, and your choice becomes the default for new conversations. Defaults to Medium. Also available in Settings.
+
+### Fixes
+- **Context ring sized 1M models as though they were 200K** — Opus 5, Opus 4.8 and Opus 4.7 filled the context ring roughly five times too fast. Because auto-compact is driven by this number, conversations could compact far earlier than necessary. The picker advertised "1M" while the ring independently computed 200K — two separate pieces of logic that silently disagreed whenever a model was added to the list. Context size now has a single source of truth, with the picker's label computed from it, so the two can no longer drift. Limits verified against the models API.
+- **Empty "Thinking..." blocks** — current models (Opus 4.7 and later, Sonnet 5) no longer return thinking summaries, so Hyo was rendering a collapsible block that expanded to nothing. Those empty blocks are now hidden; the "Thinking..." indicator still shows while the model is working. If summaries return, they'll display again automatically.
+
+### Internal
+- Removed a hardcoded thinking-token budget pinned to every session. It controlled the same thing as the new effort setting and would have silently overridden every selection.
+- `hyoDebug(true)` in the developer console now enables verbose logging, which previously existed but could not be switched on.
+
 ## 0.3.11
 
 ### Fixes

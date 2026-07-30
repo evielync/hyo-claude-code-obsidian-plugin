@@ -1,17 +1,21 @@
 import { debug } from "./debug";
 import { spawn, ChildProcess } from "child_process";
 import { randomUUID } from "crypto";
+import { isNative1M, baseModelId } from "./models";
 
-// Sonnet 5 runs 1M context natively and doesn't accept a "[1m]" suffix —
-// the API doesn't recognize it as a valid variant and silently falls back
-// to 200K context instead of erroring. Any model string carrying that stale
+// Current models run 1M context natively and don't accept a "[1m]" suffix —
+// the API doesn't recognize it as a valid variant and silently falls back to
+// 200K context instead of erroring. Any model string carrying that stale
 // suffix (e.g. from a tab created before the 0.3.6 ID fix, or typed into the
 // custom model field by analogy with Opus/Sonnet 4.6, which DO need it) gets
 // normalized here, right at the CLI boundary, so it can never silently
 // degrade context again.
+//
+// Originally special-cased to Sonnet 5; generalised so every natively-1M model
+// is covered rather than only the one that happened to get reported.
 export function normalizeModelId(id: string): string {
-  if (id.startsWith("claude-sonnet-5") && id.includes("[1m]")) {
-    return "claude-sonnet-5";
+  if (isNative1M(id) && id.includes("[1m]")) {
+    return baseModelId(id);
   }
   return id;
 }
@@ -20,6 +24,7 @@ export interface TransportOptions {
   cliPath: string;
   cwd: string;
   model: string;
+  effort?: string;
   permissionMode: string;
   agent?: string;
   sessionId?: string;
@@ -58,8 +63,6 @@ export class ClaudeTransport {
       "--verbose",
       "--model",
       normalizeModelId(model),
-      "--max-thinking-tokens",
-      "31999",
       "--permission-mode",
       permissionMode,
       "--permission-prompt-tool",
@@ -83,6 +86,17 @@ export class ClaudeTransport {
     if (this.options.maxOutputTokens && this.options.maxOutputTokens > 0) {
       env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(this.options.maxOutputTokens);
     }
+    // Reasoning effort. The CLI exposes no argv flag for this — it reads the
+    // level off the environment — so it rides here rather than in `args`.
+    //
+    // This replaces the "--max-thinking-tokens 31999" that used to be pinned
+    // onto every spawn. Both control the same thing (how much the model thinks
+    // before answering), and a hardcoded thinking budget would have overridden
+    // whatever the user picked, leaving the selector doing nothing. Effort owns
+    // reasoning depth now; there is deliberately no second dial.
+    if (this.options.effort) {
+      env.CLAUDE_CODE_EFFORT_LEVEL = this.options.effort;
+    }
     env.PATH = [
       "/usr/local/bin",
       "/opt/homebrew/bin",
@@ -99,6 +113,9 @@ export class ClaudeTransport {
 
     debug("[hyo] Spawning CLI:", cliPath, args.join(" "));
     debug("[hyo] CWD:", cwd);
+    // Effort is passed via the environment, not argv, so it wouldn't show up
+    // in the spawn line above — log it explicitly or it's unverifiable.
+    debug("[hyo] Effort:", env.CLAUDE_CODE_EFFORT_LEVEL ?? "(unset — CLI default)");
 
     this.proc = spawn(cliPath, args, {
       cwd,

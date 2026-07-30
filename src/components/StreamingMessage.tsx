@@ -49,11 +49,18 @@ export function StreamingMessage({
       <div className="hyo-message-content">
         {blocks.map((block, i) => {
           if (block.type === "thinking") {
+            // Opus 4.7+ / Sonnet 5 default thinking display to "omitted", so
+            // the block still arrives but its text is empty. Rendering it
+            // anyway produced a chevron that expanded to nothing, which reads
+            // as broken — so only render when there's something to show. The
+            // separate "Thinking…" activity indicator still covers the
+            // in-progress state.
+            if (!block.content?.trim()) return null;
             return (
               <details key={i} open className="hyo-thinking-block">
                 <summary>Thinking...</summary>
                 <div className="hyo-thinking-content">
-                  {block.content?.slice(-500)}
+                  {block.content.slice(-500)}
                 </div>
               </details>
             );
@@ -139,7 +146,15 @@ function getActivityLabel(message: Message): string | null {
   );
   if (pendingWeb) return "Searching the web...";
 
-  if (!content && toolCalls.length === 0 && orderedBlocks.length === 0) {
+  // Thinking blocks with no text (Opus 4.7+ / Sonnet 5 omit the summary) are
+  // not rendered, so they must not count as visible output either — otherwise
+  // the indicator switches off and the message shows nothing at all while the
+  // model is still thinking.
+  const visibleBlocks = orderedBlocks.filter(
+    (b) => !(b.type === "thinking" && !b.content?.trim())
+  );
+
+  if (!content && toolCalls.length === 0 && visibleBlocks.length === 0) {
     return "Thinking...";
   }
 

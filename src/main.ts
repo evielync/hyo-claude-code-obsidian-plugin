@@ -5,6 +5,7 @@ import * as os from "os";
 import { HyoView, VIEW_TYPE_HYO } from "./HyoView";
 import { HyoSettingTab, HyoSettings, DEFAULT_SETTINGS, dispatchSettingsChanged } from "./settings";
 import { cleanupOldAttachments } from "./attachments";
+import { setDebug } from "./debug";
 
 export default class HyoPlugin extends Plugin {
   settings: HyoSettings = DEFAULT_SETTINGS;
@@ -17,6 +18,12 @@ export default class HyoPlugin extends Plugin {
 
   async onload() {
     await this.loadSettings();
+
+    // Verbose "[hyo] ..." tracing is off by default. Expose the toggle so it
+    // can be flipped from the developer console without a rebuild:
+    //   hyoDebug(true)  → start logging (spawn args, effort level, CLI errors)
+    //   hyoDebug(false) → stop
+    (window as any).hyoDebug = setDebug;
 
     this.registerView(VIEW_TYPE_HYO, (leaf) => new HyoView(leaf, this));
 

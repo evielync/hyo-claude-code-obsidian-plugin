@@ -3,11 +3,12 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import type HyoPlugin from "./main";
-import { MODEL_OPTIONS } from "./models";
+import { MODEL_OPTIONS, EFFORT_OPTIONS, DEFAULT_EFFORT } from "./models";
 
 export interface HyoSettings {
   cliPath: string;
   model: string;
+  effortLevel: string;
   customModels: string[];
   permissionMode: string;
   workingDirectory: string;
@@ -25,6 +26,7 @@ export interface HyoSettings {
 export const DEFAULT_SETTINGS: HyoSettings = {
   cliPath: "/usr/local/bin/claude",
   model: "claude-sonnet-4-5-20250929",
+  effortLevel: DEFAULT_EFFORT,
   customModels: [],
   permissionMode: "manual",
   workingDirectory: "",
@@ -126,6 +128,25 @@ export class HyoSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.model)
           .onChange(async (value) => {
             this.plugin.settings.model = value;
+            await this.plugin.saveSettings();
+            this.showSaved();
+          });
+      });
+
+    // Reasoning effort
+    new Setting(containerEl)
+      .setName("Effort")
+      .setDesc(
+        "Default reasoning effort for new conversations. Higher effort means more thorough responses, but they take longer and use your limits faster."
+      )
+      .addDropdown((dropdown) => {
+        for (const e of EFFORT_OPTIONS) {
+          dropdown.addOption(e.id, e.name);
+        }
+        dropdown
+          .setValue(this.plugin.settings.effortLevel || DEFAULT_EFFORT)
+          .onChange(async (value) => {
+            this.plugin.settings.effortLevel = value;
             await this.plugin.saveSettings();
             this.showSaved();
           });

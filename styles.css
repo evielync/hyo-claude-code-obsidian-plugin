@@ -1429,6 +1429,11 @@ button.hyo-ask-send:disabled {
   font-weight: 500;
 }
 
+/* Effort level, shown alongside the model in the same pill */
+.hyo-model-selector-effort {
+  color: var(--text-faint);
+}
+
 /* Permission mode selector */
 .hyo-permission-mode-selector {
   display: flex;
@@ -1690,6 +1695,45 @@ button.hyo-ask-send:disabled {
   height: 1px;
   background: var(--background-modifier-border);
   margin: 4px 0;
+}
+
+/* Effort submenu — opens from the "Effort" row in the model popup */
+.hyo-effort-popup {
+  min-width: 260px;
+}
+
+.hyo-effort-popup-header {
+  padding: 6px 8px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.hyo-effort-row-value {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.hyo-effort-row-chevron {
+  color: var(--text-faint);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.hyo-effort-desc {
+  font-size: 11px;
+  color: var(--text-faint);
+  text-align: right;
+  max-width: 150px;
+}
+
+.hyo-effort-default-badge {
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--background-modifier-border);
+  border-radius: var(--radius-s);
 }
 
 .hyo-model-custom-row {

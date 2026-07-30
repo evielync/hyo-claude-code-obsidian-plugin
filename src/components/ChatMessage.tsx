@@ -186,6 +186,10 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
       <div className="hyo-message-content">
         {blocks.map((block, i) => {
           if (block.type === "thinking") {
+            // Empty when the model omits thinking summaries (Opus 4.7+ /
+            // Sonnet 5 default) — skip rather than render a chevron that
+            // expands to nothing. See StreamingMessage for the same guard.
+            if (!block.content?.trim()) return null;
             return (
               <details key={i} className="hyo-thinking-block">
                 <summary>Thinking...</summary>
