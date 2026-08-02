@@ -1080,6 +1080,7 @@ button.hyo-ask-send:disabled {
 
 /* Individual tab */
 .hyo-tab {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1093,6 +1094,32 @@ button.hyo-ask-send:disabled {
   white-space: nowrap;
   user-select: none;
   transition: color 0.1s;
+}
+
+/* Drag to reorder — the tab being carried fades, and a caret marks the slot
+   it will drop into. */
+.hyo-tab-dragging {
+  opacity: 0.4;
+}
+
+.hyo-tab-drop-before::before,
+.hyo-tab-drop-after::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--interactive-accent);
+  pointer-events: none;
+}
+
+.hyo-tab-drop-before::before {
+  left: -2px;
+}
+
+.hyo-tab-drop-after::after {
+  right: -2px;
 }
 
 .hyo-tab:hover {
@@ -2137,4 +2164,184 @@ button.hyo-ask-send:disabled {
   font-size: 12px;
   font-weight: 600;
   font-family: var(--font-monospace);
+}
+
+/* ── Release card ─────────────────────────────────────────────────────────
+   Pinned above the message list after an update. Deliberately not styled as
+   an assistant message — this is the plugin talking, not the agent. */
+.hyo-release-card {
+  flex: 0 0 auto;
+  margin: 12px 12px 0 12px;
+  padding: 12px 14px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-left: 3px solid var(--interactive-accent);
+  border-radius: var(--radius-s);
+}
+
+.hyo-release-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.hyo-release-card-badge {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--interactive-accent);
+}
+
+.hyo-release-card-version {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.hyo-release-card-dismiss {
+  margin-left: auto;
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0 2px;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-faint);
+}
+
+.hyo-release-card-dismiss:hover {
+  color: var(--text-normal);
+}
+
+.hyo-release-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-normal);
+  margin-bottom: 4px;
+}
+
+.hyo-release-card-body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-normal);
+}
+
+/* The bullets carry their own spacing; trim the markdown renderer's outer
+   margins so the card doesn't gain a dead band at top and bottom. */
+.hyo-release-card-body > div > *:first-child { margin-top: 0; }
+.hyo-release-card-body > div > *:last-child { margin-bottom: 0; }
+.hyo-release-card-body ul {
+  margin: 6px 0 0 0;
+  padding-left: 18px;
+}
+.hyo-release-card-body li { margin-bottom: 4px; }
+
+.hyo-release-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.hyo-release-card-btn {
+  font-size: 12px;
+  padding: 5px 11px;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--background-modifier-border);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.hyo-release-card-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+/* ── Release notes panel ──────────────────────────────────────────────────
+   Every version, rendered in app. Overlays the chat surface rather than
+   opening a modal, so it matches the rest of Hyo's panels. */
+.hyo-release-notes {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--background-primary);
+}
+
+.hyo-release-notes-head {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+}
+
+.hyo-release-notes-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.hyo-release-notes-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0 2px;
+  cursor: pointer;
+  font-size: 17px;
+  line-height: 1;
+  color: var(--text-muted);
+}
+
+.hyo-release-notes-close:hover { color: var(--text-normal); }
+
+.hyo-release-notes-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px 24px 16px;
+  font-size: 13px;
+  line-height: 1.6;
+  user-select: text;
+}
+
+.hyo-session-dropdown-divider {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--background-modifier-border);
+}
+
+.hyo-session-dropdown-whatsnew { color: var(--text-muted); }
+
+/* Multiple releases in one card — each needs its own header so the bullets
+   don't run together into one undifferentiated list. */
+.hyo-release-card-section + .hyo-release-card-section {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.hyo-release-card-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.hyo-release-card-section-version {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.hyo-release-card-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-normal);
 }

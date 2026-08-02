@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
-import { useUsage } from "../hooks/useUsage";
+import { useUsage, scopedLimit } from "../hooks/useUsage";
 import { useAgents } from "../hooks/useAgents";
 import {
   MODEL_OPTIONS,
@@ -96,6 +96,7 @@ export function HyoStatusBar({
     usage,
     sessionPct,
     weeklyPct,
+    fablePct,
     sessionPacePct,
     weeklyPacePct,
     lastUpdated,
@@ -207,11 +208,9 @@ export function HyoStatusBar({
   const contextPct = inputTokens > 0 ? Math.min(100, (inputTokens / contextLimit) * 100) : 0;
   const contextBarClass = contextPct > 80 ? "danger" : contextPct > 50 ? "warning" : "";
 
-  const sonnetPct = usage?.seven_day_sonnet
-    ? Math.min(100, Math.max(0, usage.seven_day_sonnet.utilization || 0))
-    : null;
-  const sonnetBarClass =
-    (sonnetPct ?? 0) > 80 ? "danger" : (sonnetPct ?? 0) > 50 ? "warning" : "";
+  const fableBarClass =
+    (fablePct ?? 0) > 80 ? "danger" : (fablePct ?? 0) > 50 ? "warning" : "";
+  const fableResetsAt = scopedLimit(usage, "Fable")?.resets_at;
 
   const sessionBarClass =
     sessionPct > 80 ? "danger" : sessionPct > 50 ? "warning" : "";
@@ -256,6 +255,7 @@ export function HyoStatusBar({
             />
           )}
         </span>
+
       </div>
 
       {inputTokens > 0 && (
@@ -403,26 +403,26 @@ export function HyoStatusBar({
               </span>
             </div>
           )}
-          {sonnetPct !== null && (
+          {fablePct !== null && (
             <>
               <div className="hyo-usage-divider" />
               <div className="hyo-usage-row">
-                <span className="hyo-usage-label">Weekly (Sonnet)</span>
-                <span className="hyo-usage-value">{Math.round(sonnetPct)}% used</span>
+                <span className="hyo-usage-label">Weekly (Fable)</span>
+                <span className="hyo-usage-value">{Math.round(fablePct)}% used</span>
               </div>
               <div className="hyo-usage-bar-inline-wrap">
                 <div className="hyo-usage-bar-inline">
                   <div
-                    className={`hyo-usage-bar-inline-fill ${sonnetBarClass}`}
-                    style={{ width: sonnetPct + "%" }}
+                    className={`hyo-usage-bar-inline-fill ${fableBarClass}`}
+                    style={{ width: fablePct + "%" }}
                   />
                 </div>
               </div>
-              {usage?.seven_day_sonnet?.resets_at && (
+              {fableResetsAt && (
                 <div className="hyo-usage-row small">
                   <span className="hyo-usage-label">Resets in</span>
                   <span className="hyo-usage-value">
-                    {formatResetTime(usage.seven_day_sonnet.resets_at)}
+                    {formatResetTime(fableResetsAt)}
                   </span>
                 </div>
               )}

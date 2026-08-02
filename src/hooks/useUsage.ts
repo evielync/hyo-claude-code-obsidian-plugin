@@ -25,11 +25,50 @@ export interface UsageData {
     utilization: number;
     resets_at?: string;
   };
+  // Per-model limits live here, not in their own top-level fields.
+  // `seven_day_opus` / `seven_day_sonnet` still appear in the response but now
+  // return null — model-scoped limits moved into this array.
+  limits?: LimitEntry[];
+}
+
+export interface LimitEntry {
+  kind: string; // "session" | "weekly_all" | "weekly_scoped"
+  group?: string;
+  percent: number;
+  severity?: string;
+  resets_at?: string;
+  is_active?: boolean;
+  scope?: {
+    model?: { id: string | null; display_name?: string };
+    surface?: string | null;
+  } | null;
+}
+
+/**
+ * A model-scoped weekly limit, or null when the account doesn't have one.
+ *
+ * Matches on `display_name` because `scope.model.id` comes back null — the
+ * display name is the only identifier the response carries. If Anthropic
+ * renames or drops it this returns null, and the caller hides the bar rather
+ * than rendering a confidently wrong number.
+ */
+export function scopedLimit(
+  usage: UsageData | null,
+  displayName: string
+): LimitEntry | null {
+  const entry = usage?.limits?.find(
+    (l) =>
+      l.kind === "weekly_scoped" &&
+      l.scope?.model?.display_name?.toLowerCase() === displayName.toLowerCase()
+  );
+  return entry && typeof entry.percent === "number" ? entry : null;
 }
 
 interface OAuthCreds {
   accessToken: string;
   refreshToken?: string;
+  /** Epoch millis. Used to reject a stale cache before it shadows a live source. */
+  expiresAt?: number;
 }
 
 /**
@@ -53,7 +92,16 @@ function readCachedOAuthCreds(): OAuthCreds | null {
     const fs = require("fs");
     const raw = fs.readFileSync(CACHE_PATH, "utf-8");
     const oauth = JSON.parse(raw);
-    if (oauth?.accessToken) return oauth;
+    if (!oauth?.accessToken) return null;
+
+    // An expired cached token is worse than none: it satisfies the "found
+    // credentials" check, so the live keychain is never consulted and usage
+    // silently stops updating. Reject it and let the caller fall through.
+    if (typeof oauth.expiresAt === "number" && oauth.expiresAt <= Date.now()) {
+      debug("[hyo][usage] Cached token expired — ignoring cache");
+      return null;
+    }
+    return oauth;
   } catch {
     // No cache yet
   }
@@ -80,14 +128,8 @@ async function getOAuthCreds(): Promise<OAuthCreds | null> {
     // File may not exist — fall through
   }
 
-  // Try 2: Our own cache (persists across sessions)
-  const cached = readCachedOAuthCreds();
-  if (cached) {
-    debug("[hyo][usage] Creds from: cache | hasRefresh:", !!cached.refreshToken);
-    return cached;
-  }
-
-  // Try 3: macOS keychain (truncated fallback — may lack refreshToken)
+  // Try 2: macOS keychain — the live source of truth, so it comes before our
+  // own cache. A cache that outranks it goes stale and never recovers.
   try {
     const { execFile } = require("child_process");
     const { promisify } = require("util");
@@ -113,6 +155,15 @@ async function getOAuthCreds(): Promise<OAuthCreds | null> {
     }
   } catch {
     // Keychain not available (Linux/Windows)
+  }
+
+  // Last resort: our own cache. Only reached when the keychain is unreadable
+  // (Linux/Windows, or a locked keychain) — and only ever returns an unexpired
+  // token, so a stale one can't shadow a live source.
+  const cached = readCachedOAuthCreds();
+  if (cached) {
+    debug("[hyo][usage] Creds from: cache | hasRefresh:", !!cached.refreshToken);
+    return cached;
   }
 
   console.warn("[hyo][usage] No credentials found from any source");
@@ -286,6 +337,16 @@ export function useUsage() {
     ? Math.min(100, Math.max(0, usage.seven_day.utilization || 0))
     : 0;
 
+  // Fable draws from its own slice of the weekly allowance and burns it faster,
+  // so it gets its own row in the usage popup. Null when the account has no
+  // Fable limit — the row is then hidden rather than shown at zero. It stays
+  // out of the compact status bar, which is kept to the two limits that apply
+  // to every conversation.
+  const fableLimit = scopedLimit(usage, "Fable");
+  const fablePct = fableLimit
+    ? Math.min(100, Math.max(0, fableLimit.percent || 0))
+    : null;
+
   const sessionPacePct = calcPacePct(usage?.five_hour?.resets_at, 5 * 60);
   const weeklyPacePct = calcWeeklyPacePct(usage?.seven_day?.resets_at);
 
@@ -293,6 +354,7 @@ export function useUsage() {
     usage,
     sessionPct,
     weeklyPct,
+    fablePct,
     sessionPacePct,
     weeklyPacePct,
     lastUpdated,

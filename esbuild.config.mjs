@@ -25,6 +25,9 @@ const context = await esbuild.context({
   ],
   format: "cjs",
   target: "es2020",
+  // CHANGELOG.md is inlined as a string so the release card and the in-app
+  // notes view work offline — no fetch, no extra release asset to ship.
+  loader: { ".md": "text" },
   logLevel: "info",
   sourcemap: prod ? false : "inline",
   treeShaking: true,

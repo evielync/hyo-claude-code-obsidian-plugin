@@ -33,6 +33,7 @@ export interface ModelOption {
 // be stripped before spawn. Older models where "[1m]" is what *unlocks* 1M are
 // deliberately absent: they need the suffix kept, which the default rule does.
 const NATIVE_1M = [
+  "claude-fable-5",
   "claude-opus-5",
   "claude-opus-4-8",
   "claude-opus-4-7",
@@ -89,6 +90,7 @@ function model(id: string, name: string): ModelOption {
 }
 
 export const MODEL_OPTIONS: ModelOption[] = [
+  model("claude-fable-5", "Fable 5"),
   model("claude-opus-5", "Opus 5"),
   model("claude-opus-4-8", "Opus 4.8"),
   model("claude-sonnet-5", "Sonnet 5"),

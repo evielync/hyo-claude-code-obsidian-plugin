@@ -23,10 +23,12 @@ interface ChatTabsProps {
   onSwitch: (id: string) => void;
   onClose: (id: string) => void;
   onRename: (id: string, title: string) => void;
+  onReorder: (draggedId: string, targetId: string, after: boolean) => void;
   pastSessions: PastSession[];
   onOpenPastSession: (session: PastSession) => void;
   onRefreshPastSessions: () => void;
   onNewTab: () => void;
+  onOpenReleaseNotes: () => void;
 }
 
 export function ChatTabs({
@@ -35,14 +37,19 @@ export function ChatTabs({
   onSwitch,
   onClose,
   onRename,
+  onReorder,
   pastSessions,
   onOpenPastSession,
   onRefreshPastSessions,
   onNewTab,
+  onOpenReleaseNotes,
 }: ChatTabsProps) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (renamingId && inputRef.current) {
@@ -50,6 +57,28 @@ export function ChatTabs({
       inputRef.current.select();
     }
   }, [renamingId]);
+
+  // A mouse wheel only reports vertical movement, so the tab strip translates it
+  // into horizontal scrolling — the same way VS Code lets you wheel through tabs.
+  // Registered natively rather than via onWheel because React's wheel listener is
+  // passive, which would make preventDefault a no-op and let the scroll leak out
+  // to whatever is behind the tab bar.
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+
+    const onWheel = (e: WheelEvent) => {
+      if (e.shiftKey) return; // shift+wheel is already horizontal
+      const delta = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      if (!delta) return;
+      if (strip.scrollWidth <= strip.clientWidth) return; // nothing to scroll
+      strip.scrollLeft += delta;
+      e.preventDefault();
+    };
+
+    strip.addEventListener("wheel", onWheel, { passive: false });
+    return () => strip.removeEventListener("wheel", onWheel);
+  }, []);
 
   const handleDoubleClick = (tab: TabSession) => {
     setRenamingId(tab.id);
@@ -71,15 +100,63 @@ export function ChatTabs({
     }
   };
 
+  // Which side of the hovered tab the dragged tab will land on, so the drop
+  // indicator sits where the tab is actually going.
+  const dropSide = (e: React.DragEvent, id: string) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const after = e.clientX > rect.left + rect.width / 2;
+    setDropTarget((prev) =>
+      prev && prev.id === id && prev.after === after ? prev : { id, after }
+    );
+  };
+
+  const endDrag = () => {
+    setDraggingId(null);
+    setDropTarget(null);
+  };
+
   return (
     <div className="hyo-tabs">
-      <div className="hyo-tabs-left">
+      <div className="hyo-tabs-left" ref={stripRef}>
         {tabs.map((tab) => {
           const awaiting = tabAwaitingInput(tab);
+          const indicator =
+            dropTarget?.id === tab.id && draggingId && draggingId !== tab.id
+              ? dropTarget.after
+                ? " hyo-tab-drop-after"
+                : " hyo-tab-drop-before"
+              : "";
           return (
           <div
             key={tab.id}
-            className={`hyo-tab ${tab.id === activeTabId ? "hyo-tab-active" : ""}`}
+            className={`hyo-tab ${tab.id === activeTabId ? "hyo-tab-active" : ""}${
+              draggingId === tab.id ? " hyo-tab-dragging" : ""
+            }${indicator}`}
+            draggable={renamingId !== tab.id}
+            onDragStart={(e) => {
+              e.stopPropagation();
+              setDraggingId(tab.id);
+              e.dataTransfer.effectAllowed = "move";
+              // Firefox refuses to start a drag without payload; the id also
+              // marks this as a tab drag rather than a file drop.
+              e.dataTransfer.setData("application/x-hyo-tab", tab.id);
+            }}
+            onDragOver={(e) => {
+              if (!draggingId) return; // let file drops fall through to the panel
+              e.preventDefault();
+              e.stopPropagation();
+              e.dataTransfer.dropEffect = "move";
+              dropSide(e, tab.id);
+            }}
+            onDrop={(e) => {
+              if (!draggingId) return;
+              e.preventDefault();
+              e.stopPropagation();
+              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              onReorder(draggingId, tab.id, e.clientX > rect.left + rect.width / 2);
+              endDrag();
+            }}
+            onDragEnd={endDrag}
             onClick={() => onSwitch(tab.id)}
             onDoubleClick={() => handleDoubleClick(tab)}
           >
@@ -123,6 +200,7 @@ export function ChatTabs({
           pastSessions={pastSessions}
           onOpen={onOpenPastSession}
           onRefresh={onRefreshPastSessions}
+          onOpenReleaseNotes={onOpenReleaseNotes}
         />
         <button
           className="hyo-action-btn"

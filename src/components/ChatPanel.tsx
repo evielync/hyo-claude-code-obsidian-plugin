@@ -5,11 +5,14 @@ import { ChatMessages } from "./ChatMessages";
 import { ChatTabs } from "./ChatTabs";
 import { SessionDropdown } from "./SessionDropdown";
 import { HyoStatusBar } from "./HyoStatusBar";
+import { ReleaseCard } from "./ReleaseCard";
+import { ReleaseNotes } from "./ReleaseNotes";
 import { MODEL_OPTIONS } from "../models";
 import { VoiceControls } from "./VoiceControls";
 import type { useSessionManager } from "../hooks/useSessionManager";
 import { useVoiceMode } from "../hooks/useVoiceMode";
 import { useSkills, type Skill } from "../hooks/useSkills";
+import { withBundledSkills } from "../bundled-skills";
 import type HyoPlugin from "../main";
 import {
   estimateTokens,
@@ -35,6 +38,31 @@ interface ChatPanelProps {
 }
 
 export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
+  // Release card: shown when the installed version is newer than the last one
+  // acknowledged. A blank lastSeenVersion means a fresh install, which gets no
+  // card — nobody needs release notes for a version they never ran.
+  const currentVersion = plugin.manifest.version;
+  const [showReleaseCard, setShowReleaseCard] = useState(
+    () => !!plugin.settings.lastSeenVersion &&
+          plugin.settings.lastSeenVersion !== currentVersion
+  );
+  const [showReleaseNotes, setShowReleaseNotes] = useState(false);
+
+  const dismissReleaseCard = useCallback(() => {
+    setShowReleaseCard(false);
+    plugin.settings.lastSeenVersion = currentVersion;
+    void plugin.saveData(plugin.settings);
+  }, [plugin, currentVersion]);
+
+  // A fresh install still records the version, so the first real update shows
+  // a card instead of being swallowed by the blank-version check above.
+  useEffect(() => {
+    if (!plugin.settings.lastSeenVersion) {
+      plugin.settings.lastSeenVersion = currentVersion;
+      void plugin.saveData(plugin.settings);
+    }
+  }, [plugin, currentVersion]);
+
   const {
     tabs,
     activeTabId,
@@ -52,6 +80,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     closeTab,
     switchTab,
     renameTab,
+    reorderTab,
     setTabModel,
     setTabEffort,
     setTabPermissionMode,
@@ -176,16 +205,32 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
   const [slashSelectedIdx, setSlashSelectedIdx] = useState(0);
   const slashMenuRef = useRef<HTMLDivElement>(null);
 
+  // Built-in CLI commands the CLI actually honours over stream-json. Verified
+  // one by one against the CLI rather than taken from its full command list:
+  // /status, /memory and /skills refuse outright ("isn't available in this
+  // environment"), and /doctor is worse — it falls through to the model, which
+  // invents a plausible health check.
+  //
+  // /mcp is left out for a different reason: the status read works, but its own
+  // reply instructs the user to "Reply /mcp reconnect all here to retry", and
+  // that subcommand fails with "MCP controls aren't available right now". We
+  // can't edit the CLI's output, so listing it means advertising a dead end.
   const BUILTIN_COMMANDS = useMemo(() => [
     { name: "compact", description: "Summarise and compress conversation history", builtin: true },
     { name: "context", description: "Show current context window usage breakdown", builtin: true },
+    { name: "usage", description: "Your plan limits — session, weekly, and Fable", builtin: true },
+    { name: "cost", description: "What this conversation has cost so far", builtin: true },
+    { name: "goal", description: "Set what this session is working towards", builtin: true },
   ], []);
 
   // Unified slash items: builtins first, then skills
   const slashItems = useMemo(() => {
     const filter = slashFilter.toLowerCase();
     const builtins = BUILTIN_COMMANDS.filter((c) => !filter || c.name.includes(filter));
-    const filtered = skills.filter((s) => !filter || s.name.toLowerCase().includes(filter));
+    // The skills bundled inside the CLI aren't on disk, so the folder scan
+    // can't see them — they're merged in here so they're findable.
+    const all = withBundledSkills(skills);
+    const filtered = all.filter((s) => !filter || s.name.toLowerCase().includes(filter));
     return [...builtins, ...filtered];
   }, [skills, slashFilter, BUILTIN_COMMANDS]);
 
@@ -394,6 +439,9 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
   );
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
+    // Only files get the drop-zone treatment — dragging a tab across the panel
+    // shouldn't light up the attachment overlay.
+    if (!e.dataTransfer.types.includes("Files")) return;
     e.preventDefault();
     setDragging(true);
   }, []);
@@ -418,6 +466,10 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     }
   }, [readAndAddFile]);
 
+  // Commands that need no argument. /goal takes one, so it prefills the input
+  // and waits for the user instead of firing immediately.
+  const SEND_DIRECTLY = ["context", "usage", "cost"];
+
   const selectSlashItem = useCallback(
     (item: { name: string; builtin?: boolean }) => {
       setSlashMenuOpen(false);
@@ -426,15 +478,17 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
         compact();
         return;
       }
-      if (item.builtin && item.name === "context") {
+      // Commands the CLI answers itself — send straight through rather than
+      // prefilling the input, since there's nothing for the user to add.
+      if (item.builtin && SEND_DIRECTLY.includes(item.name)) {
         setInputValues((prev) => ({ ...prev, [activeTabId]: "" }));
-        sendMessage("/context");
+        sendMessage(`/${item.name}`);
         return;
       }
       setInputValues((prev) => ({ ...prev, [activeTabId]: `/${item.name} ` }));
       inputRef.current?.focus();
     },
-    [activeTabId, compact]
+    [activeTabId, compact, sendMessage]
   );
 
   const handleInput = useCallback(
@@ -573,11 +627,26 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
         onSwitch={switchTab}
         onClose={closeTab}
         onRename={renameTab}
+        onReorder={reorderTab}
         pastSessions={pastSessions}
         onOpenPastSession={openPastSession}
         onRefreshPastSessions={refreshPastSessions}
         onNewTab={newTab}
+        onOpenReleaseNotes={() => setShowReleaseNotes(true)}
       />
+
+      {showReleaseCard && (
+        <ReleaseCard
+          sinceVersion={plugin.settings.lastSeenVersion}
+          version={currentVersion}
+          onDismiss={dismissReleaseCard}
+          onOpenNotes={() => setShowReleaseNotes(true)}
+        />
+      )}
+
+      {showReleaseNotes && (
+        <ReleaseNotes onClose={() => setShowReleaseNotes(false)} />
+      )}
 
       {activeMessages.length > 0 ? (
         <ChatMessages

@@ -743,6 +743,26 @@ export function useSessionManager(options: SessionManagerOptions) {
     });
   }, [options.cwd]); // refreshPastSessions intentionally omitted — declared later, referenced via closure
 
+  // Move a tab to sit where another tab currently is. Dropping onto the right
+  // half of the target lands after it, which is what makes dragging a tab to
+  // the end of the bar feel natural.
+  const reorderTab = useCallback((draggedId: string, targetId: string, after: boolean) => {
+    if (draggedId === targetId) return;
+    setState((prev) => {
+      const from = prev.tabs.findIndex((t) => t.id === draggedId);
+      const target = prev.tabs.findIndex((t) => t.id === targetId);
+      if (from === -1 || target === -1) return prev;
+
+      const tabs = [...prev.tabs];
+      const [moved] = tabs.splice(from, 1);
+      const targetAfterRemoval = tabs.findIndex((t) => t.id === targetId);
+      const insertAt = after ? targetAfterRemoval + 1 : targetAfterRemoval;
+      tabs.splice(insertAt, 0, moved);
+
+      return { ...prev, tabs };
+    });
+  }, []);
+
   // ------- messaging -------
 
   const sendMessage = useCallback(
@@ -1153,6 +1173,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     closeTab,
     switchTab,
     renameTab,
+    reorderTab,
     setTabModel,
     setTabEffort,
     setTabPermissionMode,

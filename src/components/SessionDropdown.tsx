@@ -5,11 +5,13 @@ interface SessionDropdownProps {
   pastSessions: PastSession[];
   onOpen: (session: PastSession) => void;
   onRefresh: () => void;
+  onOpenReleaseNotes: () => void;
 }
 
 export function SessionDropdown({
   pastSessions,
   onOpen,
+  onOpenReleaseNotes,
   onRefresh,
 }: SessionDropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
@@ -104,6 +106,16 @@ export function SessionDropdown({
               ))}
             </div>
           )}
+          <div className="hyo-session-dropdown-divider" />
+          <button
+            className="hyo-session-dropdown-item hyo-session-dropdown-whatsnew"
+            onClick={() => {
+              onOpenReleaseNotes();
+              setIsOpen(false);
+            }}
+          >
+            What's new
+          </button>
         </div>
       )}
     </div>

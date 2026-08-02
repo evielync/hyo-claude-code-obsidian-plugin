@@ -15,6 +15,10 @@ export interface HyoSettings {
   defaultAgent: string;
   maxOutputTokens: number;
   autoGenerateTitles: boolean;
+  // Last version whose release card was seen. Empty on a fresh install, which
+  // suppresses the card — a first-time user doesn't need to be told what
+  // changed in a version they never had.
+  lastSeenVersion: string;
   // Voice
   elevenLabsApiKey: string;
   voiceId: string;
@@ -35,6 +39,7 @@ export const DEFAULT_SETTINGS: HyoSettings = {
   defaultAgent: "",
   maxOutputTokens: 64000,
   autoGenerateTitles: true,
+  lastSeenVersion: "",
   // Voice
   elevenLabsApiKey: "",
   voiceId: "",

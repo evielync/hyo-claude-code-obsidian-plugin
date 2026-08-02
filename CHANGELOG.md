@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.25
+
+**The one where we add Fable 5, and tabs that move**
+
+- **Fable 5 now available:** You can now use Fable, Anthropic's most capable model, from within Hyo
+- **A Fable usage bar.** Because Fable draws from a separate slice of your weekly limit and burns through it faster, it has its own bar in the usage panel — click the bars in the status bar to see it.
+- **Claude Code's built-in commands, in the slash menu.** Type `/` and you'll find `/usage`, `/cost`, `/context` and `/goal` alongside your own skills.
+- **The skills that ship with Claude Code are now findable.** `/deep-research`, `/dataviz`, `/loop` and `/schedule` were always there — they just never appeared in the menu, so nobody knew. `/schedule` is the one to try: it runs an agent in the cloud on a schedule, even with Obsidian closed.
+- **Tabs that move.** You can now drag chat tabs to re-order them as well as added functionality for scrolling through them with your mouse wheel.
+- **Release notes inside Hyo.** When Hyo updates, a card tells you what changed — and "What's new" in the conversations menu brings it back any time.
+- **Fixed: the usage bars had quietly stopped updating.** Hyo kept its own copy of your credentials and preferred it over the live ones, so once that copy expired it kept retrying with a dead token and the bars sat empty. It now reads the live credentials first and throws away its copy the moment it goes stale.
+
 ## 0.3.24
 
 ### Fixes
