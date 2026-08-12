@@ -31,6 +31,13 @@ export interface TransportOptions {
   sessionId?: string;
   resume?: boolean;
   maxOutputTokens?: number;
+  /**
+   * Extra text appended to the system prompt for this spawn (via
+   * `--append-system-prompt`). Used to switch Chad into the voice persona when
+   * conversation mode is on. Undefined in normal text mode so responses stay
+   * rich/markdown.
+   */
+  appendSystemPrompt?: string;
   onMessage: (msg: any) => void;
   onError: (error: string) => void;
   onClose: (code: number | null) => void;
@@ -80,6 +87,13 @@ export class ClaudeTransport {
     // All agents are loaded via --agent <name> from ~/.claude/agents/.
     if (agent) {
       args.push("--agent", agent);
+    }
+
+    // Voice conversation mode appends the voice persona to the system prompt so
+    // Chad speaks for listening, not reading. Only present when conversation
+    // mode is on — text mode keeps the default (rich markdown) behaviour.
+    if (this.options.appendSystemPrompt) {
+      args.push("--append-system-prompt", this.options.appendSystemPrompt);
     }
 
     // Reasoning effort, via the flag where the CLI supports it. Older builds

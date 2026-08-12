@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.26
+
+**The one where we add real-time, two-way voice**
+
+- **Talk to Hyo, and it talks back — no buttons.** Open voice mode and just speak. It listens, works, and replies out loud, the way you'd talk to someone sitting next to you. No holding a key, no "press to start, press to stop" — you just have a conversation.
+- **A view built for talking, not reading.** Voice mode has its own screen: a blob in the middle that changes colour with what's happening — listening, thinking, speaking — so you always know where things are without watching text scroll. Flip to the transcript any time to read along.
+- **It knows you're listening, so it talks like it.** Instead of reading a wall of notes aloud, it says the short version and puts the detail — lists, drafts, options, numbers — on screen for you to read. You hear a person talking, not a document being narrated.
+- **It hands work off without going quiet.** When it needs to dig through your vault or run a task, it stays in the conversation and comes back with the answer the moment it's done — instead of leaving you waiting in silence.
+- **First launch downloads a couple of small things.** Voice mode uses two little models to tell when you're speaking and when you've finished a thought — those run right on your machine, so the first time you open it, it grabs them once. After that it's ready instantly.
+
+Watch it in action: https://www.tella.tv/video/new-two-way-voice-mode-in-hi-o-500l
+
 ## 0.3.25
 
 **The one where we add Fable 5, and tabs that move**

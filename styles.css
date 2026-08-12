@@ -2345,3 +2345,238 @@ button.hyo-ask-send:disabled {
   font-weight: 600;
   color: var(--text-normal);
 }
+
+/* --- Voice "on screen" card (inline in the transcript) --- */
+/* Chad's [SCREEN] detail renders as an Obsidian callout of type "screen" — a
+   clean prepared-to-read card that lives in the conversation, so it persists
+   and can't be lost on a stray dismiss. */
+.callout[data-callout="screen"] {
+  --callout-color: var(--interactive-accent-rgb, 110, 84, 232);
+  border: 1px solid color-mix(in srgb, var(--interactive-accent) 30%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--interactive-accent) 6%, var(--background-primary));
+  margin: 10px 0;
+  padding: 6px 14px 10px;
+}
+
+.callout[data-callout="screen"] .callout-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--interactive-accent);
+  padding: 4px 0 6px;
+  gap: 6px;
+}
+
+.callout[data-callout="screen"] .callout-icon {
+  display: none;
+}
+
+.callout[data-callout="screen"] .callout-content > :first-child {
+  margin-top: 0;
+}
+.callout[data-callout="screen"] .callout-content > :last-child {
+  margin-bottom: 0;
+}
+
+/* ===================== Voice View ===================== */
+/* The voice-first surface: Blob centre stage, colour = state, transcript on a
+   toggle, on-screen detail as a frosted overlay, permission asks in-view.
+   Ported from the approved mockup (chad/assets/hyo-voice-view-mockup.html). */
+.hyo-voiceview {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+.hyo-vv-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  padding: 20px;
+}
+
+/* --- the Blob --- */
+.hyo-blob {
+  width: 160px;
+  height: 160px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.hyo-blob-core {
+  width: 96px;
+  height: 96px;
+  border-radius: 56% 44% 60% 40% / 48% 62% 38% 52%;
+  background: #b9c1cd;
+  transition: background 0.4s, width 0.4s, height 0.4s;
+  animation: hyo-blob-morph 7s ease-in-out infinite;
+}
+@keyframes hyo-blob-morph {
+  0%, 100% { border-radius: 56% 44% 60% 40% / 48% 62% 38% 52%; }
+  50% { border-radius: 44% 56% 46% 54% / 60% 42% 58% 40%; }
+}
+.hyo-blob-glow {
+  position: absolute;
+  width: 160px;
+  height: 160px;
+  border-radius: 50%;
+  filter: blur(36px);
+  opacity: 0.28;
+  background: #b9c1cd;
+  z-index: 0;
+  transition: background 0.4s, opacity 0.4s;
+}
+.hyo-blob-core { position: relative; z-index: 1; }
+.hyo-blob-ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  opacity: 0;
+  z-index: 0;
+}
+/* state colours */
+.hyo-blob.idle .hyo-blob-core { width: 74px; height: 74px; background: #b9c1cd; border-radius: 50%; animation-play-state: paused; }
+.hyo-blob.idle .hyo-blob-glow { background: #b9c1cd; opacity: 0.22; }
+.hyo-blob.listening .hyo-blob-core { background: #3b6ef5; animation-duration: 4s; }
+.hyo-blob.listening .hyo-blob-glow { background: #3b6ef5; opacity: 0.42; }
+.hyo-blob.listening .hyo-blob-ring { color: #3b6ef5; animation: hyo-blob-ring 2.2s ease-out infinite; }
+.hyo-blob.thinking .hyo-blob-core { background: #7b5ce6; animation-duration: 2.6s; }
+.hyo-blob.thinking .hyo-blob-glow { background: #7b5ce6; opacity: 0.42; }
+.hyo-blob.speaking .hyo-blob-core { background: #e0932f; width: 120px; height: 120px; animation-duration: 1.7s; }
+.hyo-blob.speaking .hyo-blob-glow { background: #e0932f; opacity: 0.5; }
+.hyo-blob.speaking .hyo-blob-ring { color: #e0932f; animation: hyo-blob-ring 1.8s ease-out infinite; }
+@keyframes hyo-blob-ring {
+  0% { width: 150px; height: 150px; opacity: 0.32; }
+  100% { width: 214px; height: 214px; opacity: 0; }
+}
+
+/* --- status text --- */
+.hyo-vv-status { text-align: center; }
+.hyo-vv-state { font-size: 17px; font-weight: 600; color: var(--text-muted); }
+.hyo-vv-doing { font-size: 13px; color: var(--text-muted); margin-top: 3px; min-height: 1.2em; }
+.hyo-vv-status.listening .hyo-vv-state { color: #3b6ef5; }
+.hyo-vv-status.thinking .hyo-vv-state { color: #7b5ce6; }
+.hyo-vv-status.speaking .hyo-vv-state { color: #e0932f; }
+
+/* --- frosted on-screen overlay --- */
+.hyo-vv-overlay {
+  position: absolute;
+  inset: 14px 14px 14px 14px;
+  background: color-mix(in srgb, var(--background-primary) 72%, transparent);
+  backdrop-filter: blur(20px) saturate(1.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  border: 1px solid color-mix(in srgb, var(--background-modifier-border) 70%, transparent);
+  border-radius: 16px;
+  box-shadow: 0 16px 50px var(--background-modifier-box-shadow);
+  padding: 12px 16px 16px;
+  overflow: auto;
+  z-index: 5;
+  animation: hyo-vv-overlay-in 0.2s ease-out;
+}
+@keyframes hyo-vv-overlay-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.hyo-vv-overlay-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  position: sticky;
+  top: 0;
+}
+.hyo-vv-overlay-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: #c2892f;
+}
+.hyo-vv-overlay-close {
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 5px;
+  border-radius: 5px;
+}
+.hyo-vv-overlay-close:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.hyo-vv-overlay-card + .hyo-vv-overlay-card {
+  margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--background-modifier-border);
+}
+.hyo-vv-overlay-card > :first-child { margin-top: 0; }
+.hyo-vv-overlay-card > :last-child { margin-bottom: 0; }
+
+/* --- in-view permission prompt --- */
+.hyo-vv-perm {
+  position: absolute;
+  left: 16px; right: 16px; bottom: 16px;
+  background: var(--background-primary);
+  border: 1px solid color-mix(in srgb, #e0932f 45%, var(--background-modifier-border));
+  border-radius: 14px;
+  box-shadow: 0 12px 34px var(--background-modifier-box-shadow);
+  padding: 14px;
+  z-index: 6;
+  animation: hyo-vv-overlay-in 0.2s ease-out;
+}
+.hyo-vv-perm-h { font-size: 12px; font-weight: 700; color: #b98328; margin-bottom: 4px; }
+.hyo-vv-perm-txt { font-size: 13px; color: var(--text-normal); margin-bottom: 12px; line-height: 1.4; }
+.hyo-vv-perm-txt code { background: var(--background-modifier-hover); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+.hyo-vv-perm-btns { display: flex; gap: 8px; }
+/* Specificity bumped (button.class) to beat the global `.hyo-plugin button` reset. */
+.hyo-vv-perm-btns button.hyo-vv-perm-allow,
+.hyo-vv-perm-btns button.hyo-vv-perm-always,
+.hyo-vv-perm-btns button.hyo-vv-perm-deny {
+  flex: 1; border: none; border-radius: 8px; padding: 8px 6px; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.hyo-vv-perm-btns button.hyo-vv-perm-allow { background: var(--interactive-accent); color: var(--text-on-accent); }
+.hyo-vv-perm-btns button.hyo-vv-perm-always { background: var(--background-modifier-hover); color: var(--text-normal); }
+.hyo-vv-perm-btns button.hyo-vv-perm-deny { background: color-mix(in srgb, var(--text-error) 16%, transparent); color: var(--text-error); }
+.hyo-blob.dim .hyo-blob-core { opacity: 0.45; }
+
+/* --- back-to-voice bar (shown above the transcript when flipped open) --- */
+.hyo-vv-backbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 14px; border-bottom: 1px solid var(--background-modifier-border);
+}
+.hyo-vv-backbar a { color: var(--interactive-accent); font-size: 12px; font-weight: 600; cursor: pointer; }
+.hyo-vv-backbar span { font-size: 12px; color: var(--text-muted); }
+
+/* control-bar side buttons (transcript toggle, end) */
+.hyo-voice-side-btn { cursor: pointer; }
+.hyo-voice-side-btn.active { color: var(--interactive-accent); }
+.hyo-voice-end-btn { margin-left: auto; }
+.hyo-voice-record-btn.muted { background: var(--background-modifier-border); color: var(--text-muted); box-shadow: none; }
+
+/* voice-view top bar + new conversation */
+.hyo-vv-topbar { display: flex; justify-content: flex-end; padding: 8px 10px 0; }
+.hyo-vv-topbar button.hyo-vv-newbtn {
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-muted);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.hyo-vv-topbar button.hyo-vv-newbtn:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+
+/* "show last on screen" pill (re-summon a dismissed overlay) */
+.hyo-vv-stage button.hyo-vv-showlast {
+  border: 1px solid color-mix(in srgb, #e0932f 40%, var(--background-modifier-border));
+  background: color-mix(in srgb, #e0932f 8%, var(--background-primary));
+  color: #b98328;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.hyo-vv-stage button.hyo-vv-showlast:hover { background: color-mix(in srgb, #e0932f 14%, var(--background-primary)); }

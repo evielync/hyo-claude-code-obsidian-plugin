@@ -9,8 +9,12 @@ import { ReleaseCard } from "./ReleaseCard";
 import { ReleaseNotes } from "./ReleaseNotes";
 import { MODEL_OPTIONS } from "../models";
 import { VoiceControls } from "./VoiceControls";
+import { VoiceView, type BlobState, type VoicePermission } from "./VoiceView";
+import type { AskQuestionData } from "../hooks/useChatEngine";
 import type { useSessionManager } from "../hooks/useSessionManager";
 import { useVoiceMode } from "../hooks/useVoiceMode";
+import { parseVoiceResponse, lastSentenceBoundary } from "../voice/voice-persona";
+import { ensureVoiceAssets } from "../voice/voice-assets";
 import { useSkills, type Skill } from "../hooks/useSkills";
 import { withBundledSkills } from "../bundled-skills";
 import type HyoPlugin from "../main";
@@ -35,6 +39,36 @@ interface ChatPanelProps {
   sessionManager: ReturnType<typeof useSessionManager>;
   plugin: HyoPlugin;
   app: App;
+}
+
+// A short two-note chime so a permission ask is noticeable when she's not
+// looking at the screen. Synthesised (no asset to ship).
+function playPermissionChime() {
+  try {
+    const Ctx =
+      window.AudioContext || (window as unknown as any).webkitAudioContext;
+    const ctx = new Ctx();
+    const t0 = ctx.currentTime;
+    for (const [freq, at] of [
+      [660, 0],
+      [988, 0.15],
+    ] as [number, number][]) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, t0 + at);
+      gain.gain.linearRampToValueAtTime(0.18, t0 + at + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, t0 + at + 0.18);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t0 + at);
+      osc.stop(t0 + at + 0.2);
+    }
+    setTimeout(() => void ctx.close().catch(() => {}), 700);
+  } catch {
+    /* audio not available — no-op */
+  }
 }
 
 export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
@@ -126,16 +160,62 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
 
   // Voice mode
   const hasVoiceApiKey = !!plugin.settings.elevenLabsApiKey;
+  // Stable so the hands-free loop's callbacks don't churn every render.
+  const handleTranscript = useCallback(
+    (text: string) => sendMessage(text),
+    [sendMessage]
+  );
+  // Base URL for the bundled Silero/ORT model assets, served from the plugin
+  // folder via Obsidian's resource-path scheme (strip the cache token, keep a
+  // trailing slash so vad-web/ort can append filenames).
+  const vadAssetBase = useMemo(() => {
+    try {
+      const rel = `${plugin.manifest.dir}/vad-assets`;
+      const url = (app.vault.adapter as any).getResourcePath(rel) as string;
+      return url.split("?")[0].replace(/\/?$/, "/");
+    } catch {
+      return "";
+    }
+  }, [plugin.manifest.dir, app.vault.adapter]);
   const voiceMode = useVoiceMode({
     apiKey: plugin.settings.elevenLabsApiKey,
     voiceId: plugin.settings.voiceId,
     playbackSpeed: plugin.settings.voicePlaybackSpeed,
     isVoiceMode: activeVoiceMode,
     autoSpeak: plugin.settings.voiceAutoSpeak,
-    onTranscript: (text: string) => {
-      sendMessage(text);
-    },
+    onTranscript: handleTranscript,
+    vadAssetBase,
+    ensureAssets: useCallback(
+      () => ensureVoiceAssets(app, plugin.manifest.dir || ""),
+      [app, plugin.manifest.dir]
+    ),
   });
+
+  // Voice view UI state: whether the transcript is flipped open, and which
+  // assistant turn's on-screen overlay has been dismissed.
+  const [showTranscript, setShowTranscript] = useState(false);
+  const [dismissedScreenIdx, setDismissedScreenIdx] = useState(-1);
+  const inVoiceView = activeVoiceMode && hasVoiceApiKey;
+  const prevPermIdRef = useRef<string | null>(null);
+
+  // Start the hands-free mic loop when the voice view is open, stop when it
+  // closes. Refs so identity churn in the hook can't restart the mic each
+  // render — the effect only fires on the view opening/closing.
+  const startConvRef = useRef(voiceMode.startConversation);
+  const stopConvRef = useRef(voiceMode.stopConversation);
+  startConvRef.current = voiceMode.startConversation;
+  stopConvRef.current = voiceMode.stopConversation;
+  useEffect(() => {
+    if (!inVoiceView) return;
+    void startConvRef.current();
+    return () => stopConvRef.current();
+  }, [inVoiceView]);
+
+  // Half-duplex: the loop stays muted while Chad is generating.
+  const { setBusy: setVoiceBusy } = voiceMode;
+  useEffect(() => {
+    setVoiceBusy(activeGenerating);
+  }, [activeGenerating, setVoiceBusy]);
 
   // AI Commands seam: expose `runCommand` so an external trigger (the AI
   // Commands companion plugin) can open a new chat pre-loaded with a prompt
@@ -170,28 +250,86 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     }
   }, [activeTabId, sendMessage]);
 
-  // Auto-speak when response completes — only on genuine generation finish,
-  // not on tab switches (which also change activeGenerating)
+  // Speak Chad's reply AS IT STREAMS. On each streamed update we take the
+  // conversational text so far (with [SCREEN] detail stripped — that's shown,
+  // not spoken), and speak whatever complete sentences are new since last time.
+  // The ack ("let me check") gets spoken the instant it streams, before the
+  // tool work runs — not 30 seconds later at the end. On finish we flush the
+  // trailing bit that had no closing punctuation.
   const prevGeneratingRef = useRef(activeGenerating);
   const prevTabIdRef = useRef(activeTabId);
+  // The text we've already spoken this turn — tracked as a string (not a char
+  // offset) so it stays aligned even when the reply arrives partly streamed and
+  // partly as a completed message that REPLACES the content. We re-anchor to
+  // the current text each tick via a common-prefix match, so speech can never
+  // start mid-sentence.
+  const spokenSoFarRef = useRef("");
+  const speakTurnRef = useRef(-1);
+  const { enqueueSpeech, stopAudio } = voiceMode;
   useEffect(() => {
     const tabChanged = prevTabIdRef.current !== activeTabId;
+    const startedGenerating = !prevGeneratingRef.current && activeGenerating;
+    const finishedGenerating = prevGeneratingRef.current && !activeGenerating;
+
     if (
       !tabChanged &&
-      prevGeneratingRef.current &&
-      !activeGenerating &&
-      activeVoiceMode
+      activeVoiceMode &&
+      plugin.settings.voiceAutoSpeak
     ) {
-      const lastAssistant = [...activeMessages]
-        .reverse()
-        .find((m) => m.role === "assistant" && !m.isCompaction);
-      if (lastAssistant?.content) {
-        voiceMode.autoSpeak(lastAssistant.content);
+      // A new turn interrupts any speech still playing from the last one.
+      if (startedGenerating) {
+        stopAudio();
+        spokenSoFarRef.current = "";
+      }
+
+      // Index of the assistant message currently being spoken.
+      let idx = -1;
+      for (let i = activeMessages.length - 1; i >= 0; i--) {
+        const m = activeMessages[i];
+        if (m.role === "assistant" && !m.isCompaction) {
+          idx = i;
+          break;
+        }
+      }
+
+      if (idx !== -1) {
+        if (speakTurnRef.current !== idx) {
+          speakTurnRef.current = idx;
+          spokenSoFarRef.current = "";
+        }
+        const spoken = parseVoiceResponse(activeMessages[idx].content || "").spoken;
+        // Re-anchor: how much of the current text have we already spoken?
+        const prev = spokenSoFarRef.current;
+        const max = Math.min(prev.length, spoken.length);
+        let base = 0;
+        while (base < max && prev[base] === spoken[base]) base++;
+        const remainder = spoken.slice(base);
+        // While streaming, only speak up to the last complete sentence; on
+        // finish, flush everything that's left.
+        const cut = finishedGenerating
+          ? remainder.length
+          : lastSentenceBoundary(remainder) + 1;
+        if (cut > 0) {
+          const chunk = remainder.slice(0, cut).trim();
+          if (chunk) {
+            enqueueSpeech(chunk);
+          }
+          spokenSoFarRef.current = spoken.slice(0, base + cut);
+        }
       }
     }
+
     prevGeneratingRef.current = activeGenerating;
     prevTabIdRef.current = activeTabId;
-  }, [activeGenerating, activeVoiceMode, activeMessages, activeTabId]);
+  }, [
+    activeGenerating,
+    activeVoiceMode,
+    activeMessages,
+    activeTabId,
+    enqueueSpeech,
+    stopAudio,
+    plugin.settings.voiceAutoSpeak,
+  ]);
 
   // Stop audio when switching or closing tabs
   useEffect(() => {
@@ -614,6 +752,96 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     [slashMenuOpen, slashItems, slashSelectedIdx, selectSlashItem, handleSend]
   );
 
+  // --- Voice view derivations ---
+  // The Blob's state comes from the mic/TTS state plus whether Chad is working.
+  const blobState: BlobState =
+    voiceMode.voiceState === "speaking"
+      ? "speaking"
+      : // Chad working (incl. while a sub-agent runs) beats "listening", so the
+      // Blob shows it's busy rather than waiting for you.
+      activeGenerating || voiceMode.voiceState === "thinking"
+      ? "thinking"
+      : voiceMode.voiceState === "listening"
+      ? "listening"
+      : "idle";
+
+  const vvStateLabel =
+    blobState === "listening"
+      ? "Listening"
+      : blobState === "thinking"
+      ? "Thinking"
+      : blobState === "speaking"
+      ? "Speaking"
+      : "Ready";
+  const vvDoingLabel =
+    blobState === "listening"
+      ? "Go ahead…"
+      : blobState === "thinking"
+      ? "Working…"
+      : blobState === "speaking"
+      ? ""
+      : "Tap the mic, or just talk";
+
+  // Latest assistant turn — drives the on-screen overlay.
+  let lastAssistantIdx = -1;
+  for (let i = activeMessages.length - 1; i >= 0; i--) {
+    const m = activeMessages[i];
+    if (m.role === "assistant" && !m.isCompaction) {
+      lastAssistantIdx = i;
+      break;
+    }
+  }
+  const lastScreens =
+    inVoiceView && lastAssistantIdx >= 0
+      ? parseVoiceResponse(activeMessages[lastAssistantIdx].content || "").screens
+      : [];
+  // Dismissing hides the overlay but keeps it recoverable via a pill.
+  const screensDismissed =
+    lastScreens.length > 0 && lastAssistantIdx === dismissedScreenIdx;
+  const vvScreens = screensDismissed ? [] : lastScreens;
+
+  // Latest unresolved permission ask — surfaced in the voice view so it can't
+  // get buried while the transcript is hidden.
+  let vvPermission: VoicePermission | null = null;
+  if (inVoiceView) {
+    for (let i = activeMessages.length - 1; i >= 0 && !vvPermission; i--) {
+      const reqs = activeMessages[i].permissionRequests;
+      const pending = reqs?.find((r) => !r.resolved);
+      if (pending) {
+        const cmd = (pending.input as any)?.command;
+        vvPermission = {
+          requestId: pending.requestId,
+          description:
+            pending.toolName === "Bash" && cmd
+              ? `Chad wants to run: ${cmd}`
+              : `Chad wants to use ${pending.toolName}.`,
+        };
+      }
+    }
+  }
+
+  // Pending multiple-choice question (askQuestion is cleared to null when
+  // answered) — surface it in the voice view too.
+  let vvQuestion: AskQuestionData | null = null;
+  if (inVoiceView) {
+    for (let i = activeMessages.length - 1; i >= 0; i--) {
+      if (activeMessages[i].askQuestion) {
+        vvQuestion = activeMessages[i].askQuestion!;
+        break;
+      }
+    }
+  }
+
+  // Chime when a NEW permission ask OR question appears in voice mode — she may
+  // not be looking at the screen.
+  const attentionId = vvPermission?.requestId ?? vvQuestion?.id ?? null;
+  useEffect(() => {
+    if (attentionId && attentionId !== prevPermIdRef.current && inVoiceView) {
+      playPermissionChime();
+    }
+    prevPermIdRef.current = attentionId;
+  }, [attentionId, inVoiceView]);
+
   return (
     <div
       className={`hyo-chat-panel${dragging ? " hyo-drag-over" : ""}`}
@@ -621,19 +849,21 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <ChatTabs
-        tabs={tabs}
-        activeTabId={activeTabId}
-        onSwitch={switchTab}
-        onClose={closeTab}
-        onRename={renameTab}
-        onReorder={reorderTab}
-        pastSessions={pastSessions}
-        onOpenPastSession={openPastSession}
-        onRefreshPastSessions={refreshPastSessions}
-        onNewTab={newTab}
-        onOpenReleaseNotes={() => setShowReleaseNotes(true)}
-      />
+      {!inVoiceView && (
+        <ChatTabs
+          tabs={tabs}
+          activeTabId={activeTabId}
+          onSwitch={switchTab}
+          onClose={closeTab}
+          onRename={renameTab}
+          onReorder={reorderTab}
+          pastSessions={pastSessions}
+          onOpenPastSession={openPastSession}
+          onRefreshPastSessions={refreshPastSessions}
+          onNewTab={newTab}
+          onOpenReleaseNotes={() => setShowReleaseNotes(true)}
+        />
+      )}
 
       {showReleaseCard && (
         <ReleaseCard
@@ -648,7 +878,49 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
         <ReleaseNotes onClose={() => setShowReleaseNotes(false)} />
       )}
 
-      {activeMessages.length > 0 ? (
+      {inVoiceView && !showTranscript ? (
+        <VoiceView
+          state={blobState}
+          stateLabel={vvStateLabel}
+          doingLabel={vvDoingLabel}
+          screens={vvScreens}
+          onDismissScreens={() => setDismissedScreenIdx(lastAssistantIdx)}
+          hasHiddenScreens={screensDismissed}
+          onShowScreens={() => setDismissedScreenIdx(-1)}
+          permission={vvPermission}
+          onPermission={sendPermissionResponse}
+          question={vvQuestion}
+          onAnswer={sendQuestionAnswer}
+          onNewConversation={() => {
+            newTab();
+            toggleVoiceMode();
+          }}
+        />
+      ) : inVoiceView && showTranscript ? (
+        <>
+          <div className="hyo-vv-backbar">
+            <a role="button" onClick={() => setShowTranscript(false)}>
+              ‹ Back to voice
+            </a>
+            <span>Transcript</span>
+          </div>
+          {activeMessages.length > 0 ? (
+            <ChatMessages
+              messages={activeMessages}
+              scrollRef={scrollRef}
+              onPermissionResponse={sendPermissionResponse}
+              onQuestionAnswer={sendQuestionAnswer}
+              onRecover={() => recoverSession(activeTabId)}
+            />
+          ) : (
+            <div className="hyo-messages">
+              <div className="hyo-empty-state">
+                <p>Nothing said yet</p>
+              </div>
+            </div>
+          )}
+        </>
+      ) : activeMessages.length > 0 ? (
         <ChatMessages
           messages={activeMessages}
           scrollRef={scrollRef}
@@ -710,11 +982,19 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
             isPaused={voiceMode.isPaused}
             hasLastAudio={voiceMode.hasLastAudio}
             currentSpeed={voiceMode.currentSpeed}
-            onRecordClick={voiceMode.handleRecordClick}
+            onRecordClick={voiceMode.toggleMute}
+            micMuted={voiceMode.micMuted}
             onStop={voiceMode.stopAudio}
             onTogglePause={voiceMode.togglePause}
             onReplay={voiceMode.replay}
             onCycleSpeed={voiceMode.cycleSpeed}
+            showingTranscript={showTranscript}
+            onToggleTranscript={() => setShowTranscript((v) => !v)}
+            onEnd={() => {
+              voiceMode.stopConversation();
+              setShowTranscript(false);
+              toggleVoiceMode();
+            }}
           />
         ) : (
           <>

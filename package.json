@@ -9,7 +9,10 @@
     "release": "node esbuild.config.mjs production && echo '✓ Built. Now run: gh release create VERSION main.js manifest.json styles.css --title TITLE --notes NOTES'"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "@ricky0123/vad-web": "^0.0.30",
     "exceljs": "^4.4.0",
+    "onnxruntime-web": "^1.27.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

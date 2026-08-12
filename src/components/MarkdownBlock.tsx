@@ -1,5 +1,6 @@
 import React, { useRef, useEffect } from "react";
 import { MarkdownRenderer, Component } from "obsidian";
+import { transformScreenBlocks } from "../voice/voice-persona";
 
 interface MarkdownBlockProps {
   content: string;
@@ -32,7 +33,7 @@ export function MarkdownBlock({ content, sourcePath = "" }: MarkdownBlockProps) 
       ref.current.empty();
       MarkdownRenderer.render(
         app,
-        stripInlineThinkingTags(content),
+        transformScreenBlocks(stripInlineThinkingTags(content)),
         ref.current,
         sourcePath,
         componentRef.current

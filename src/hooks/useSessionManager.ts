@@ -1,6 +1,7 @@
 import { debug } from "../debug";
 import { useState, useCallback, useRef, useEffect } from "react";
 import { ClaudeTransport, normalizeModelId } from "../claude-transport";
+import { VOICE_PERSONA } from "../voice/voice-persona";
 import type {
   Message,
   ToolCallData,
@@ -15,6 +16,18 @@ import * as path from "path";
 
 // Re-export for convenience
 export type { PastSession };
+
+// A bare greeting opener ("hi chad", "hey", "good morning") carries no topic —
+// used to skip it when picking what to title a conversation from, so voice
+// chats started with a hello don't end up titled off the hello (or untitled).
+function isTrivialOpener(text: string): boolean {
+  const s = text.trim().toLowerCase().replace(/[.!,?'"]/g, "");
+  if (!s) return true;
+  if (s.split(/\s+/).length > 6) return false;
+  return /^(hi|hey|hello|hiya|heya|yo|sup|hola|morning|good morning|good afternoon|good evening|hey there)\b/.test(
+    s
+  );
+}
 
 // ------- types -------
 
@@ -428,6 +441,12 @@ export function useSessionManager(options: SessionManagerOptions) {
         // is tracked from individual assistant events (see below) since result.usage
         // aggregates across multiple API calls within a turn.
         if (event.type === "result") {
+          // A sub-agent finishing emits its own `result` — that must NOT end the
+          // main turn (which is still running the delegation). Otherwise the
+          // main tab flips to "not generating" mid-turn: in voice mode the mic
+          // un-suspends and the Blob drops to "Listening" while Chad's still
+          // working. Only the main-chain result ends the turn.
+          if (event.isSidechain || event.parent_tool_use_id) return;
           updateTabLastAssistant(tabId, () => ({ streaming: false }));
           const mu: any = event.modelUsage || {};
           const firstModel: any = Object.values(mu)[0];
@@ -449,13 +468,30 @@ export function useSessionManager(options: SessionManagerOptions) {
           if (options.autoGenerateTitles) {
             const currentTab = stateRef.current.tabs.find((t) => t.id === tabId);
             if (currentTab && currentTab.messages.length >= 2) {
-              const firstUser = currentTab.messages.find((m) => m.role === "user" && !m.isCompaction);
-              const firstAssistant = currentTab.messages.find((m) => m.role === "assistant" && !m.isCompaction);
+              const msgs = currentTab.messages;
+              const textOf = (m: Message) =>
+                m.displayText ||
+                (typeof m.content === "string" ? m.content : "");
+              // Title from the first user message with real substance — skip a
+              // "hi chad" opener so the title reflects the actual topic. If only
+              // a greeting exists so far, wait for the next turn.
+              const firstUser =
+                msgs.find(
+                  (m) =>
+                    m.role === "user" &&
+                    !m.isCompaction &&
+                    !isTrivialOpener(textOf(m))
+                ) || undefined;
+              const userIdx = firstUser ? msgs.indexOf(firstUser) : -1;
+              const firstAssistant =
+                userIdx >= 0
+                  ? msgs
+                      .slice(userIdx + 1)
+                      .find((m) => m.role === "assistant" && !m.isCompaction)
+                  : undefined;
 
               if (firstUser && firstAssistant) {
-                const userText =
-                  firstUser.displayText ||
-                  (typeof firstUser.content === "string" ? firstUser.content : "");
+                const userText = textOf(firstUser);
                 const truncatedTitle =
                   userText.slice(0, 40) + (userText.length > 40 ? "..." : "");
 
@@ -499,6 +535,12 @@ export function useSessionManager(options: SessionManagerOptions) {
 
         // User event (tool results)
         if (event.type === "user") {
+          // A sub-agent's messages stream in as sidechain user events — and the
+          // FIRST one is its user message, which is the delegation prompt itself.
+          // Without this gate that prompt lands as a text block in the main reply
+          // and voice reads the raw instructions aloud. The main chain's own tool
+          // results are NOT sidechain, so they still process normally below.
+          if (event.isSidechain || event.parent_tool_use_id) return;
           const contentArr = event.message?.content || [];
           processContentBlocks(contentArr, ss, "user");
           updateTabLastAssistant(tabId, () => buildSnapshot(ss));
@@ -527,9 +569,16 @@ export function useSessionManager(options: SessionManagerOptions) {
               }));
             }
           }
-          const contentArr = event.message?.content || [];
-          processContentBlocks(contentArr, ss, "assistant");
-          updateTabLastAssistant(tabId, () => buildSnapshot(ss));
+          // A sub-agent's completed messages (its narration and final report)
+          // arrive as sidechain assistant events. Do NOT merge them into the
+          // main reply — otherwise voice reads the agent's raw output aloud and
+          // it clutters the transcript. The Agent tool block + its result still
+          // show the work.
+          if (!isSidechain) {
+            const contentArr = event.message?.content || [];
+            processContentBlocks(contentArr, ss, "assistant");
+            updateTabLastAssistant(tabId, () => buildSnapshot(ss));
+          }
 
           // Eagerly detect AskUserQuestion from the complete assistant event.
           // The control_request arrives AFTER this, so set the question UI now.
@@ -611,7 +660,14 @@ export function useSessionManager(options: SessionManagerOptions) {
           if (evt.type === "content_block_delta") {
             const delta = evt.delta;
 
-            if (delta?.type === "text_delta" && delta.text) {
+            // A sub-agent's own narration and final report stream through here as
+            // sidechain text. Keep it OUT of the main reply — otherwise voice
+            // mode reads the agent's raw output aloud (and it clutters the
+            // transcript). The agent's tool calls still render.
+            const isSidechain =
+              event.isSidechain || event.parent_tool_use_id;
+
+            if (delta?.type === "text_delta" && delta.text && !isSidechain) {
               if (ss.toolResultSinceLastText && ss.orderedBlocks.length > 0)
                 ss.turnIndex++;
               const existing = ss.orderedBlocks.find(
@@ -841,6 +897,10 @@ export function useSessionManager(options: SessionManagerOptions) {
           sessionId: cliSessionId || undefined,
           resume: !!cliSessionId,
           maxOutputTokens: options.maxOutputTokens,
+          // Voice conversation mode: append the voice persona so Chad speaks for
+          // listening. toggleVoiceMode kills the transport, so the next spawn
+          // (here) picks up or drops the persona and --resumes the same session.
+          appendSystemPrompt: currentTab?.voiceMode ? VOICE_PERSONA : undefined,
           onMessage: makeProcessEvent(tabId),
           onError: (error) => console.error("[hyo] CLI error:", error),
           onClose: (code) => {
@@ -993,14 +1053,21 @@ export function useSessionManager(options: SessionManagerOptions) {
   }, []);
 
   const toggleVoiceMode = useCallback(() => {
-    setState((prev) => ({
-      ...prev,
-      tabs: prev.tabs.map((tab) =>
-        tab.id === prev.activeTabId
-          ? { ...tab, voiceMode: !tab.voiceMode }
-          : tab
-      ),
-    }));
+    // Entering/leaving voice mode changes the system prompt (the voice persona
+    // is passed via --append-system-prompt at spawn). Kill the current
+    // transport so the next sendMessage respawns with the persona attached or
+    // dropped; --resume against the tab's cliSessionId keeps the conversation.
+    setState((prev) => {
+      const tabId = prev.activeTabId;
+      transportsRef.current[tabId]?.stop();
+      delete transportsRef.current[tabId];
+      return {
+        ...prev,
+        tabs: prev.tabs.map((tab) =>
+          tab.id === tabId ? { ...tab, voiceMode: !tab.voiceMode } : tab
+        ),
+      };
+    });
   }, []);
 
   const setTabAgent = useCallback((agent: string) => {
