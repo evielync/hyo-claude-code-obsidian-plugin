@@ -595,8 +595,10 @@ button.hyo-ask-opt {
   font-size: 13px;
   text-align: left;
   width: 100%;
+  min-width: 0;
   transition: all 0.1s ease;
   height: auto;
+  white-space: normal;
 }
 
 button.hyo-ask-opt:hover {
@@ -611,6 +613,9 @@ button.hyo-ask-opt:active {
 .hyo-ask-opt-label {
   font-weight: 500;
   line-height: 1.35;
+  width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .hyo-ask-opt-desc {
@@ -618,6 +623,9 @@ button.hyo-ask-opt:active {
   color: var(--text-muted);
   margin-top: 2px;
   line-height: 1.4;
+  width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* Divider */

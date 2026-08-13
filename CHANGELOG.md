@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.27
+
+**The one where the question cards stop cutting themselves off**
+
+- **Longer answer options now wrap instead of running off the edge.** When Hyo asks you a question and lays out a few choices to pick from, options with a bit more text used to get chopped off at the side so you couldn't read the whole thing. Now they wrap to fit, and you can see every option in full.
+
 ## 0.3.26
 
 **The one where we add real-time, two-way voice**
