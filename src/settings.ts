@@ -25,6 +25,18 @@ export interface HyoSettings {
   voiceName: string;
   voicePlaybackSpeed: number;
   voiceAutoSpeak: boolean;
+  // Task mode — per-conversation metadata, keyed by cliSessionId. Everything
+  // else about a task (its state) is derived live; only these few things need
+  // to persist across reloads. See hyo-task-mode-build-spec.
+  tasks: Record<string, TaskMeta>;
+}
+
+// Persisted per-task metadata. Keyed by cliSessionId in settings.tasks.
+export interface TaskMeta {
+  pinned?: boolean; // floats to the top of the board
+  closed?: boolean; // off the board, into the Closed filter
+  lastActive?: string; // ISO timestamp — recency sort, updated on any turn
+  title?: string; // cached so closed/background tasks have a name without parsing
 }
 
 export const DEFAULT_SETTINGS: HyoSettings = {
@@ -46,6 +58,7 @@ export const DEFAULT_SETTINGS: HyoSettings = {
   voiceName: "",
   voicePlaybackSpeed: 1.25,
   voiceAutoSpeak: true,
+  tasks: {},
 };
 
 export function dispatchSettingsChanged(): void {

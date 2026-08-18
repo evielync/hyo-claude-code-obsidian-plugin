@@ -52,6 +52,10 @@ export interface TabSession {
   inputTokens: number;
   contextWindow?: number;
   voiceMode: boolean;
+  // Task mode: set true when a turn finishes on a tab that isn't the one being
+  // viewed, cleared when the task is opened. Makes a background/finished result
+  // read as "waiting for you" on the board. See hyo-task-mode-build-spec.
+  hasUnseenReply?: boolean;
 }
 
 interface SessionState {
@@ -459,6 +463,11 @@ export function useSessionManager(options: SessionManagerOptions) {
                     ...tab,
                     generating: false,
                     ...(contextWindow ? { contextWindow } : {}),
+                    // Task mode: a turn that finished on a tab the user isn't
+                    // looking at is a result waiting for them.
+                    ...(prev.activeTabId !== tabId
+                      ? { hasUnseenReply: true }
+                      : {}),
                   }
                 : tab
             ),
@@ -775,7 +784,14 @@ export function useSessionManager(options: SessionManagerOptions) {
   }, []);
 
   const switchTab = useCallback((id: string) => {
-    setState((prev) => ({ ...prev, activeTabId: id }));
+    setState((prev) => ({
+      ...prev,
+      activeTabId: id,
+      // Opening a task clears its "unseen reply" flag — you've now seen it.
+      tabs: prev.tabs.map((t) =>
+        t.id === id && t.hasUnseenReply ? { ...t, hasUnseenReply: false } : t
+      ),
+    }));
     scrollRef.current.nearBottom = true;
   }, []);
 
@@ -798,6 +814,20 @@ export function useSessionManager(options: SessionManagerOptions) {
       };
     });
   }, [options.cwd]); // refreshPastSessions intentionally omitted — declared later, referenced via closure
+
+  // Rename a conversation that isn't open as a tab (from the task list). Writes
+  // the custom title to the on-disk metadata and refreshes the list. If it does
+  // happen to be open, update the tab's title too so they stay in sync.
+  const renamePastSession = useCallback((sessionId: string, title: string) => {
+    saveCustomTitle(options.cwd, sessionId, title);
+    setState((prev) => ({
+      ...prev,
+      tabs: prev.tabs.map((t) =>
+        t.cliSessionId === sessionId ? { ...t, title } : t
+      ),
+    }));
+    setTimeout(() => refreshPastSessions(), 0);
+  }, [options.cwd]);
 
   // Move a tab to sit where another tab currently is. Dropping onto the right
   // half of the target lands after it, which is what makes dragging a tab to
@@ -1240,6 +1270,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     closeTab,
     switchTab,
     renameTab,
+    renamePastSession,
     reorderTab,
     setTabModel,
     setTabEffort,

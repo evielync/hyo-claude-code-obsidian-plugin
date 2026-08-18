@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+**The one where history gets a proper upgrade**
+
+- **History is a full screen now, not a cramped dropdown.** Click the clock and every past conversation opens up in front of you, grouped by day and newest first, each with a peek at the last thing that was said so you know what it is without opening it.
+- **See what still needs you.** Every conversation shows where it's up to: needs attention when it's asked you something, waiting on your response, working right now, or done. Filter down to just the ones waiting on you.
+- **Pin the ones that matter.** Keep the conversations you come back to at the top so you're not hunting for them.
+- **Tidy as you go.** Mark a conversation done to clear it out of the way (it stays in your history), and double-click any title to rename it.
+
 ## 0.3.27
 
 **The one where the question cards stop cutting themselves off**

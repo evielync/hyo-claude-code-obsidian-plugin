@@ -3,7 +3,9 @@ import type { App } from "obsidian";
 import { Notice } from "obsidian";
 import { ChatMessages } from "./ChatMessages";
 import { ChatTabs } from "./ChatTabs";
-import { SessionDropdown } from "./SessionDropdown";
+import { TaskScreen } from "./TaskScreen";
+import type { BoardTask } from "../task-state";
+import type { TaskMeta } from "../settings";
 import { HyoStatusBar } from "./HyoStatusBar";
 import { ReleaseCard } from "./ReleaseCard";
 import { ReleaseNotes } from "./ReleaseNotes";
@@ -114,6 +116,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     closeTab,
     switchTab,
     renameTab,
+    renamePastSession,
     reorderTab,
     setTabModel,
     setTabEffort,
@@ -131,6 +134,89 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     refreshPastSessions,
     scrollRef,
   } = sessionManager;
+
+  // ---- Task mode (the History screen) ----
+  // The clock button opens a full screen you scroll; opening a task drops back
+  // into the conversation. No Chat/Tasks toggle — the top-bar buttons switch it.
+  const [viewMode, setViewMode] = useState<"chat" | "tasks">("chat");
+  const [, setTaskRev] = useState(0);
+
+  const updateTaskMeta = useCallback(
+    (key: string, patch: Partial<TaskMeta>) => {
+      const current = plugin.settings.tasks || {};
+      plugin.settings.tasks = {
+        ...current,
+        [key]: { ...(current[key] || {}), ...patch },
+      };
+      plugin.saveSettings();
+      setTaskRev((r) => r + 1);
+    },
+    [plugin]
+  );
+
+  // Open a task: switch to its tab if open, otherwise resume it as a new tab.
+  // Opening a closed conversation reopens it (clears the closed flag).
+  const handleOpenTask = useCallback(
+    (task: BoardTask) => {
+      const key = task.cliSessionId || task.key;
+      if (task.closed) updateTaskMeta(key, { closed: false });
+      if (task.tabId) switchTab(task.tabId);
+      else if (task.past) openPastSession(task.past);
+      setViewMode("chat");
+    },
+    [switchTab, openPastSession, updateTaskMeta]
+  );
+
+  const handleNewTask = useCallback(() => {
+    newTab();
+    setViewMode("chat");
+  }, [newTab]);
+
+  const toggleTaskScreen = useCallback(() => {
+    setViewMode((v) => {
+      if (v === "chat") refreshPastSessions();
+      return v === "chat" ? "tasks" : "chat";
+    });
+  }, [refreshPastSessions]);
+
+  // In task mode, clicking a tab in the top bar takes you into that conversation.
+  const switchToChatTab = useCallback(
+    (id: string) => {
+      switchTab(id);
+      setViewMode("chat");
+    },
+    [switchTab]
+  );
+
+  // Close: done, nothing needed either way. Stays in the list, marked Closed.
+  // The conversation itself is left open as a tab if it is one — closing is a
+  // status, not a teardown.
+  const handleCloseTask = useCallback(
+    (task: BoardTask) => {
+      const key = task.cliSessionId || task.key;
+      updateTaskMeta(key, {
+        closed: true,
+        lastActive: new Date().toISOString(),
+      });
+    },
+    [updateTaskMeta]
+  );
+
+  const handleTogglePin = useCallback(
+    (task: BoardTask) => {
+      const key = task.cliSessionId || task.key;
+      updateTaskMeta(key, { pinned: !task.pinned });
+    },
+    [updateTaskMeta]
+  );
+
+  const handleRenameTask = useCallback(
+    (task: BoardTask, title: string) => {
+      if (task.tabId) renameTab(task.tabId, title);
+      else if (task.cliSessionId) renamePastSession(task.cliSessionId, title);
+    },
+    [renameTab, renamePastSession]
+  );
 
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
   const inputValue = inputValues[activeTabId] ?? "";
@@ -842,6 +928,42 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     prevPermIdRef.current = attentionId;
   }, [attentionId, inVoiceView]);
 
+  // The History screen is a full-panel view you scroll, reached from the clock
+  // button. Side-panel width rules out split view, so opening a task drops back
+  // into the conversation.
+  if (viewMode === "tasks" && !inVoiceView) {
+    return (
+      <div className="hyo-chat-panel">
+        <ChatTabs
+          tabs={tabs}
+          activeTabId={activeTabId}
+          onSwitch={switchToChatTab}
+          onClose={closeTab}
+          onRename={renameTab}
+          onReorder={reorderTab}
+          pastSessions={pastSessions}
+          tasks={plugin.settings.tasks || {}}
+          onOpenTaskScreen={toggleTaskScreen}
+          taskMode
+          onRefreshPastSessions={refreshPastSessions}
+          onNewTab={handleNewTask}
+        />
+        <TaskScreen
+          tabs={tabs}
+          pastSessions={pastSessions}
+          tasks={plugin.settings.tasks || {}}
+          onOpenTask={handleOpenTask}
+          onCloseTask={handleCloseTask}
+          onTogglePin={handleTogglePin}
+          onRenameTask={handleRenameTask}
+        />
+        {showReleaseNotes && (
+          <ReleaseNotes onClose={() => setShowReleaseNotes(false)} />
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       className={`hyo-chat-panel${dragging ? " hyo-drag-over" : ""}`}
@@ -858,10 +980,10 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           onRename={renameTab}
           onReorder={reorderTab}
           pastSessions={pastSessions}
-          onOpenPastSession={openPastSession}
+          tasks={plugin.settings.tasks || {}}
+          onOpenTaskScreen={toggleTaskScreen}
           onRefreshPastSessions={refreshPastSessions}
           onNewTab={newTab}
-          onOpenReleaseNotes={() => setShowReleaseNotes(true)}
         />
       )}
 

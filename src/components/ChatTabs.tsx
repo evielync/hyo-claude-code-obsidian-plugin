@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from "react";
 import type { TabSession } from "../hooks/useSessionManager";
 import type { PastSession } from "../session-parser";
-import { SessionDropdown } from "./SessionDropdown";
+import type { TaskMeta } from "../settings";
+import { buildTaskList } from "../task-state";
 
 // A tab is "waiting on you" when Claude is blocked on the user: an unresolved
 // permission request, an open question, or a plan awaiting approval. These are
@@ -25,10 +26,11 @@ interface ChatTabsProps {
   onRename: (id: string, title: string) => void;
   onReorder: (draggedId: string, targetId: string, after: boolean) => void;
   pastSessions: PastSession[];
-  onOpenPastSession: (session: PastSession) => void;
+  tasks: Record<string, TaskMeta>;
+  onOpenTaskScreen: () => void;
+  taskMode?: boolean;
   onRefreshPastSessions: () => void;
   onNewTab: () => void;
-  onOpenReleaseNotes: () => void;
 }
 
 export function ChatTabs({
@@ -39,11 +41,17 @@ export function ChatTabs({
   onRename,
   onReorder,
   pastSessions,
-  onOpenPastSession,
+  tasks,
+  onOpenTaskScreen,
+  taskMode,
   onRefreshPastSessions,
   onNewTab,
-  onOpenReleaseNotes,
 }: ChatTabsProps) {
+  // Badge only the loud state — something is actually blocked on you. Waiting-on-
+  // response is a backlog, not an alert, so it doesn't earn a badge.
+  const needsYouCount = buildTaskList(tabs, pastSessions, tasks).filter(
+    (t) => t.state === "needs-attention"
+  ).length;
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -196,12 +204,27 @@ export function ChatTabs({
       </div>
 
       <div className="hyo-tabs-actions">
-        <SessionDropdown
-          pastSessions={pastSessions}
-          onOpen={onOpenPastSession}
-          onRefresh={onRefreshPastSessions}
-          onOpenReleaseNotes={onOpenReleaseNotes}
-        />
+        <button
+          className="hyo-action-btn hyo-history-btn"
+          onClick={onOpenTaskScreen}
+          title={taskMode ? "Back to conversation" : "History — manage your conversations as tasks"}
+        >
+          {taskMode ? (
+            // Chat bubble — click to return to the conversation.
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 9.5a2 2 0 0 1-2 2H6l-3.5 2.5V4a2 2 0 0 1 2-2h7.5a2 2 0 0 1 2 2z" />
+            </svg>
+          ) : (
+            // Clock — click to open history.
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <circle cx="8" cy="8" r="6" />
+              <path d="M8 5v3l2 2" />
+            </svg>
+          )}
+          {!taskMode && needsYouCount > 0 && (
+            <span className="hyo-history-badge">{needsYouCount}</span>
+          )}
+        </button>
         <button
           className="hyo-action-btn"
           onClick={onNewTab}

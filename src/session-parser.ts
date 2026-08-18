@@ -8,6 +8,10 @@ export interface PastSession {
   title: string;
   date: Date;
   size: number;
+  // Role of the last real message in the conversation.
+  lastRole?: "user" | "assistant" | null;
+  // A short peek at the last message, shown on the task card.
+  lastSnippet?: string;
 }
 
 // Match Claude Code's project directory hashing exactly.
@@ -184,20 +188,85 @@ export function listPastSessions(cwd: string): PastSession[] {
   }
 
   allEntries.sort((a, b) => b.stat.mtime.getTime() - a.stat.mtime.getTime());
-  const entries = allEntries.slice(0, 50);
+  // Fetch a healthy window; the task list paginates this with "Load more".
+  const entries = allEntries.slice(0, 150);
 
   return entries.map((f) => {
     const sessionId = f.name.replace(".jsonl", "");
     const customTitle = getCustomTitle(cwd, sessionId);
     const title = customTitle || extractTitle(f.fullPath) || "Untitled";
 
+    const last = extractLastMessage(f.fullPath);
     return {
       id: sessionId,
       title,
       date: f.stat.mtime,
       size: f.stat.size,
+      lastRole: last.role,
+      lastSnippet: last.snippet,
     };
   });
+}
+
+// Read the last real message from a session file — its role and a short text
+// peek. "Real" means an actual user or assistant message; tool calls and tool
+// results are skipped. The peek is shown on the task card.
+function extractLastMessage(filePath: string): {
+  role: "user" | "assistant" | null;
+  snippet: string;
+} {
+  try {
+    const stat = fs.statSync(filePath);
+    const readLen = Math.min(stat.size, 16384);
+    const fd = fs.openSync(filePath, "r");
+    const buf = Buffer.alloc(readLen);
+    fs.readSync(fd, buf, 0, readLen, stat.size - readLen);
+    fs.closeSync(fd);
+
+    const lines = buf.toString("utf8").split("\n").filter((l) => l.trim());
+    for (let i = lines.length - 1; i >= 0; i--) {
+      let d: any;
+      try {
+        d = JSON.parse(lines[i]);
+      } catch {
+        continue; // partial first line from the tail read
+      }
+      const content = d?.message?.content;
+      const textOf = (): string => {
+        if (Array.isArray(content)) {
+          const t = content.find((c: any) => c.type === "text" && c.text?.trim());
+          return t ? String(t.text) : "";
+        }
+        return typeof content === "string" ? content : "";
+      };
+      if (d?.type === "assistant") {
+        const txt = textOf();
+        if (txt.trim()) return { role: "assistant", snippet: snip(txt) };
+      } else if (d?.type === "user") {
+        const isToolResult =
+          Array.isArray(content) &&
+          content.every((c: any) => c.type === "tool_result");
+        if (!isToolResult) {
+          const txt = textOf().replace(/<file\s+name="[^"]+">[\s\S]*?<\/file>/g, "");
+          if (txt.trim()) return { role: "user", snippet: snip(txt) };
+        }
+      }
+    }
+  } catch {
+    // fall through
+  }
+  return { role: null, snippet: "" };
+}
+
+function snip(text: string): string {
+  const line = text
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
+    .replace(/[#*`>_]/g, "")
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  if (!line) return "";
+  return line.length > 100 ? line.slice(0, 98).trimEnd() + "…" : line;
 }
 
 export interface HistoryMessage {
@@ -455,6 +524,29 @@ function extractTitle(filePath: string): string | null {
           } else if (typeof content === "string") {
             return content.slice(0, 60).replace(/\n/g, " ").trim();
           }
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    // Fallback: some sessions open with heavy pasted context that leaves no
+    // usable user title. Use the first assistant text line instead.
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const d = JSON.parse(line);
+        if (d.type === "assistant") {
+          const content = d.message?.content;
+          let t = "";
+          if (Array.isArray(content)) {
+            const b = content.find((c: any) => c.type === "text" && c.text?.trim());
+            if (b) t = String(b.text);
+          } else if (typeof content === "string") {
+            t = content;
+          }
+          t = t.replace(/^#+\s*/gm, "").trim();
+          if (t) return t.slice(0, 60).replace(/\n/g, " ").trim();
         }
       } catch {
         continue;

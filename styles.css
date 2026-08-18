@@ -2588,3 +2588,118 @@ button.hyo-ask-send:disabled {
   cursor: pointer;
 }
 .hyo-vv-stage button.hyo-vv-showlast:hover { background: color-mix(in srgb, #e0932f 14%, var(--background-primary)); }
+
+/* ============================================================
+   History as a full task screen. Shares the chat top bar; the
+   clock button toggles chat <-> this view. Premium list feel:
+   soft-shadowed cards, no hard borders, sticky day headers.
+   ============================================================ */
+
+.hyo-history-btn { position: relative; }
+.hyo-history-btn-active { background: var(--background-modifier-hover); color: var(--interactive-accent); border-radius: 6px; }
+.hyo-history-badge {
+  position: absolute; top: -3px; right: -4px;
+  min-width: 13px; height: 13px; padding: 0 3px; border-radius: 7px;
+  background: var(--interactive-accent); color: var(--text-on-accent, #fff);
+  font-size: 8.5px; font-weight: 700; line-height: 13px; text-align: center;
+}
+
+.hyo-ts-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--background-primary-alt); }
+
+/* Filters */
+.hyo-ts-filters {
+  display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;
+  padding: 9px 12px; border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-primary-alt);
+}
+.hyo-ts-filters::-webkit-scrollbar { display: none; }
+.hyo-ts-filter {
+  flex: none; display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; font-weight: 500; white-space: nowrap; color: var(--text-muted);
+  background: transparent; border: 1px solid var(--background-modifier-border);
+  border-radius: 999px; padding: 4px 12px; cursor: pointer;
+}
+.hyo-ts-filter:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+.hyo-ts-filter-on { background: var(--interactive-accent); border-color: var(--interactive-accent); color: var(--text-on-accent, #fff); }
+.hyo-ts-filter-count { font-size: 10px; font-weight: 700; opacity: .75; }
+.hyo-ts-filter-empty { opacity: .5; }
+.hyo-ts-filter-empty.hyo-ts-filter-on { opacity: 1; }
+
+.hyo-ts-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 12px 14px; }
+.hyo-ts-empty { padding: 44px 12px; text-align: center; color: var(--text-faint); font-size: 12.5px; }
+
+/* Sticky, legible day headers */
+.hyo-ts-group-block { margin-bottom: 2px; }
+.hyo-ts-group {
+  position: sticky; top: 0; z-index: 2;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-normal); opacity: .85;
+  background: var(--background-primary-alt);
+  padding: 12px 2px 7px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  margin-bottom: 8px;
+}
+
+/* Premium card: no border, soft shadow, sits above the cream. */
+.hyo-ts-card {
+  position: relative;
+  background: var(--background-primary);
+  border-radius: 12px;
+  padding: 13px 14px; margin-bottom: 9px;
+  box-shadow: 0 1px 2px rgba(40,30,20,.05), 0 3px 10px rgba(40,30,20,.05);
+  cursor: pointer; transition: box-shadow .14s, background .14s;
+}
+.hyo-ts-card:hover { background: var(--background-modifier-hover); box-shadow: 0 2px 4px rgba(40,30,20,.07), 0 6px 18px rgba(40,30,20,.08); }
+.theme-dark .hyo-ts-card { box-shadow: 0 1px 2px rgba(0,0,0,.25); }
+.theme-dark .hyo-ts-card:hover { box-shadow: 0 3px 12px rgba(0,0,0,.35); }
+.hyo-ts-card.hyo-ts-closed { opacity: .55; }
+
+.hyo-ts-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.hyo-ts-title { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--text-normal); line-height: 1.3; }
+.hyo-ts-pin-mark { flex: none; display: inline-flex; color: var(--interactive-accent); }
+.hyo-ts-title-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hyo-ts-rename {
+  font-size: 13.5px; font-weight: 600; color: var(--text-normal);
+  background: var(--background-primary-alt);
+  border: 1px solid var(--interactive-accent); border-radius: 6px;
+  padding: 2px 6px; width: 100%; outline: none;
+}
+
+/* Chips: attention = red (loud), response = soft terracotta (backlog). */
+.hyo-ts-pill {
+  flex: none; display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+}
+.hyo-ts-pill-needs-attention { background: #D64B3F; color: #fff; }
+.hyo-ts-pill-needs-response { background: color-mix(in srgb, var(--interactive-accent) 13%, var(--background-primary)); color: color-mix(in srgb, var(--interactive-accent) 82%, var(--text-normal)); }
+.hyo-ts-pill-working { background: color-mix(in srgb, var(--color-green) 18%, var(--background-primary)); color: var(--color-green); }
+.hyo-ts-pill-closed { background: var(--background-modifier-hover); color: var(--text-muted); }
+.hyo-ts-livedot { width: 5px; height: 5px; border-radius: 50%; background: var(--color-green); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--color-green) 25%, transparent); }
+
+.hyo-ts-peek { font-size: 12px; color: var(--text-muted); margin-top: 6px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.hyo-ts-card-foot { display: flex; align-items: center; margin-top: 9px; }
+.hyo-ts-time { font-size: 10.5px; color: var(--text-faint); display: inline-flex; align-items: center; gap: 6px; }
+.hyo-ts-openmark { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--interactive-accent); }
+
+/* Icon actions, absolute top-right so hover never resizes the card. */
+.hyo-ts-actions { position: absolute; top: 10px; right: 11px; display: none; align-items: center; gap: 5px; }
+.hyo-ts-card:hover .hyo-ts-actions { display: inline-flex; }
+.hyo-ts-card:hover .hyo-ts-pill { visibility: hidden; }
+.hyo-ts-act {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; padding: 0; color: var(--text-muted);
+  background: var(--background-primary-alt);
+  border: 1px solid var(--background-modifier-border); border-radius: 8px; cursor: pointer;
+}
+.hyo-ts-act:hover { background: var(--background-modifier-hover); color: var(--text-normal); border-color: var(--interactive-accent); }
+.hyo-ts-act-on { color: var(--interactive-accent); border-color: var(--interactive-accent); }
+
+.hyo-ts-loadmore {
+  display: block; margin: 8px auto 6px; padding: 8px 18px;
+  font-size: 12px; font-weight: 500; color: var(--text-muted);
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border); border-radius: 8px; cursor: pointer;
+  box-shadow: 0 1px 2px rgba(40,30,20,.05);
+}
+.hyo-ts-loadmore:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
