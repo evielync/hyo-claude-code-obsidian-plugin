@@ -117,6 +117,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     switchTab,
     renameTab,
     renamePastSession,
+    setTaskMeta,
     reorderTab,
     setTabModel,
     setTabEffort,
@@ -139,32 +140,35 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
   // The clock button opens a full screen you scroll; opening a task drops back
   // into the conversation. No Chat/Tasks toggle — the top-bar buttons switch it.
   const [viewMode, setViewMode] = useState<"chat" | "tasks">("chat");
-  const [, setTaskRev] = useState(0);
 
-  const updateTaskMeta = useCallback(
-    (key: string, patch: Partial<TaskMeta>) => {
-      const current = plugin.settings.tasks || {};
-      plugin.settings.tasks = {
-        ...current,
-        [key]: { ...(current[key] || {}), ...patch },
+  // Pinned / closed now live in the shared session metadata (not the plugin's
+  // local data.json), so the state is the same on every device. The map
+  // buildTaskList wants is derived from the loaded sessions; writes go through
+  // the session manager, which persists to that metadata and refreshes.
+  const taskMeta = useMemo(() => {
+    const m: Record<string, TaskMeta> = {};
+    for (const s of pastSessions) {
+      m[s.id] = {
+        pinned: s.pinned,
+        closed: s.closed,
+        lastActive: s.lastActiveMeta,
+        title: s.title,
       };
-      plugin.saveSettings();
-      setTaskRev((r) => r + 1);
-    },
-    [plugin]
-  );
+    }
+    return m;
+  }, [pastSessions]);
 
   // Open a task: switch to its tab if open, otherwise resume it as a new tab.
   // Opening a closed conversation reopens it (clears the closed flag).
   const handleOpenTask = useCallback(
     (task: BoardTask) => {
-      const key = task.cliSessionId || task.key;
-      if (task.closed) updateTaskMeta(key, { closed: false });
+      if (task.closed && task.cliSessionId)
+        setTaskMeta(task.cliSessionId, { closed: false });
       if (task.tabId) switchTab(task.tabId);
       else if (task.past) openPastSession(task.past);
       setViewMode("chat");
     },
-    [switchTab, openPastSession, updateTaskMeta]
+    [switchTab, openPastSession, setTaskMeta]
   );
 
   const handleNewTask = useCallback(() => {
@@ -189,25 +193,23 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
   );
 
   // Close: done, nothing needed either way. Stays in the list, marked Closed.
-  // The conversation itself is left open as a tab if it is one — closing is a
-  // status, not a teardown.
   const handleCloseTask = useCallback(
     (task: BoardTask) => {
-      const key = task.cliSessionId || task.key;
-      updateTaskMeta(key, {
-        closed: true,
-        lastActive: new Date().toISOString(),
-      });
+      if (task.cliSessionId)
+        setTaskMeta(task.cliSessionId, {
+          closed: true,
+          lastActive: new Date().toISOString(),
+        });
     },
-    [updateTaskMeta]
+    [setTaskMeta]
   );
 
   const handleTogglePin = useCallback(
     (task: BoardTask) => {
-      const key = task.cliSessionId || task.key;
-      updateTaskMeta(key, { pinned: !task.pinned });
+      if (task.cliSessionId)
+        setTaskMeta(task.cliSessionId, { pinned: !task.pinned });
     },
-    [updateTaskMeta]
+    [setTaskMeta]
   );
 
   const handleRenameTask = useCallback(
@@ -942,7 +944,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           onRename={renameTab}
           onReorder={reorderTab}
           pastSessions={pastSessions}
-          tasks={plugin.settings.tasks || {}}
+          tasks={taskMeta}
           onOpenTaskScreen={toggleTaskScreen}
           taskMode
           onRefreshPastSessions={refreshPastSessions}
@@ -951,7 +953,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
         <TaskScreen
           tabs={tabs}
           pastSessions={pastSessions}
-          tasks={plugin.settings.tasks || {}}
+          tasks={taskMeta}
           onOpenTask={handleOpenTask}
           onCloseTask={handleCloseTask}
           onTogglePin={handleTogglePin}
@@ -980,7 +982,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           onRename={renameTab}
           onReorder={reorderTab}
           pastSessions={pastSessions}
-          tasks={plugin.settings.tasks || {}}
+          tasks={taskMeta}
           onOpenTaskScreen={toggleTaskScreen}
           onRefreshPastSessions={refreshPastSessions}
           onNewTab={newTab}

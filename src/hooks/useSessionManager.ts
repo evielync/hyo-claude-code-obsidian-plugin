@@ -9,7 +9,7 @@ import type {
   AskQuestionData,
   PlanReviewData,
 } from "./useChatEngine";
-import { listPastSessions, loadSessionHistory, saveCustomTitle, type PastSession, getProjectDir } from "../session-parser";
+import { listPastSessions, loadSessionHistory, saveCustomTitle, setTaskMeta as persistTaskMeta, type PastSession, getProjectDir } from "../session-parser";
 import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
 import { generateConversationTitle } from "../title-generator";
 import * as path from "path";
@@ -829,6 +829,17 @@ export function useSessionManager(options: SessionManagerOptions) {
     setTimeout(() => refreshPastSessions(), 0);
   }, [options.cwd]);
 
+  // Persist task state (pinned / closed) to the shared session metadata, then
+  // refresh so the list reflects it. Keyed by cliSessionId — a brand-new tab
+  // with no session yet can't be pinned/closed (nothing to persist to).
+  const setTaskMeta = useCallback(
+    (sessionId: string, patch: { pinned?: boolean; closed?: boolean; lastActive?: string }) => {
+      persistTaskMeta(options.cwd, sessionId, patch);
+      setTimeout(() => refreshPastSessions(), 0);
+    },
+    [options.cwd]
+  );
+
   // Move a tab to sit where another tab currently is. Dropping onto the right
   // half of the target lands after it, which is what makes dragging a tab to
   // the end of the bar feel natural.
@@ -1271,6 +1282,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     switchTab,
     renameTab,
     renamePastSession,
+    setTaskMeta,
     reorderTab,
     setTabModel,
     setTabEffort,

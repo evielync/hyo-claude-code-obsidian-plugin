@@ -12,6 +12,10 @@ export interface PastSession {
   lastRole?: "user" | "assistant" | null;
   // A short peek at the last message, shown on the task card.
   lastSnippet?: string;
+  // Task state, read from the shared session metadata (cross-device).
+  pinned?: boolean;
+  closed?: boolean;
+  lastActiveMeta?: string;
 }
 
 // Match Claude Code's project directory hashing exactly.
@@ -107,6 +111,12 @@ function getMetadataPath(cwd: string): string {
 interface SessionMetadata {
   [sessionId: string]: {
     customTitle?: string;
+    // Task state — stored with the conversation (not in the plugin's local
+    // data.json) so it's the same on every device that reads this vault's
+    // sessions. On mobile the gateway reads/writes the same file.
+    pinned?: boolean;
+    closed?: boolean;
+    lastActive?: string; // ISO
   };
 }
 
@@ -141,6 +151,19 @@ export function saveCustomTitle(cwd: string, sessionId: string, title: string): 
 function getCustomTitle(cwd: string, sessionId: string): string | null {
   const metadata = loadMetadata(cwd);
   return metadata[sessionId]?.customTitle || null;
+}
+
+// Merge task state (pinned / closed / lastActive) for a conversation into the
+// shared session-metadata.json — the same file titles live in.
+export function setTaskMeta(
+  cwd: string,
+  sessionId: string,
+  patch: { pinned?: boolean; closed?: boolean; lastActive?: string }
+): void {
+  const metadata = loadMetadata(cwd);
+  if (!metadata[sessionId]) metadata[sessionId] = {};
+  Object.assign(metadata[sessionId], patch);
+  saveMetadata(cwd, metadata);
 }
 
 export function listPastSessions(cwd: string): PastSession[] {
@@ -191,10 +214,11 @@ export function listPastSessions(cwd: string): PastSession[] {
   // Fetch a healthy window; the task list paginates this with "Load more".
   const entries = allEntries.slice(0, 150);
 
+  const metadata = loadMetadata(cwd);
   return entries.map((f) => {
     const sessionId = f.name.replace(".jsonl", "");
-    const customTitle = getCustomTitle(cwd, sessionId);
-    const title = customTitle || extractTitle(f.fullPath) || "Untitled";
+    const meta = metadata[sessionId] || {};
+    const title = meta.customTitle || extractTitle(f.fullPath) || "Untitled";
 
     const last = extractLastMessage(f.fullPath);
     return {
@@ -204,6 +228,9 @@ export function listPastSessions(cwd: string): PastSession[] {
       size: f.stat.size,
       lastRole: last.role,
       lastSnippet: last.snippet,
+      pinned: !!meta.pinned,
+      closed: !!meta.closed,
+      lastActiveMeta: meta.lastActive,
     };
   });
 }
