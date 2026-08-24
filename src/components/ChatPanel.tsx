@@ -903,8 +903,8 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           requestId: pending.requestId,
           description:
             pending.toolName === "Bash" && cmd
-              ? `Chad wants to run: ${cmd}`
-              : `Chad wants to use ${pending.toolName}.`,
+              ? `Hyo wants to run: ${cmd}`
+              : `Hyo wants to use ${pending.toolName}.`,
         };
       }
     }

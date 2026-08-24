@@ -730,8 +730,8 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           requestId: pr.requestId,
           description:
             pr.toolName === "Bash" && cmd
-              ? `Chad wants to run: ${cmd}`
-              : `Chad wants to use ${pr.toolName}.`,
+              ? `Hyo wants to run: ${cmd}`
+              : `Hyo wants to use ${pr.toolName}.`,
         };
         break outer;
       }
@@ -861,7 +861,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           ) : (
             <div className="hyo-messages">
               <div className="hyo-empty-state">
-                <p>Start a conversation with Chad</p>
+                <p>Start a conversation</p>
               </div>
             </div>
           )}
@@ -985,7 +985,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           <textarea
             ref={inputRef}
             className="hyo-input"
-            placeholder="Message Chad…"
+            placeholder="Message Hyo…"
             rows={1}
             value={inputValue}
             onChange={handleInput}
@@ -1038,8 +1038,8 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
               className={`hyo-voicemode-toggle${activeVoiceMode ? " active" : ""}`}
               title={
                 activeVoiceMode
-                  ? "Voice conversation on — talk and Chad talks back. Tap to turn off."
-                  : "Turn on voice conversation — Chad speaks replies back to you"
+                  ? "Voice conversation on — talk and Hyo talks back. Tap to turn off."
+                  : "Turn on voice conversation — Hyo speaks replies back to you"
               }
               onClick={handleVoiceModeToggle}
             >

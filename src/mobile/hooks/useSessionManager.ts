@@ -20,7 +20,7 @@ export type { PastSession };
 // it acts. The gateway enforces all three server-side regardless of what's
 // sent — these are just the values shown in the UI.
 const LOCKED_MODEL = "claude-sonnet-5";
-const LOCKED_AGENT = "chad";
+const LOCKED_AGENT = ""; // empty = the CLI default agent
 // Display value only — matches PERMISSION_MODES' "manual" ("Ask First"),
 // which reflects the gateway's actual hardcoded behaviour.
 const LOCKED_PERMISSION_MODE = "manual";

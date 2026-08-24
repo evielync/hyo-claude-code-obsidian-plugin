@@ -294,7 +294,7 @@ export function useVoiceMode({
         if (!noVoiceWarnedRef.current) {
           noVoiceWarnedRef.current = true;
           new Notice(
-            "Hyo voice: no voice selected — pick one in Settings → Hyo → Voice to hear Chad speak.",
+            "Hyo voice: no voice selected — pick one in Settings → Hyo → Voice to hear Hyo speak.",
             6000
           );
         }

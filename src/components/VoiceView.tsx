@@ -86,7 +86,7 @@ export function VoiceView({
       {question && (
         <div className="hyo-vv-overlay hyo-vv-question">
           <div className="hyo-vv-overlay-head">
-            <span className="hyo-vv-overlay-badge">Chad's asking</span>
+            <span className="hyo-vv-overlay-badge">Hyo's asking</span>
           </div>
           <AskQuestion question={question} onAnswer={onAnswer} />
         </div>
