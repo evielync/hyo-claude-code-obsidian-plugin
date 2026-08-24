@@ -89,6 +89,10 @@ interface TabState {
   pendingToolInput: Map<string, Record<string, unknown>>;
   graceTimer: ReturnType<typeof setTimeout> | null;
   lastActivity: number;
+  // True from a user prompt until the CLI's `result` event. A working tab is
+  // never grace-killed on disconnect — pocketing the phone mid-task must not
+  // stop the task. The grace window starts when the work finishes instead.
+  generating: boolean;
 }
 
 interface SpawnTabOptions {
@@ -512,6 +516,7 @@ function spawnTab(
     detach: !!detach,
     client: ws || null,
     outbox: [],
+    generating: false,
     pendingToolInput: new Map(),
     graceTimer: null,
     lastActivity: nowMs(),
@@ -533,6 +538,14 @@ function spawnTab(
       }
       if (ev.type === "control_request" && ev.request?.subtype === "can_use_tool") {
         state.pendingToolInput.set(ev.request_id, ev.request.input ?? {});
+      }
+      if (ev.type === "result") {
+        state.generating = false;
+        // The turn finished with nobody watching: the reply is saved, so the
+        // usual disconnect grace starts now rather than mid-work.
+        if (!state.client && !state.detach && !state.graceTimer) {
+          state.graceTimer = setTimeout(() => killTab(tabId, "grace expired"), GRACE_MS);
+        }
       }
       emitToTab(state, { type: "stream", tabId, event: ev });
     }
@@ -1080,6 +1093,7 @@ export function startGatewayHost(config: GatewayHostConfig): void {
               attachClient(state, ws);
             }
             writeStdin(m.tabId, { type: "user", message: { role: "user", content: [{ type: "text", text: m.text }] } });
+            state.generating = true;
             break;
           }
           case "permission_response": {
@@ -1136,7 +1150,8 @@ export function startGatewayHost(config: GatewayHostConfig): void {
     ws.on("close", () => {
       setStatus({ clients: Math.max(0, currentStatus.clients - 1) });
       let inGrace = 0,
-        detached = 0;
+        detached = 0,
+        working = 0;
       for (const [tabId, state] of tabs) {
         if (state.client !== ws) continue;
         state.client = null;
@@ -1144,12 +1159,19 @@ export function startGatewayHost(config: GatewayHostConfig): void {
           detached++;
           continue;
         }
+        // Mid-task tabs are left running: the disconnect grace only starts
+        // once the turn finishes (see the `result` handler). The 30-minute
+        // idle ceiling remains the backstop for a run that never finishes.
+        if (state.generating) {
+          working++;
+          continue;
+        }
         if (!state.graceTimer) {
           state.graceTimer = setTimeout(() => killTab(tabId, "grace expired"), GRACE_MS);
         }
         inGrace++;
       }
-      debug(`[hyo][gateway] [${cid}] disconnected — ${inGrace} tab(s) in grace, ${detached} detached still running`);
+      debug(`[hyo][gateway] [${cid}] disconnected — ${working} still working, ${inGrace} in grace, ${detached} detached`);
     });
   });
   })();

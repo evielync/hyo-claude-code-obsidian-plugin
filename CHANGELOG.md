@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.5
+
+**The one where you can put your phone away**
+
+- **A working task keeps working when you leave.** Set Hyo on a job, switch apps, lock the phone, pocket it — the work carries on on your Mac, and when you come back the whole stream is there, finished answer included. A conversation only winds down once it's done and sitting idle with nobody attached.
+
 ## 0.5.4
 
 **The one where Commands get a proper home**
