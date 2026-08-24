@@ -811,11 +811,28 @@ function setupTailscaleServe(port: number, slug: string, onUrl: (url: string) =>
     }
     return;
   }
-  runTailscale(tsBin, ["serve", "--bg", `--set-path=/${slug}`, String(port)], (code, _out, err) => {
-    if (code === 0) {
-      activeSlug = slug;
-      announceConnectUrl(tsBin, slug, onUrl);
-    } else {
+  // Two robustness layers before the first add:
+  //
+  // 1. Stale-mount cleanup. A gateway that dies without teardown (hard quit,
+  //    crash) leaves its mount behind; if another vault's gateway later lands
+  //    on that freed port, the stale mount silently routes one vault's phone
+  //    to another vault's gateway. On every start, any hyo-* mount whose
+  //    backend port has no listener is removed.
+  // 2. Retry. During a plugin update the outgoing version's teardown and the
+  //    new version's add run from separate module instances and can collide —
+  //    the add loses and mobile access shows "not working" until a manual
+  //    toggle. One delayed retry absorbs that (and other transient) failure.
+  const attemptAdd = (attempt: number): void => {
+    runTailscale(tsBin, ["serve", "--bg", `--set-path=/${slug}`, String(port)], (code, _out, err) => {
+      if (code === 0) {
+        activeSlug = slug;
+        announceConnectUrl(tsBin, slug, onUrl);
+        return;
+      }
+      if (attempt === 0) {
+        setTimeout(() => attemptAdd(1), 3500);
+        return;
+      }
       setStatus({ state: "error", detail: "tailscale serve failed — is Tailscale running with HTTPS enabled?" });
       try {
         new Notice(
@@ -825,6 +842,53 @@ function setupTailscaleServe(port: number, slug: string, onUrl: (url: string) =>
       } catch {
         /* ignore */
       }
+    });
+  };
+  cleanStaleMounts(tsBin, () => attemptAdd(0));
+}
+
+// Remove hyo-* serve mounts whose local backend is dead. Probes each mount's
+// 127.0.0.1 port: a live gateway (this vault's or another's) accepts and is
+// left alone; a refused connection means the gateway is gone and the mount is
+// stale. Anything not hyo-prefixed is never touched.
+function cleanStaleMounts(tsBin: string, done: () => void): void {
+  runTailscale(tsBin, ["serve", "status", "--json"], (code, out) => {
+    let mounts: { mountPath: string; port: number }[] = [];
+    try {
+      if (code === 0) {
+        const cfg = JSON.parse(out);
+        for (const host of Object.values<any>(cfg?.Web || {})) {
+          for (const [p, h] of Object.entries<any>(host?.Handlers || {})) {
+            const m = /^http:\/\/127\.0\.0\.1:(\d+)$/.exec(String(h?.Proxy || ""));
+            if (m && /^\/hyo-/.test(p)) mounts.push({ mountPath: p, port: parseInt(m[1], 10) });
+          }
+        }
+      }
+    } catch {
+      /* unparseable status — skip cleanup */
+    }
+    if (mounts.length === 0) {
+      done();
+      return;
+    }
+    const net = require("net");
+    let pending = mounts.length;
+    const finishOne = () => {
+      if (--pending === 0) done();
+    };
+    for (const { mountPath, port } of mounts) {
+      const sock = net.connect({ port, host: "127.0.0.1" });
+      let settled = false;
+      const settle = (alive: boolean) => {
+        if (settled) return;
+        settled = true;
+        sock.destroy();
+        if (alive) finishOne();
+        else runTailscale(tsBin, ["serve", `--set-path=${mountPath}`, "off"], finishOne);
+      };
+      sock.once("connect", () => settle(true));
+      sock.once("error", () => settle(false));
+      sock.setTimeout(1200, () => settle(true)); // no verdict — leave it alone
     }
   });
 }

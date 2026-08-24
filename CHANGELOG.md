@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.2
+
+**The one where mobile access survives updates**
+
+- **Mobile access comes back on its own after a plugin update.** Updating Hyo could briefly leave mobile access showing "not working" until you toggled it off and on. It now retries by itself.
+- **Leftover connections get cleaned up.** If a vault's connection point is left behind (say Obsidian closed without tidying up), Hyo now clears it out on the next start, so a phone can never end up talking to the wrong vault.
+
 ## 0.5.1
 
 **The one where the phone stops asking so much**
