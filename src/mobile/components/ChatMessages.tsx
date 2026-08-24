@@ -1,0 +1,79 @@
+import React, { useEffect, useRef } from "react";
+import { ChatMessage } from "./ChatMessage";
+import { StreamingMessage } from "./StreamingMessage";
+import type { Message } from "../hooks/useChatEngine";
+
+interface ChatMessagesProps {
+  messages: Message[];
+  scrollRef: React.MutableRefObject<{ nearBottom: boolean }>;
+  onPermissionResponse: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
+  onQuestionAnswer: (questionId: string, answers: Record<string, string>) => void;
+  onRecover?: () => void;
+}
+
+export function ChatMessages({
+  messages,
+  scrollRef,
+  onPermissionResponse,
+  onQuestionAnswer,
+  onRecover,
+}: ChatMessagesProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll during streaming
+  useEffect(() => {
+    if (scrollRef.current.nearBottom && containerRef.current) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    }
+  }, [messages, scrollRef]);
+
+  // Track scroll position
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const threshold = 150;
+      scrollRef.current.nearBottom =
+        el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    };
+    el.addEventListener("scroll", onScroll);
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [scrollRef]);
+
+  return (
+    <div className="hyo-messages" ref={containerRef}>
+      {messages.map((msg, i) => {
+        // Streaming compaction: show "Compacting…" animation via StreamingMessage
+        if (msg.streaming) {
+          return (
+            <StreamingMessage
+              key={`stream-${i}`}
+              message={msg}
+              onPermissionResponse={onPermissionResponse}
+              onQuestionAnswer={onQuestionAnswer}
+            />
+          );
+        }
+
+        // Completed compaction: show static banner
+        if (msg.isCompaction) {
+          return (
+            <div key={`compact-${i}`} className="hyo-compaction-banner">
+              Context compacted
+            </div>
+          );
+        }
+
+        return (
+          <ChatMessage
+            key={`msg-${i}`}
+            message={msg}
+            onRecover={onRecover}
+            onPermissionResponse={onPermissionResponse}
+            onQuestionAnswer={onQuestionAnswer}
+          />
+        );
+      })}
+    </div>
+  );
+}

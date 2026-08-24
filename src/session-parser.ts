@@ -1,7 +1,10 @@
 import { debug } from "./debug";
-import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
+import { Platform } from "obsidian";
+import type * as fsTypes from "fs"; // type-only (erased at build) for annotations
+// Node built-ins are desktop-only; deferred so this module loads on mobile.
+const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
+const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
+const os: typeof import("os") = Platform.isMobile ? (undefined as any) : require("os");
 
 export interface PastSession {
   id: string;
@@ -169,7 +172,7 @@ export function setTaskMeta(
 export function listPastSessions(cwd: string): PastSession[] {
   const candidates = getCandidateProjectDirs(cwd);
   const seenIds = new Set<string>();
-  const allEntries: { name: string; fullPath: string; stat: fs.Stats }[] = [];
+  const allEntries: { name: string; fullPath: string; stat: fsTypes.Stats }[] = [];
 
   debug("[hyo] Looking for past sessions. CWD:", cwd);
 
@@ -481,8 +484,13 @@ export function loadSessionHistory(cwd: string, sessionId: string): HistoryMessa
 function extractTitle(filePath: string): string | null {
   try {
     const fd = fs.openSync(filePath, "r");
-    const buf = Buffer.alloc(10240);
-    const bytesRead = fs.readSync(fd, buf, 0, 10240, 0);
+    // Scan deep, not just the head: a session can open with tens of KB of
+    // hook output or pasted context before the first real user message, and
+    // a shallow read leaves every such session "Untitled".
+    const MAX_SCAN = 5 * 1024 * 1024;
+    const size = Math.min(fs.fstatSync(fd).size, MAX_SCAN);
+    const buf = Buffer.alloc(size);
+    const bytesRead = fs.readSync(fd, buf, 0, size, 0);
     fs.closeSync(fd);
 
     const text = buf.toString("utf8", 0, bytesRead);

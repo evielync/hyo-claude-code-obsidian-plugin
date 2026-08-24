@@ -9,7 +9,7 @@
 
 import type { TabSession } from "./hooks/useSessionManager";
 import type { PastSession } from "./session-parser";
-import type { TaskMeta } from "./settings";
+import type { TaskMeta } from "../settings";
 
 // Ev's status model:
 //  needs-attention — a question or approval is waiting on you (agent is blocked)

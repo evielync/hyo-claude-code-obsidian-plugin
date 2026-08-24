@@ -1,6 +1,10 @@
 import { debug } from "./debug";
-import { spawn, ChildProcess } from "child_process";
-import { randomUUID } from "crypto";
+import type { ChildProcess } from "child_process";
+import { Platform } from "obsidian";
+// Desktop-only transport; Node requires deferred so importing this module is
+// mobile-safe (GatewayTransport is used on mobile; this class isn't instantiated there).
+const spawn: typeof import("child_process").spawn = Platform.isMobile ? (undefined as any) : require("child_process").spawn;
+const randomUUID: typeof import("crypto").randomUUID = Platform.isMobile ? (undefined as any) : require("crypto").randomUUID;
 import { isNative1M, baseModelId } from "./models";
 import { supportsEffortFlag, probeCliCapabilities } from "./cli-capabilities";
 

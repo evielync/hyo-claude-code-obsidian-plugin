@@ -1,0 +1,3487 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;padding:0;background:#EDE8E0;}
+body{display:flex;align-items:center;justify-content:center;padding:44px;}
+
+:root{
+  --font-ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif;
+  --font-interface: var(--font-ui);
+  --font-monospace: 'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, monospace;
+  --radius-s:4px; --radius-m:8px; --radius-l:12px;
+  --size-2-1:2px; --size-2-2:4px; --size-2-3:6px;
+  --size-4-1:4px; --size-4-2:8px; --size-4-3:12px; --size-4-4:16px; --size-4-6:24px;
+  --text-on-accent:#ffffff; --text-error:#c0503f;
+  --background-modifier-hover: rgba(0,0,0,0.04);
+  --background-modifier-active-hover: rgba(0,0,0,0.08);
+  --interactive-normal:#F3EFE8; --interactive-hover:#EDE8E0;
+  --tab-outline-color:#E5DED5; --scrollbar-thumb-bg:#D9D2C8;
+  --icon-color:#7A7268; --status-bar-height:0px;
+}
+
+/* ============================================================
+   Hyo — Obsidian Theme
+   A warm, earthy theme built on the Hyo design system.
+   Accent: Peach (#D97757) | Editor: white | Sidebar: parchment
+   ============================================================ */
+
+/* ── Light mode ─────────────────────────────────────────── */
+
+.theme-light {
+  /* Accent */
+  --color-accent-hsl: 15, 63%, 60%;
+  --color-accent: #D97757;
+  --color-accent-1: #C15F3C;
+  --color-accent-2: #E49E86;
+  --interactive-accent: #D97757;
+  --interactive-accent-hover: #C15F3C;
+  --interactive-accent-rgb: 217, 119, 87;
+
+  /* Backgrounds — white editor, parchment sidebar */
+  --background-primary: #FFFFFF;
+  --background-primary-alt: #FAF7F2;
+  --background-secondary: #F3EFE8;
+  --background-secondary-alt: #EDE8E0;
+  --background-modifier-hover: rgba(217, 119, 87, 0.08);
+  --background-modifier-active-hover: rgba(217, 119, 87, 0.14);
+  --background-modifier-border: #E5DED5;
+  --background-modifier-border-hover: #D4C8BC;
+  --background-modifier-border-focus: #D97757;
+  --background-modifier-error: rgba(199, 107, 107, 0.12);
+  --background-modifier-error-hover: rgba(199, 107, 107, 0.18);
+  --background-modifier-success: rgba(107, 158, 122, 0.12);
+  --background-modifier-form-field: #FFFFFF;
+
+  /* Text */
+  --text-normal: #2D2A26;
+  --text-muted: #7A7268;
+  --text-faint: #A69E94;
+  --text-on-accent: #FFFFFF;
+  --text-on-accent-muted: rgba(255, 255, 255, 0.8);
+  --text-accent: #D97757;
+  --text-accent-hover: #C15F3C;
+  --text-error: #C76B6B;
+  --text-warning: #D4A053;
+  --text-success: #6B9E7A;
+  --text-selection: rgba(217, 119, 87, 0.22);
+  --text-highlight-bg: rgba(217, 119, 87, 0.18);
+  --text-highlight-bg-active: rgba(217, 119, 87, 0.32);
+
+  /* Interactive */
+  --interactive-normal: #F5F1EB;
+  --interactive-hover: #EDE8E0;
+
+  /* Colour scale */
+  --color-base-00: #FFFFFF;
+  --color-base-05: #FAF7F2;
+  --color-base-10: #F5F1EB;
+  --color-base-20: #EDE8E0;
+  --color-base-25: #E8E2D8;
+  --color-base-30: #E5DED5;
+  --color-base-35: #D9D2C8;
+  --color-base-40: #C8BFB4;
+  --color-base-50: #A69E94;
+  --color-base-60: #7A7268;
+  --color-base-70: #5C554C;
+  --color-base-100: #2D2A26;
+
+  /* Tags */
+  --tag-color: #C15F3C;
+  --tag-background: rgba(217, 119, 87, 0.1);
+  --tag-background-hover: rgba(217, 119, 87, 0.18);
+  --tag-border-color: rgba(217, 119, 87, 0.3);
+
+  /* Code */
+  --code-background: #FAF7F2;
+  --code-normal: #2D2A26;
+  --code-comment: #A69E94;
+  --code-keyword: #C15F3C;
+  --code-string: #6B9E7A;
+  --code-function: #D97757;
+  --code-operator: #7A7268;
+
+  /* Callouts */
+  --callout-default: 217, 119, 87;
+  --callout-info: 107, 158, 255;
+  --callout-tip: 107, 158, 122;
+  --callout-warning: 212, 160, 83;
+  --callout-error: 199, 107, 107;
+
+  /* Tabs */
+  --tab-background-active: rgba(217, 119, 87, 0.1);
+  --tab-text-color: #A69E94;
+  --tab-text-color-active: #7A7268;
+  --tab-text-color-focused: #A69E94;
+  --tab-text-color-focused-active: #D97757;
+  --tab-text-color-focused-highlighted: #D97757;
+  --tab-outline-color: #E5DED5;
+}
+
+/* ── Dark mode ──────────────────────────────────────────── */
+
+.theme-dark {
+  /* Accent */
+  --color-accent-hsl: 15, 63%, 60%;
+  --color-accent: #D97757;
+  --color-accent-1: #DF8D72;
+  --color-accent-2: #C15F3C;
+  --interactive-accent: #D97757;
+  --interactive-accent-hover: #DF8D72;
+  --interactive-accent-rgb: 217, 119, 87;
+
+  /* Backgrounds */
+  --background-primary: #222220;
+  --background-primary-alt: #191917;
+  --background-secondary: #1E1E1C;
+  --background-secondary-alt: #191917;
+  --background-modifier-hover: rgba(217, 119, 87, 0.08);
+  --background-modifier-active-hover: rgba(217, 119, 87, 0.14);
+  --background-modifier-border: #353532;
+  --background-modifier-border-hover: #4A4A46;
+  --background-modifier-border-focus: #D97757;
+  --background-modifier-error: rgba(212, 122, 122, 0.12);
+  --background-modifier-error-hover: rgba(212, 122, 122, 0.18);
+  --background-modifier-success: rgba(125, 182, 140, 0.12);
+  --background-modifier-form-field: #2C2C29;
+
+  /* Text */
+  --text-normal: #E8E4DE;
+  --text-muted: #A8A29A;
+  --text-faint: #706C66;
+  --text-on-accent: #191917;
+  --text-on-accent-muted: rgba(25, 25, 23, 0.8);
+  --text-accent: #D97757;
+  --text-accent-hover: #DF8D72;
+  --text-error: #D47A7A;
+  --text-warning: #D4A053;
+  --text-success: #7DB68C;
+  --text-selection: rgba(217, 119, 87, 0.22);
+  --text-highlight-bg: rgba(217, 119, 87, 0.18);
+  --text-highlight-bg-active: rgba(217, 119, 87, 0.32);
+
+  /* Interactive */
+  --interactive-normal: #2C2C29;
+  --interactive-hover: #353532;
+
+  /* Colour scale */
+  --color-base-00: #191917;
+  --color-base-05: #1C1C1A;
+  --color-base-10: #222220;
+  --color-base-20: #2C2C29;
+  --color-base-25: #323230;
+  --color-base-30: #353532;
+  --color-base-35: #3E3E3B;
+  --color-base-40: #4A4A46;
+  --color-base-50: #706C66;
+  --color-base-60: #A8A29A;
+  --color-base-70: #C8C2BA;
+  --color-base-100: #E8E4DE;
+
+  /* Tags */
+  --tag-color: #D97757;
+  --tag-background: rgba(217, 119, 87, 0.1);
+  --tag-background-hover: rgba(217, 119, 87, 0.18);
+  --tag-border-color: rgba(217, 119, 87, 0.25);
+
+  /* Code */
+  --code-background: #1C1C1A;
+  --code-normal: #E8E4DE;
+  --code-comment: #706C66;
+  --code-keyword: #DF8D72;
+  --code-string: #7DB68C;
+  --code-function: #D97757;
+  --code-operator: #A8A29A;
+
+  /* Callouts */
+  --callout-default: 217, 119, 87;
+  --callout-info: 107, 158, 255;
+  --callout-tip: 125, 182, 140;
+  --callout-warning: 212, 160, 83;
+  --callout-error: 212, 122, 122;
+
+  /* Tabs */
+  --tab-background-active: rgba(217, 119, 87, 0.12);
+  --tab-text-color: #706C66;
+  --tab-text-color-active: #A8A29A;
+  --tab-text-color-focused: #706C66;
+  --tab-text-color-focused-active: #D97757;
+  --tab-text-color-focused-highlighted: #D97757;
+  --tab-outline-color: #353532;
+}
+
+/* ── Shared / structural ────────────────────────────────── */
+
+body {
+  --radius-s: 6px;
+  --radius-m: 10px;
+  --radius-l: 14px;
+  --radius-xl: 18px;
+  --input-radius: 8px;
+  --tab-radius: 6px;
+  --button-radius: 8px;
+  --toggle-radius: 99px;
+  --checkbox-radius: 4px;
+
+  --font-interface: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif;
+  --font-text: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif;
+  --font-monospace: 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Menlo', monospace;
+
+  --font-text-size: 16px;
+  --line-height-normal: 1.65;
+  --line-height-tight: 1.3;
+
+  --font-ui-small: 12px;
+  --font-ui-smaller: 11px;
+  --font-ui-medium: 13px;
+  --font-ui-large: 15px;
+
+  /* Nav — matching Hyo's 15px / weight 450 tree items */
+  --nav-item-size: 15px;
+  --nav-item-weight: 450;
+  --nav-item-weight-active: 450; /* keep same as normal — weight change on hover/active causes visual jump */
+  --nav-item-color: var(--text-muted);
+  --nav-item-color-hover: var(--text-normal);
+  --nav-item-color-active: var(--text-accent);
+  --nav-item-background-hover: var(--background-modifier-hover);
+  --nav-item-background-active: rgba(217, 119, 87, 0.1);
+  --nav-indentation-guide-color: var(--background-modifier-border);
+  --nav-item-padding: 3px 8px; /* matches Hyo tree-row padding: 3px 12px */
+}
+
+/* ── Scrollbars ─────────────────────────────────────────── */
+
+.theme-light ::-webkit-scrollbar-thumb { background: #D9D2C8; }
+.theme-light ::-webkit-scrollbar-thumb:hover { background: #C8BFB4; }
+.theme-dark ::-webkit-scrollbar-thumb { background: #353532; }
+.theme-dark ::-webkit-scrollbar-thumb:hover { background: #4A4A46; }
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ── Selection ──────────────────────────────────────────── */
+
+.theme-light ::selection { background: rgba(217, 119, 87, 0.22); }
+.theme-dark ::selection { background: rgba(217, 119, 87, 0.28); }
+
+/* ── Tabs ───────────────────────────────────────────────── */
+
+/* Active tab — warm background, terracotta title via CSS var + direct selector */
+.workspace-tab-header.is-active,
+.workspace-tab-header.is-active.mod-active {
+  background-color: var(--tab-background-active) !important;
+}
+
+.workspace-tab-header.is-active .workspace-tab-header-inner-title,
+.workspace-tab-header.is-active.mod-active .workspace-tab-header-inner-title {
+  color: var(--interactive-accent) !important;
+  font-weight: 500;
+}
+
+/* Modified/unsaved dot — accent colour */
+.workspace-tab-header-status-icon {
+  color: var(--interactive-accent) !important;
+}
+
+/* ── File explorer ──────────────────────────────────────── */
+
+/* Row height — matches Hyo's tree-row padding: 3px 12px */
+.nav-folder-title,
+.nav-file-title {
+  font-size: 15px;
+  color: var(--text-muted);
+  padding: 3px 8px;
+  border-radius: var(--radius-s);
+  gap: 4px;
+  line-height: 1.4;
+  /* Prevent antialiasing shift on hover (makes text appear to change weight) */
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Folders */
+.nav-folder-title {
+  font-weight: 500;
+  color: var(--text-normal);
+}
+
+.nav-folder-title:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+  font-weight: 500 !important;
+}
+
+/* Folder collapse arrow — warm brown */
+.nav-folder-collapse-indicator {
+  color: #C15F3C !important;
+}
+
+/* Folder icon — exact Hyo path, fill #D97757 stroke #C15F3C, 20×20 */
+.nav-folder-title-content::before {
+  content: "";
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  margin-right: 4px;
+  vertical-align: middle;
+  flex-shrink: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z' fill='%23D97757' stroke='%23C15F3C' stroke-width='1'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-size: contain;
+}
+
+/* Files */
+.nav-file-title {
+  font-weight: 450;
+}
+
+.nav-file-title:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+  font-weight: 450 !important;
+}
+
+/* File icon — document shape SVG matching Hyo's getFileIcon exactly.
+   data-path is on .nav-file-title, NOT .nav-file — selectors corrected. */
+
+.nav-file-title-content::before {
+  content: "";
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  margin-right: 4px;
+  vertical-align: middle;
+  flex-shrink: 0;
+  /* Default: warm grey document, no badge — matches Hyo's fallback #B0A898 */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' fill='%23B0A898' stroke='%239A9080' stroke-width='1'/%3E%3Cpath d='M14 2v6h6' fill='%239A9080' opacity='0.3'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-size: contain;
+}
+
+/* .md — blue #7BA4C7, badge M */
+.nav-file-title[data-path$=".md"] .nav-file-title-content::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' fill='%237BA4C7' stroke='%236890B0' stroke-width='1'/%3E%3Cpath d='M14 2v6h6' fill='%236890B0' opacity='0.3'/%3E%3Ctext x='12' y='17.5' text-anchor='middle' fill='white' font-size='7' font-weight='600' font-family='system-ui'%3EM%3C/text%3E%3C/svg%3E");
+}
+
+/* .json — amber #C7A44E, badge {} */
+.nav-file-title[data-path$=".json"] .nav-file-title-content::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' fill='%23C7A44E' stroke='%23B09040' stroke-width='1'/%3E%3Cpath d='M14 2v6h6' fill='%23B09040' opacity='0.3'/%3E%3Ctext x='12' y='17.5' text-anchor='middle' fill='white' font-size='6' font-weight='600' font-family='system-ui'%3E%7B%7D%3C/text%3E%3C/svg%3E");
+}
+
+/* .js/.jsx — yellow #C9B458, badge JS */
+.nav-file-title[data-path$=".js"] .nav-file-title-content::before,
+.nav-file-title[data-path$=".jsx"] .nav-file-title-content::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' fill='%23C9B458' stroke='%23B0A040' stroke-width='1'/%3E%3Cpath d='M14 2v6h6' fill='%23B0A040' opacity='0.3'/%3E%3Ctext x='12' y='17.5' text-anchor='middle' fill='white' font-size='6' font-weight='600' font-family='system-ui'%3EJS%3C/text%3E%3C/svg%3E");
+}
+
+/* .ts/.tsx — blue-purple, badge TS */
+.nav-file-title[data-path$=".ts"] .nav-file-title-content::before,
+.nav-file-title[data-path$=".tsx"] .nav-file-title-content::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' fill='%237B8DC7' stroke='%236A7CB0' stroke-width='1'/%3E%3Cpath d='M14 2v6h6' fill='%236A7CB0' opacity='0.3'/%3E%3Ctext x='12' y='17.5' text-anchor='middle' fill='white' font-size='6' font-weight='600' font-family='system-ui'%3ETS%3C/text%3E%3C/svg%3E");
+}
+
+/* .sh — green #8BB070, badge > */
+.nav-file-title[data-path$=".sh"] .nav-file-title-content::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' fill='%238BB070' stroke='%2378A05E' stroke-width='1'/%3E%3Cpath d='M14 2v6h6' fill='%2378A05E' opacity='0.3'/%3E%3Ctext x='12' y='17.5' text-anchor='middle' fill='white' font-size='9' font-weight='600' font-family='system-ui'%3E%3E%3C/text%3E%3C/svg%3E");
+}
+
+/* .css — purple-blue #7B8DC7, badge # */
+.nav-file-title[data-path$=".css"] .nav-file-title-content::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' fill='%237B8DC7' stroke='%236A7CB0' stroke-width='1'/%3E%3Cpath d='M14 2v6h6' fill='%236A7CB0' opacity='0.3'/%3E%3Ctext x='12' y='17.5' text-anchor='middle' fill='white' font-size='8' font-weight='700' font-family='system-ui'%3E%23%3C/text%3E%3C/svg%3E");
+}
+
+/* .html/.htm — red #C77B6B, badge <> */
+.nav-file-title[data-path$=".html"] .nav-file-title-content::before,
+.nav-file-title[data-path$=".htm"] .nav-file-title-content::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' fill='%23C77B6B' stroke='%23B06A5A' stroke-width='1'/%3E%3Cpath d='M14 2v6h6' fill='%23B06A5A' opacity='0.3'/%3E%3Ctext x='12' y='17.5' text-anchor='middle' fill='white' font-size='6' font-weight='600' font-family='system-ui'%3E%3C%3E%3C/text%3E%3C/svg%3E");
+}
+
+/* .txt — grey #A69E94, no badge */
+.nav-file-title[data-path$=".txt"] .nav-file-title-content::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' fill='%23A69E94' stroke='%238A8279' stroke-width='1'/%3E%3Cpath d='M14 2v6h6' fill='%238A8279' opacity='0.3'/%3E%3C/svg%3E");
+}
+
+/* Active file — accent treatment */
+.nav-file-title.is-active {
+  color: var(--text-accent) !important;
+  background: rgba(217, 119, 87, 0.1) !important;
+  font-weight: 500;
+}
+
+.nav-file-title.is-active .nav-file-title-content::before {
+  opacity: 0.75;
+}
+
+/* File extension tag */
+.nav-file-tag {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+/* ── Editor / document typography — matching Hyo desktop ── */
+
+/* Max width + padding matching Hyo's doc-preview */
+.markdown-source-view.mod-cm6 .cm-scroller,
+.markdown-reading-view .markdown-rendered {
+  padding: 32px 40px;
+}
+
+.markdown-rendered {
+  max-width: 800px;
+  margin: 0 auto;
+  line-height: 1.65;
+}
+
+/* Paragraphs */
+.markdown-rendered p {
+  margin: 0 0 0.75em;
+}
+
+/* Headings — coloured text + accent borders */
+.markdown-rendered h1,
+.markdown-source-view.mod-cm6 .HyperMD-header-1 {
+  font-size: 1.8em;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+  margin: 1.2em 0 0.8em;
+  color: #D97757 !important;
+  padding-bottom: 0.3em;
+  border-bottom: 2px solid #D97757;
+}
+
+/* Space below H1 border — push the next line down */
+.markdown-source-view.mod-cm6 .HyperMD-header-1 + .cm-line {
+  padding-top: 12px !important;
+}
+
+.markdown-rendered h2,
+.markdown-source-view.mod-cm6 .HyperMD-header-2 {
+  font-size: 1.4em;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  margin: 1.2em 0 0.4em;
+  color: #D97757 !important;
+}
+
+.markdown-rendered h3,
+.markdown-source-view.mod-cm6 .HyperMD-header-3 {
+  font-size: 1.2em;
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1.2em 0 0.4em;
+  color: #D97757 !important;
+}
+
+/* Dark mode heading colours */
+.theme-dark .markdown-rendered h1,
+.theme-dark .markdown-source-view.mod-cm6 .HyperMD-header-1 {
+  color: #D97757 !important;
+  border-bottom-color: #D97757;
+}
+
+.theme-dark .markdown-rendered h2,
+.theme-dark .markdown-source-view.mod-cm6 .HyperMD-header-2 {
+  color: #D97757 !important;
+}
+
+.theme-dark .markdown-rendered h3,
+.theme-dark .markdown-source-view.mod-cm6 .HyperMD-header-3 {
+  color: #D97757 !important;
+}
+
+/* Lists — outline-grade visual hierarchy */
+.markdown-rendered ul,
+.markdown-rendered ol {
+  padding-left: 1.8em;
+  margin: 0 0 0.75em;
+}
+
+/* Top-level bullets: full weight, generous spacing */
+.markdown-rendered li {
+  margin: 0.4em 0;
+  line-height: 1.65;
+}
+
+/* Nested lists: tighter spacing, don't need as much air */
+.markdown-rendered li li {
+  margin: 0.2em 0;
+}
+
+/* Deep nesting: even tighter */
+.markdown-rendered li li li {
+  margin: 0.1em 0;
+}
+
+/* Bullet markers — distinct shapes per level (reading view) */
+.markdown-rendered ul { list-style: none !important; }
+
+.markdown-rendered ul > li { position: relative; padding-left: 0.4em; }
+
+/* Level 1: filled circle */
+.markdown-rendered ul > li::before {
+  content: "" !important;
+  position: absolute;
+  left: -1.2em;
+  top: 0.55em;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: #D97757;
+}
+
+/* Level 2: open circle */
+.markdown-rendered ul ul > li::before {
+  width: 6px;
+  height: 6px;
+  background-color: transparent;
+  border: 1.5px solid #D97757;
+}
+
+/* Level 3: filled square */
+.markdown-rendered ul ul ul > li::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 1px;
+  background-color: #7A7268;
+  border: none;
+}
+
+/* Level 4: open circle — faint */
+.markdown-rendered ul ul ul ul > li::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background-color: transparent;
+  border: 1.5px solid #A69E94;
+}
+
+/* Ordered list markers */
+.markdown-rendered ol > li::marker {
+  color: #D97757 !important;
+  font-weight: 600;
+}
+
+.markdown-rendered ol > li li::marker {
+  color: #7A7268 !important;
+  font-weight: 500;
+}
+
+/* Bold text in lists — slightly warmer for emphasis */
+.markdown-rendered li strong {
+  color: var(--text-normal);
+  font-weight: 650;
+}
+
+/* ── Lists — Live Preview / Editor ─────────────────────── */
+/* Distinct shapes per level, generous spacing, prominent markers */
+
+/* Spacing — tighter */
+.markdown-source-view.mod-cm6 .HyperMD-list-line-1 {
+  padding-top: 2px !important;
+  padding-bottom: 2px !important;
+}
+
+.markdown-source-view.mod-cm6 .HyperMD-list-line-2 {
+  padding-top: 1px !important;
+  padding-bottom: 1px !important;
+}
+
+.markdown-source-view.mod-cm6 .HyperMD-list-line-3,
+.markdown-source-view.mod-cm6 .HyperMD-list-line-4 {
+  padding-top: 1px !important;
+  padding-bottom: 1px !important;
+}
+
+/* Hide indent guide lines in editor */
+.markdown-source-view.mod-cm6 .cm-indent::before {
+  border-color: transparent !important;
+}
+
+/* ── Bullet colours + shapes per nesting level ── */
+
+/* All levels: set marker colour variable */
+.markdown-source-view.mod-cm6 .HyperMD-list-line-1 {
+  --list-marker-color: #D97757 !important;
+}
+.markdown-source-view.mod-cm6 .HyperMD-list-line-2 {
+  --list-marker-color: #C15F3C !important;
+}
+.markdown-source-view.mod-cm6 .HyperMD-list-line-3 {
+  --list-marker-color: #7A7268 !important;
+}
+.markdown-source-view.mod-cm6 .HyperMD-list-line-4 {
+  --list-marker-color: #A69E94 !important;
+}
+
+/* Gap between dot and text */
+.markdown-source-view.mod-cm6 .list-bullet {
+  margin-right: 6px !important;
+}
+
+/* Level 1: filled circle */
+.markdown-source-view.mod-cm6 .HyperMD-list-line-1 .list-bullet::after {
+  width: 6px !important;
+  height: 6px !important;
+  border-radius: 50% !important;
+  background-color: #D97757 !important;
+}
+
+/* Level 2: open circle */
+.markdown-source-view.mod-cm6 .HyperMD-list-line-2 .list-bullet::after {
+  width: 6px !important;
+  height: 6px !important;
+  border-radius: 50% !important;
+  background-color: transparent !important;
+  border: 1.5px solid #C15F3C !important;
+}
+
+/* Level 3: filled square */
+.markdown-source-view.mod-cm6 .HyperMD-list-line-3 .list-bullet::after {
+  width: 5px !important;
+  height: 5px !important;
+  border-radius: 1px !important;
+  background-color: #7A7268 !important;
+}
+
+/* Level 4: open circle — faint */
+.markdown-source-view.mod-cm6 .HyperMD-list-line-4 .list-bullet::after {
+  width: 5px !important;
+  height: 5px !important;
+  border-radius: 50% !important;
+  background-color: transparent !important;
+  border: 1.5px solid #A69E94 !important;
+}
+
+/* ── Links ──────────────────────────────────────────────── */
+
+a,
+.cm-s-obsidian span.cm-link,
+.cm-s-obsidian span.cm-url {
+  color: var(--text-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--text-accent-hover);
+  text-decoration: underline;
+}
+
+/* ── Buttons ────────────────────────────────────────────── */
+
+button.mod-cta {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-radius: var(--button-radius);
+}
+
+button.mod-cta:hover {
+  background: var(--interactive-accent-hover);
+}
+
+/* ── Inline code ────────────────────────────────────────── */
+
+.markdown-rendered code,
+.cm-s-obsidian span.cm-inline-code {
+  background: var(--code-background);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.88em;
+}
+
+/* ── Horizontal Rule / Divider — Hyo circles centred ───── */
+/* .cm-line.hr hr = the rendered <hr> in Live Preview (folded state).
+   Learned from Encore theme: this is the correct selector, not .HyperMD-hr. */
+
+.markdown-rendered hr,
+.cm-line.hr hr {
+  border: none !important;
+  height: 40px;
+  position: relative;
+  overflow: visible;
+  margin: 0.25em 0;
+}
+
+/* Line across */
+.markdown-rendered hr::before,
+.cm-line.hr hr::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--background-modifier-border);
+}
+
+/* Hyo circles centred */
+.markdown-rendered hr::after,
+.cm-line.hr hr::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 24px;
+  height: 24px;
+  background-color: var(--background-primary);
+  padding: 0 12px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='16 25 84 70'%3E%3Cdefs%3E%3CclipPath id='lc'%3E%3Ccircle cx='44' cy='53' r='28'/%3E%3C/clipPath%3E%3C/defs%3E%3Ccircle cx='44' cy='53' r='28' fill='%23BF8A55'/%3E%3Ccircle cx='72' cy='67' r='28' fill='%23B5616C'/%3E%3Cg clip-path='url(%23lc)'%3E%3Ccircle cx='72' cy='67' r='28' fill='%238E4A3D'/%3E%3C/g%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 24px 24px;
+}
+
+/* Dark mode — lighter Hyo circles */
+.theme-dark .markdown-rendered hr::after,
+.theme-dark .cm-line.hr hr::after {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='16 25 84 70'%3E%3Cdefs%3E%3CclipPath id='lc'%3E%3Ccircle cx='44' cy='53' r='28'/%3E%3C/clipPath%3E%3C/defs%3E%3Ccircle cx='44' cy='53' r='28' fill='%23D4A574'/%3E%3Ccircle cx='72' cy='67' r='28' fill='%23C97B84'/%3E%3Cg clip-path='url(%23lc)'%3E%3Ccircle cx='72' cy='67' r='28' fill='%23A8604E'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+/* ── Blockquotes ────────────────────────────────────────── */
+
+.markdown-rendered blockquote {
+  border-left-color: var(--interactive-accent);
+  background: rgba(217, 119, 87, 0.06);
+  border-radius: 0 var(--radius-s) var(--radius-s) 0;
+  font-style: italic;
+}
+
+/* Editor / Live Preview blockquote styling */
+.markdown-source-view.mod-cm6 .HyperMD-quote {
+  background-color: rgba(217, 119, 87, 0.10) !important;
+  font-style: italic;
+}
+
+/* First line of a quote group — top padding + top-right corner */
+.markdown-source-view.mod-cm6 :not(.HyperMD-quote) + .HyperMD-quote {
+  padding-top: 6px !important;
+  border-top-right-radius: var(--radius-s);
+}
+
+/* Last line of a quote group — bottom padding + bottom-right corner */
+.markdown-source-view.mod-cm6 .HyperMD-quote:has(+ :not(.HyperMD-quote)),
+.markdown-source-view.mod-cm6 .HyperMD-quote:last-child {
+  padding-bottom: 6px !important;
+  border-bottom-right-radius: var(--radius-s);
+}
+
+/* ── Custom callout: [!comment] — margin notes to self ──── */
+
+.callout[data-callout="comment"] {
+  --callout-color: 217, 119, 87;
+  --callout-icon: message-circle;
+  background: rgba(217, 119, 87, 0.10) !important;
+  border-width: 0 0 0 3px !important;
+  border-style: solid !important;
+  border-color: rgba(217, 119, 87, 0.6) !important;
+  border-radius: 0 var(--radius-s) var(--radius-s) 0 !important;
+  box-shadow: none !important;
+}
+
+.callout[data-callout="comment"] .callout-content {
+  font-style: italic;
+  padding-top: 6px;
+}
+
+/* ── Checkboxes ─────────────────────────────────────────── */
+
+.task-list-item-checkbox:checked {
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+}
+
+/* ── Inputs / Search ────────────────────────────────────── */
+
+input[type="text"],
+input[type="search"],
+input[type="email"],
+input[type="password"],
+textarea {
+  border-radius: var(--input-radius);
+}
+
+.search-input-container input:focus {
+  border-color: var(--background-modifier-border-focus);
+}
+
+/* ── Status bar ─────────────────────────────────────────── */
+
+.status-bar {
+  font-size: var(--font-ui-smaller);
+}
+
+/* ── Graph view ─────────────────────────────────────────── */
+
+.graph-view.color-fill { color: var(--interactive-accent); }
+.graph-view.color-line { color: var(--background-modifier-border); }
+.graph-view.color-text { color: var(--text-muted); }
+.graph-view.color-fill-tag { color: #D4A053; }
+.graph-view.color-fill-attachment { color: #6B9E7A; }
+.graph-view.color-fill-unresolved { color: var(--text-faint); }
+
+/* ── Bases — full width ─────────────────────────────────── */
+
+.bases-embed,
+.bases-view,
+.bases-container,
+.ob-base,
+.base-view,
+.cm-embed-block:has(.bases-embed),
+.cm-embed-block:has(.base-view) {
+  max-width: 100% !important;
+  width: 100% !important;
+}
+
+.is-readable-line-width .bases-embed,
+.is-readable-line-width .bases-view,
+.is-readable-line-width .bases-container,
+.is-readable-line-width .ob-base,
+.is-readable-line-width .base-view {
+  max-width: 100% !important;
+  width: 100% !important;
+}
+
+/* ── Bases — table stretch + left-align ─────────────────── */
+
+.ob-base table,
+.base-view table,
+.bases-view table {
+  width: 100% !important;
+  text-align: left !important;
+}
+
+.ob-base td,
+.ob-base th,
+.base-view td,
+.base-view th,
+.bases-view td,
+.bases-view th {
+  text-align: left !important;
+}
+
+/* Hyo Plugin — Obsidian theme-aware styles */
+
+/* Hide Obsidian's native view header — the plugin has its own tab bar */
+.workspace-leaf-content[data-type="hyo-plugin-view"] .view-header {
+  display: none !important;
+}
+
+.hyo-plugin {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Reset all buttons inside plugin — Obsidian themes apply their own
+   button styles (border, background, box-shadow) that leak into our UI.
+   Note: padding intentionally NOT reset here — each button sets its own. */
+.hyo-plugin button {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  outline: none;
+  font: inherit;
+  color: inherit;
+  margin: 0;
+  cursor: pointer;
+}
+
+.hyo-app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--background-primary-alt);
+  color: var(--text-normal);
+  padding-bottom: var(--status-bar-height, 24px);
+}
+
+/* Loading & onboarding */
+.hyo-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.hyo-onboarding {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  height: 100%;
+  padding: 24px;
+  padding-top: 32px;
+  overflow-y: auto;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.hyo-onboarding h3 {
+  color: var(--text-normal);
+  margin: 0 0 12px;
+}
+
+.hyo-onboarding p {
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+
+.hyo-onboarding-steps {
+  text-align: left;
+  width: 100%;
+  max-width: 320px;
+}
+
+.hyo-onboarding-step {
+  margin-bottom: 16px;
+}
+
+.hyo-onboarding-step strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-normal);
+}
+
+.hyo-onboarding-step code {
+  display: block;
+  padding: 8px 12px;
+  background: var(--background-secondary);
+  border-radius: var(--radius-s);
+  font-family: var(--font-monospace);
+  font-size: 12px;
+  color: var(--text-normal);
+  word-break: break-all;
+}
+
+.hyo-onboarding-note {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.hyo-onboarding-intro {
+  max-width: 400px;
+  margin-bottom: 24px;
+}
+
+.hyo-step-instruction {
+  margin: 8px 0;
+  color: var(--text-normal);
+}
+
+.hyo-step-note {
+  margin: 8px 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.hyo-install-command {
+  display: block;
+  padding: 12px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  font-family: var(--font-monospace);
+  font-size: 13px;
+  color: var(--text-normal);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  word-break: break-all;
+  user-select: all;
+}
+
+.hyo-install-command:hover {
+  background: var(--background-secondary-alt);
+  border-color: var(--text-accent);
+}
+
+.hyo-install-command.copied {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+
+.hyo-install-command.copied::after {
+  content: " ✓ Copied!";
+  font-family: var(--font-ui);
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+.hyo-onboarding-option-quick {
+  text-align: left;
+  width: 100%;
+  max-width: 500px;
+  padding: 16px;
+  background: var(--background-secondary);
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.hyo-onboarding-option-quick strong {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text-normal);
+}
+
+.hyo-copy-prompt-button {
+  display: inline-block;
+  padding: 8px 16px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  margin: 8px 0;
+}
+
+.hyo-copy-prompt-button:hover {
+  opacity: 0.9;
+}
+
+.hyo-onboarding-divider {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: 500px;
+  margin: 16px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.hyo-onboarding-divider::before,
+.hyo-onboarding-divider::after {
+  content: "";
+  flex: 1;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.hyo-onboarding-divider span {
+  padding: 0 12px;
+}
+
+.hyo-onboarding-troubleshooting {
+  margin-top: 24px;
+  text-align: left;
+  max-width: 500px;
+}
+
+.hyo-onboarding-troubleshooting summary {
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 8px 0;
+}
+
+.hyo-onboarding-troubleshooting summary:hover {
+  color: var(--text-normal);
+}
+
+.hyo-troubleshooting-content {
+  padding: 12px 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.hyo-troubleshooting-content p {
+  margin: 8px 0;
+}
+
+.hyo-troubleshooting-content strong {
+  color: var(--text-normal);
+}
+
+.hyo-troubleshooting-content a {
+  color: var(--text-accent);
+  text-decoration: none;
+}
+
+.hyo-troubleshooting-content a:hover {
+  text-decoration: underline;
+}
+
+/* Chat panel */
+.hyo-chat-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Messages area */
+.hyo-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.hyo-empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-faint);
+}
+
+/* Message bubbles */
+.hyo-message {
+  margin-bottom: 16px;
+}
+
+.hyo-message-user .hyo-message-content {
+  background: var(--background-secondary);
+  padding: 10px 14px;
+  border-radius: var(--radius-m);
+  font-size: 14px;
+  line-height: 1.5;
+  user-select: text;
+}
+
+.hyo-message-assistant .hyo-message-content {
+  padding: 4px 0;
+  font-size: 14px;
+  line-height: 1.6;
+  user-select: text;
+}
+
+/* Markdown body */
+.hyo-markdown-body {
+  word-wrap: break-word;
+}
+
+.hyo-markdown-body p {
+  margin: 0 0 8px;
+}
+
+.hyo-markdown-body p:last-child {
+  margin-bottom: 0;
+}
+
+.hyo-markdown-body pre {
+  background: var(--background-secondary);
+  padding: 10px 12px;
+  border-radius: var(--radius-s);
+  overflow-x: auto;
+  font-size: 12px;
+  margin: 8px 0;
+}
+
+.hyo-markdown-body code {
+  font-family: var(--font-monospace);
+  font-size: 12px;
+}
+
+.hyo-markdown-body :not(pre) > code {
+  background: var(--background-secondary);
+  padding: 2px 5px;
+  border-radius: 3px;
+}
+
+.hyo-markdown-body ul,
+.hyo-markdown-body ol {
+  padding-left: 20px;
+  margin: 4px 0 8px;
+}
+
+.hyo-markdown-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.hyo-markdown-body th,
+.hyo-markdown-body td {
+  border: 1px solid var(--background-modifier-border);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.hyo-markdown-body th {
+  background: var(--background-secondary);
+  font-weight: 600;
+}
+
+.hyo-markdown-body blockquote {
+  border-left: 3px solid var(--interactive-accent);
+  margin: 8px 0;
+  padding: 4px 12px;
+  color: var(--text-muted);
+}
+
+/* Thinking blocks */
+.hyo-thinking-block {
+  margin: 8px 0;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.hyo-thinking-block summary {
+  cursor: pointer;
+  user-select: none;
+  font-style: italic;
+}
+
+.hyo-thinking-content {
+  padding: 8px 0 4px 12px;
+  white-space: pre-wrap;
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  line-height: 1.4;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* Tool calls */
+.hyo-tool-call {
+  margin: 8px 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  font-size: 12px;
+  overflow: hidden;
+}
+
+.hyo-tool-call-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  background: var(--background-secondary);
+}
+
+.hyo-tool-call-header:hover {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-tool-call-arrow {
+  font-size: 10px;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.hyo-tool-call-name {
+  font-weight: 600;
+  color: var(--text-normal);
+  flex-shrink: 0;
+}
+
+.hyo-tool-call-summary {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hyo-tool-call-body {
+  padding: 8px 10px;
+  margin: 0;
+  font-size: 11px;
+  font-family: var(--font-monospace);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--background-primary);
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+/* Permission request */
+.hyo-permission {
+  margin: 12px 0;
+  padding: 10px 14px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+
+.hyo-permission-tool {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.hyo-permission-summary {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  margin-bottom: 8px;
+  word-break: break-all;
+}
+
+.hyo-permission-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.hyo-permission-buttons button {
+  padding: 4px 12px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.hyo-permission-buttons button:hover {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-permission-deny {
+  color: var(--text-error) !important;
+}
+
+.hyo-permission-allow {
+  background: var(--interactive-accent) !important;
+  color: var(--text-on-accent) !important;
+  border-color: var(--interactive-accent) !important;
+}
+
+.hyo-permission-allow:hover {
+  background: var(--interactive-accent-hover) !important;
+}
+
+.hyo-permission-allow-always {
+  color: var(--text-muted) !important;
+  font-size: 11px !important;
+}
+
+/* Ask question */
+/* ── AskQuestion ── */
+
+.hyo-ask {
+  margin: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.hyo-ask-item {
+  padding: 14px 16px;
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+  border-left: 3px solid var(--interactive-accent);
+}
+
+.hyo-ask-item.is-answered {
+  border-left-color: var(--text-faint);
+  opacity: 0.7;
+}
+
+.hyo-ask-item.is-pending {
+  border-left-color: var(--background-modifier-border);
+  opacity: 0.4;
+}
+
+.hyo-ask-item-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  min-height: 20px;
+}
+
+.hyo-ask-chip {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--interactive-accent);
+  background: rgba(var(--interactive-accent-rgb, 72, 120, 208), 0.1);
+  padding: 2px 8px;
+  border-radius: 10px;
+  line-height: 1.4;
+}
+
+.hyo-ask-answered-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.hyo-ask-answered-badge svg {
+  color: var(--text-success, var(--interactive-accent));
+  flex-shrink: 0;
+}
+
+.hyo-ask .hyo-ask-question-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-normal);
+  margin: 0 0 12px 0;
+  line-height: 1.45;
+}
+
+.hyo-ask-item.is-answered .hyo-ask-question-text {
+  margin-bottom: 0;
+}
+
+/* Controls container */
+.hyo-ask-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Option buttons */
+.hyo-ask-options {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+button.hyo-ask-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 7px 14px;
+  border: none;
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-normal);
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  width: 100%;
+  min-width: 0;
+  transition: all 0.1s ease;
+  height: auto;
+  white-space: normal;
+}
+
+button.hyo-ask-opt:hover {
+  background: rgba(var(--interactive-accent-rgb, 72, 120, 208), 0.06);
+  border-left-color: var(--interactive-accent);
+}
+
+button.hyo-ask-opt:active {
+  background: rgba(var(--interactive-accent-rgb, 72, 120, 208), 0.1);
+}
+
+.hyo-ask-opt-label {
+  font-weight: 500;
+  line-height: 1.35;
+  width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.hyo-ask-opt-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  line-height: 1.4;
+  width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Divider */
+.hyo-ask-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.hyo-ask-divider::before,
+.hyo-ask-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--background-modifier-border);
+}
+
+/* Text input */
+.hyo-ask-input {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.hyo-ask-input input {
+  flex: 1;
+  padding: 7px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 13px;
+  transition: border-color 0.15s ease;
+}
+
+.hyo-ask-input input:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px rgba(var(--interactive-accent-rgb, 72, 120, 208), 0.15);
+}
+
+button.hyo-ask-send {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-s);
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+button.hyo-ask-send:hover:not(:disabled) {
+  background: var(--interactive-accent-hover);
+}
+
+button.hyo-ask-send:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Plan review */
+.hyo-plan-review {
+  margin: 12px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--interactive-accent);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+
+.hyo-plan-review-resolved {
+  border-color: var(--background-modifier-border);
+  padding: 8px 14px;
+}
+
+.hyo-plan-review-status {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.hyo-plan-review-header {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 10px;
+  color: var(--text-normal);
+}
+
+.hyo-plan-review-content {
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  font-size: 13px;
+}
+
+.hyo-plan-review-fallback {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  font-style: italic;
+}
+
+.hyo-plan-review-permissions {
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.hyo-plan-review-permissions-label {
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.hyo-plan-review-permissions ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.hyo-plan-review-permissions li {
+  margin: 2px 0;
+}
+
+.hyo-plan-review-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.hyo-plan-review-buttons button {
+  padding: 6px 16px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--background-modifier-border);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.hyo-plan-review-reject {
+  background: var(--background-primary);
+  color: var(--text-muted);
+}
+
+.hyo-plan-review-reject:hover {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-plan-review-approve {
+  background: var(--interactive-accent) !important;
+  color: var(--text-on-accent) !important;
+  border-color: var(--interactive-accent) !important;
+}
+
+.hyo-plan-review-approve:hover {
+  background: var(--interactive-accent-hover) !important;
+}
+
+/* Streaming state */
+.hyo-streaming-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 16px;
+  background: var(--interactive-accent);
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: hyo-blink 1s step-end infinite;
+}
+
+@keyframes hyo-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* Activity indicator */
+.hyo-activity-indicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.hyo-thinking-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  animation: hyo-dot-pulse 1.4s ease-in-out infinite;
+}
+
+.hyo-thinking-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.hyo-thinking-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes hyo-dot-pulse {
+  0%, 80%, 100% { opacity: 0.3; }
+  40% { opacity: 1; }
+}
+
+/* Compaction banner */
+.hyo-compaction-banner {
+  text-align: center;
+  padding: 8px;
+  margin: 12px 0;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-style: italic;
+  border-top: 1px dashed var(--background-modifier-border);
+  border-bottom: 1px dashed var(--background-modifier-border);
+}
+
+/* Input area */
+.hyo-input-area {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+}
+
+.hyo-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+/* File attachment chips */
+.hyo-attachment-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.hyo-attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  font-size: 12px;
+  color: var(--text-muted);
+  align-self: flex-start;
+}
+
+.hyo-attachment-name {
+  color: var(--text-normal);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hyo-attachment-tokens {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hyo-attachment-chip-ref {
+  border-style: dashed;
+}
+
+.hyo-attachment-chip-ref .hyo-attachment-tokens {
+  color: var(--text-accent);
+}
+
+.hyo-attachment-remove {
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-faint);
+  padding: 0 2px !important;
+  cursor: pointer;
+}
+
+.hyo-attachment-remove:hover {
+  color: var(--text-muted);
+}
+
+/* Attach (paperclip) button + popup */
+.hyo-attach-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.hyo-attach-btn {
+  color: var(--text-faint);
+  padding: 8px;
+  border-radius: var(--radius-s);
+  display: flex;
+  align-items: center;
+  transition: color 0.1s;
+}
+
+.hyo-attach-btn:hover {
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
+}
+
+.hyo-attach-popup {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  padding: 4px;
+  min-width: 180px;
+  z-index: 100;
+}
+
+.hyo-attach-popup-item {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px !important;
+  border-radius: var(--radius-s);
+  font-size: 13px;
+  color: var(--text-normal);
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.hyo-attach-popup-item svg {
+  flex-shrink: 0;
+  align-self: center;
+  display: inline-block;
+}
+
+.hyo-attach-popup-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-family: var(--font-text);
+  font-size: 14px;
+  line-height: 1.4;
+  resize: none;
+  min-height: 36px;
+  max-height: 150px;
+}
+
+.hyo-input:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+}
+
+.hyo-input::placeholder {
+  color: var(--text-faint);
+}
+
+.hyo-send-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50% !important;
+  background: var(--interactive-accent) !important;
+  color: var(--text-on-accent) !important;
+  padding: 0 !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.hyo-send-btn:hover {
+  background: var(--interactive-accent-hover) !important;
+}
+
+.hyo-send-btn:active {
+  transform: scale(0.93);
+}
+
+/* Stop button — red */
+.hyo-send-btn.hyo-stop {
+  background: var(--text-error) !important;
+}
+
+.hyo-send-btn.hyo-stop:hover {
+  background: #b55555 !important;
+}
+
+/* Tab bar — acts as header, combines tabs + actions */
+.hyo-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-end;
+  justify-content: space-between;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding: 6px 8px 0 8px;
+  gap: 8px;
+}
+
+/* Left side — scrollable tabs */
+.hyo-tabs-left {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  gap: 2px;
+}
+
+.hyo-tabs-left::-webkit-scrollbar {
+  height: 0;
+}
+
+/* Right side — action buttons */
+.hyo-tabs-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding-bottom: 6px;
+}
+
+/* Action button styling */
+.hyo-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border-radius: var(--radius-s);
+  transition: all 0.1s;
+}
+
+.hyo-action-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+/* Individual tab */
+.hyo-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  max-width: 200px;
+  padding: 6px 8px;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  user-select: none;
+  transition: color 0.1s;
+}
+
+/* Drag to reorder — the tab being carried fades, and a caret marks the slot
+   it will drop into. */
+.hyo-tab-dragging {
+  opacity: 0.4;
+}
+
+.hyo-tab-drop-before::before,
+.hyo-tab-drop-after::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--interactive-accent);
+  pointer-events: none;
+}
+
+.hyo-tab-drop-before::before {
+  left: -2px;
+}
+
+.hyo-tab-drop-after::after {
+  right: -2px;
+}
+
+.hyo-tab:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.hyo-tab-active {
+  color: var(--text-normal);
+  background: var(--background-primary);
+}
+
+.hyo-tab-active:hover {
+  background: var(--background-primary);
+}
+
+/* Tab title */
+.hyo-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* Close button — always reserves space, visible on hover/active */
+.hyo-tab-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-muted) !important;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.hyo-tab-close:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.hyo-tab:hover .hyo-tab-close,
+.hyo-tab-active .hyo-tab-close {
+  opacity: 1;
+}
+
+/* Working — Claude is running. Green "go" dot with a calm scale pulse: alive,
+   but ambient (this is the constant background state, so it stays gentle). */
+.hyo-tab-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-green, #4bb377);
+  flex-shrink: 0;
+  animation: hyo-dot-working-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes hyo-dot-working-pulse {
+  0%, 100% { transform: scale(1);    opacity: 0.55; }
+  50%      { transform: scale(1.15); opacity: 1; }
+}
+
+/* Waiting on you — Claude is blocked awaiting a permission, answer, or plan
+   approval. Warm peach "your turn" colour + an assertive scale-and-glow pulse
+   that pulls the eye from another tab, unlike the calm green working dot. */
+.hyo-tab-dot-waiting {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f0a875;
+  animation: hyo-dot-waiting-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes hyo-dot-waiting-pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 2px rgba(240, 168, 117, 0.4);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.25);
+    box-shadow: 0 0 0 6px rgba(240, 168, 117, 0);
+    opacity: 1;
+  }
+}
+
+.hyo-tab-rename-input {
+  width: 100px;
+  padding: 2px 6px;
+  font-size: 12px;
+  border: 1px solid var(--interactive-accent);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  outline: none;
+}
+
+/* Session dropdown */
+.hyo-session-dropdown {
+  position: relative;
+}
+
+.hyo-session-dropdown-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border-radius: var(--radius-s);
+  transition: all 0.1s;
+}
+
+.hyo-session-dropdown-toggle:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.hyo-session-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 9999;
+  width: 260px;
+  max-height: 360px;
+  overflow-y: auto;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border-hover);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  padding: 4px;
+}
+
+.hyo-session-dropdown-header {
+  padding: 4px 14px 6px;
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.hyo-session-dropdown-empty {
+  padding: 20px 8px;
+  color: var(--text-faint);
+  font-size: 13px;
+  text-align: center;
+}
+
+.hyo-session-dropdown-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.hyo-session-dropdown-date {
+  padding: 8px 14px 4px;
+  font-size: 10px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.hyo-session-dropdown-date:first-child {
+  padding-top: 0;
+}
+
+.hyo-session-dropdown-item {
+  display: block;
+  width: 100%;
+  padding: 6px 14px !important;
+  color: var(--text-normal) !important;
+  font-size: 13px;
+  text-align: left !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: var(--radius-s);
+}
+
+.hyo-session-dropdown-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+/* Status bar */
+.hyo-status-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--background-secondary);
+  border-top: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+/* Usage bars — single clickable group */
+.hyo-usage-bars-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: var(--radius-s);
+  transition: background 0.1s;
+}
+
+.hyo-usage-bars-group:hover {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-usage-bars-group.stale .hyo-usage-bar-fill,
+.hyo-usage-bars-group.stale .hyo-usage-bar-label,
+.hyo-usage-bars-group.stale .hyo-usage-bar-track {
+  opacity: 0.45;
+}
+
+.hyo-usage-bar-label {
+  font-size: 10px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  min-width: 18px;
+}
+
+.hyo-usage-bar-track-wrap {
+  position: relative;
+  width: 60px;
+  padding: 4px 0;
+}
+
+.hyo-usage-bar-track {
+  display: block;
+  height: 4px;
+  background: var(--background-modifier-border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.hyo-usage-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--interactive-accent);
+  transition: width 0.3s, background 0.3s;
+}
+
+.hyo-usage-bar-fill.warning {
+  background: #f39c12;
+}
+
+.hyo-usage-bar-fill.danger {
+  background: #e74c3c;
+}
+
+/* Context ring button */
+.hyo-context-ring-btn {
+  background: none;
+  border: none;
+  padding: 0 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  opacity: 0.7;
+  transition: opacity 0.1s;
+}
+
+.hyo-context-ring-btn:hover {
+  opacity: 1;
+}
+
+/* Context popup */
+.hyo-context-popup {
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  padding: 12px;
+  min-width: 220px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+  z-index: 1000;
+}
+
+.hyo-compact-now-btn {
+  width: 100%;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: 5px;
+  padding: 6px 0;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  margin-top: 4px;
+  transition: opacity 0.1s;
+}
+
+.hyo-compact-now-btn:hover {
+  opacity: 0.85;
+}
+
+.hyo-usage-bar-pace {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--text-faint);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Model selector */
+.hyo-model-selector {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: transparent;
+  border-radius: var(--radius-s);
+  transition: all 0.1s;
+}
+
+.hyo-model-selector:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.hyo-model-selector-name {
+  font-weight: 500;
+}
+
+/* Effort level, shown alongside the model in the same pill */
+.hyo-model-selector-effort {
+  color: var(--text-faint);
+}
+
+/* Permission mode selector */
+.hyo-permission-mode-selector {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: transparent;
+  border-radius: var(--radius-s);
+  transition: all 0.1s;
+}
+
+.hyo-permission-mode-selector:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.hyo-permission-mode-name {
+  font-weight: 500;
+}
+
+/* Agent selector */
+.hyo-agent-selector {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: transparent;
+  border-radius: var(--radius-s);
+  transition: all 0.1s;
+}
+
+.hyo-agent-selector:hover:not(.locked) {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.hyo-agent-selector.locked {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.hyo-agent-name {
+  font-weight: 500;
+  color: var(--agent-color, var(--text-muted));
+  text-transform: capitalize;
+}
+
+.hyo-agent-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--agent-color, var(--text-muted));
+  flex-shrink: 0;
+}
+
+/* Agent popup */
+.hyo-agent-popup {
+  z-index: 9999;
+  min-width: 240px;
+  max-width: 320px;
+  padding: 4px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-l);
+}
+
+.hyo-agent-popup-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+
+.hyo-agent-popup-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-agent-popup-item.active {
+  background: var(--background-modifier-active-hover);
+}
+
+.hyo-agent-popup-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+
+.hyo-agent-popup-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.hyo-agent-popup-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-normal);
+  text-transform: capitalize;
+}
+
+.hyo-agent-popup-default {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+  text-transform: none;
+}
+
+.hyo-agent-popup-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  line-height: 1.3;
+}
+
+.hyo-agent-popup-check {
+  color: var(--text-accent);
+  font-size: 12px;
+}
+
+/* Usage popup */
+.hyo-usage-popup {
+  z-index: 9999;
+  min-width: 240px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  padding: 8px;
+}
+
+.hyo-usage-popup-title {
+  padding: 4px 8px;
+  font-weight: 600;
+  font-size: 10px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.hyo-usage-divider {
+  height: 1px;
+  background: var(--background-modifier-border);
+  margin: 6px 0;
+}
+
+.hyo-usage-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.hyo-usage-row.small {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.hyo-usage-label {
+  color: var(--text-muted);
+}
+
+.hyo-usage-value {
+  color: var(--text-normal);
+  font-weight: 500;
+}
+
+.hyo-usage-bar-inline-wrap {
+  position: relative;
+  padding: 4px 8px;
+}
+
+.hyo-usage-bar-inline {
+  height: 6px;
+  background: var(--background-modifier-border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.hyo-usage-bar-inline-fill {
+  height: 100%;
+  background: var(--interactive-accent);
+  transition: width 0.3s, background 0.3s;
+}
+
+.hyo-usage-bar-inline-fill.warning {
+  background: #f39c12;
+}
+
+.hyo-usage-bar-inline-fill.danger {
+  background: #e74c3c;
+}
+
+.hyo-usage-refresh-btn {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  background: transparent;
+  border-radius: var(--radius-s);
+  transition: all 0.1s;
+}
+
+.hyo-usage-refresh-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.hyo-usage-stale-notice {
+  padding: 6px 8px;
+  font-size: 11px;
+  color: #f39c12;
+  line-height: 1.4;
+}
+
+/* Model popup */
+.hyo-model-popup {
+  z-index: 9999;
+  min-width: 180px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  padding: 4px;
+}
+
+.hyo-model-popup-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 13px;
+  color: var(--text-normal);
+  cursor: pointer;
+  border-radius: var(--radius-s);
+  transition: background 0.1s;
+}
+
+.hyo-model-popup-name {
+  flex: 1;
+}
+
+.hyo-model-popup-context {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.hyo-model-popup-divider {
+  height: 1px;
+  background: var(--background-modifier-border);
+  margin: 4px 0;
+}
+
+/* Effort submenu — opens from the "Effort" row in the model popup */
+.hyo-effort-popup {
+  min-width: 260px;
+}
+
+.hyo-effort-popup-header {
+  padding: 6px 8px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.hyo-effort-row-value {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.hyo-effort-row-chevron {
+  color: var(--text-faint);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.hyo-effort-desc {
+  font-size: 11px;
+  color: var(--text-faint);
+  text-align: right;
+  max-width: 150px;
+}
+
+.hyo-effort-default-badge {
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--background-modifier-border);
+  border-radius: var(--radius-s);
+}
+
+.hyo-model-custom-row {
+  display: flex;
+  gap: 6px;
+  padding: 4px 8px 4px;
+  align-items: center;
+}
+
+.hyo-model-custom-input {
+  flex: 1;
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  outline: none;
+}
+
+.hyo-model-custom-input:focus {
+  border-color: var(--interactive-accent);
+}
+
+.hyo-model-custom-btn {
+  font-size: 12px;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 4px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  cursor: pointer;
+  opacity: 1;
+}
+
+.hyo-model-custom-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.hyo-model-popup-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-model-popup-item.active {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-model-check {
+  width: 14px;
+  font-size: 12px;
+  color: var(--interactive-accent);
+}
+
+/* Permission popup */
+.hyo-perm-popup {
+  z-index: 9999;
+  min-width: 220px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  padding: 4px;
+}
+
+.hyo-perm-popup-item {
+  padding: 8px 10px;
+  cursor: pointer;
+  border-radius: var(--radius-s);
+  transition: background 0.1s;
+}
+
+.hyo-perm-popup-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-perm-popup-item.active {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-perm-popup-item-name {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-normal);
+  margin-bottom: 2px;
+}
+
+.hyo-perm-popup-check {
+  font-size: 12px;
+  color: var(--interactive-accent);
+}
+
+.hyo-perm-popup-item-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+/* Drag and drop overlay */
+.hyo-chat-panel.hyo-drag-over::after {
+  content: "Drop file to attach";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+  border: 2px dashed var(--interactive-accent);
+  border-radius: var(--radius-m);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--interactive-accent);
+  pointer-events: none;
+  z-index: 50;
+}
+
+.hyo-chat-panel {
+  position: relative;
+}
+
+/* Slash command menu */
+.hyo-slash-menu {
+  position: relative;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  padding: 4px;
+  margin-bottom: 2px;
+}
+
+.hyo-slash-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 10px;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.hyo-slash-item:hover,
+.hyo-slash-item-selected {
+  background: var(--background-modifier-hover);
+}
+
+.hyo-slash-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-normal);
+}
+
+.hyo-slash-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* File chips in message history */
+.hyo-message-file-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.hyo-message-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-s);
+  font-size: 12px;
+  color: inherit;
+  opacity: 0.85;
+}
+
+/* Compaction divider line */
+.hyo-compaction-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  opacity: 0.5;
+}
+
+.hyo-compaction-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--background-modifier-border);
+}
+
+.hyo-compaction-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* Message copy button */
+.hyo-message-actions {
+  display: flex;
+  gap: 4px;
+  padding: 2px 0 0 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.hyo-message-assistant:hover .hyo-message-actions {
+  opacity: 1;
+}
+
+.hyo-copy-btn {
+  color: var(--text-faint);
+  padding: 4px;
+  border-radius: var(--radius-s);
+  display: flex;
+  align-items: center;
+  line-height: 1;
+}
+
+.hyo-copy-btn:hover {
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
+}
+
+/* Session recovery banner — shown below an assistant message that's a
+   thinking-block API error. Lets the user heal the session in one click. */
+.hyo-recover-banner {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-m);
+  background: var(--background-modifier-error-hover, rgba(255, 100, 80, 0.08));
+  border: 1px solid var(--background-modifier-border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hyo-recover-banner-text {
+  font-size: 0.9em;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.hyo-recover-button {
+  align-self: flex-start;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+  padding: 6px 14px;
+  border-radius: var(--radius-s);
+  font-size: 0.9em;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.hyo-recover-button:hover {
+  background: var(--interactive-accent-hover);
+}
+
+/* ======================= Voice Mode ======================= */
+
+/* Status bar voice toggle */
+.hyo-voice-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  color: var(--text-muted);
+  background: transparent;
+  border-radius: var(--radius-s);
+  font-size: 12px;
+  transition: all 0.1s;
+  cursor: pointer;
+}
+
+.hyo-voice-toggle:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.hyo-voice-toggle.active {
+  color: var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+}
+
+.hyo-voice-toggle.disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.hyo-voice-toggle.disabled:hover {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+/* Voice controls — replaces the text input when voice mode is active */
+.hyo-voice-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+}
+
+/* Mic / record button — big, coloured, obvious CTA */
+.hyo-voice-record-btn {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  border: none;
+  border-radius: 50%;
+  background-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
+  padding: 0;
+  margin: 0;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--interactive-accent) 30%, transparent);
+}
+
+.hyo-voice-record-btn:hover {
+  filter: brightness(1.1);
+  background-color: var(--interactive-accent);
+}
+
+.hyo-voice-record-btn.recording {
+  background: var(--text-error);
+  color: white;
+  animation: hyo-voice-pulse 1.5s ease-in-out infinite;
+}
+
+.hyo-voice-record-btn.disabled {
+  opacity: 0.5;
+  cursor: default;
+  filter: none;
+}
+
+@keyframes hyo-voice-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--text-error) 40%, transparent); }
+  50% { box-shadow: 0 0 0 10px color-mix(in srgb, var(--text-error) 0%, transparent); }
+}
+
+/* Status label */
+.hyo-voice-status-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  flex: 1;
+}
+
+/* Playback controls */
+.hyo-voice-playback {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hyo-voice-ctrl-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  background: var(--background-modifier-border);
+  cursor: pointer;
+  transition: all 0.1s;
+}
+
+.hyo-voice-ctrl-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-border-hover);
+}
+
+.hyo-voice-ctrl-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.hyo-voice-speed-btn {
+  min-width: 40px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-monospace);
+}
+
+/* ── Release card ─────────────────────────────────────────────────────────
+   Pinned above the message list after an update. Deliberately not styled as
+   an assistant message — this is the plugin talking, not the agent. */
+.hyo-release-card {
+  flex: 0 0 auto;
+  margin: 12px 12px 0 12px;
+  padding: 12px 14px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-left: 3px solid var(--interactive-accent);
+  border-radius: var(--radius-s);
+}
+
+.hyo-release-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.hyo-release-card-badge {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--interactive-accent);
+}
+
+.hyo-release-card-version {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.hyo-release-card-dismiss {
+  margin-left: auto;
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0 2px;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-faint);
+}
+
+.hyo-release-card-dismiss:hover {
+  color: var(--text-normal);
+}
+
+.hyo-release-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-normal);
+  margin-bottom: 4px;
+}
+
+.hyo-release-card-body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-normal);
+}
+
+/* The bullets carry their own spacing; trim the markdown renderer's outer
+   margins so the card doesn't gain a dead band at top and bottom. */
+.hyo-release-card-body > div > *:first-child { margin-top: 0; }
+.hyo-release-card-body > div > *:last-child { margin-bottom: 0; }
+.hyo-release-card-body ul {
+  margin: 6px 0 0 0;
+  padding-left: 18px;
+}
+.hyo-release-card-body li { margin-bottom: 4px; }
+
+.hyo-release-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.hyo-release-card-btn {
+  font-size: 12px;
+  padding: 5px 11px;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--background-modifier-border);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.hyo-release-card-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+/* ── Release notes panel ──────────────────────────────────────────────────
+   Every version, rendered in app. Overlays the chat surface rather than
+   opening a modal, so it matches the rest of Hyo's panels. */
+.hyo-release-notes {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--background-primary);
+}
+
+.hyo-release-notes-head {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+}
+
+.hyo-release-notes-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.hyo-release-notes-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0 2px;
+  cursor: pointer;
+  font-size: 17px;
+  line-height: 1;
+  color: var(--text-muted);
+}
+
+.hyo-release-notes-close:hover { color: var(--text-normal); }
+
+.hyo-release-notes-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px 24px 16px;
+  font-size: 13px;
+  line-height: 1.6;
+  user-select: text;
+}
+
+.hyo-session-dropdown-divider {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--background-modifier-border);
+}
+
+.hyo-session-dropdown-whatsnew { color: var(--text-muted); }
+
+/* Multiple releases in one card — each needs its own header so the bullets
+   don't run together into one undifferentiated list. */
+.hyo-release-card-section + .hyo-release-card-section {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.hyo-release-card-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.hyo-release-card-section-version {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.hyo-release-card-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+/* --- Voice "on screen" card (inline in the transcript) --- */
+/* Chad's [SCREEN] detail renders as an Obsidian callout of type "screen" — a
+   clean prepared-to-read card that lives in the conversation, so it persists
+   and can't be lost on a stray dismiss. */
+.callout[data-callout="screen"] {
+  --callout-color: var(--interactive-accent-rgb, 110, 84, 232);
+  border: 1px solid color-mix(in srgb, var(--interactive-accent) 30%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--interactive-accent) 6%, var(--background-primary));
+  margin: 10px 0;
+  padding: 6px 14px 10px;
+}
+
+.callout[data-callout="screen"] .callout-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--interactive-accent);
+  padding: 4px 0 6px;
+  gap: 6px;
+}
+
+.callout[data-callout="screen"] .callout-icon {
+  display: none;
+}
+
+.callout[data-callout="screen"] .callout-content > :first-child {
+  margin-top: 0;
+}
+.callout[data-callout="screen"] .callout-content > :last-child {
+  margin-bottom: 0;
+}
+
+/* ===================== Voice View ===================== */
+/* The voice-first surface: Blob centre stage, colour = state, transcript on a
+   toggle, on-screen detail as a frosted overlay, permission asks in-view.
+   Ported from the approved mockup (chad/assets/hyo-voice-view-mockup.html). */
+.hyo-voiceview {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+.hyo-vv-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  padding: 20px;
+}
+
+/* --- the Blob --- */
+.hyo-blob {
+  width: 160px;
+  height: 160px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.hyo-blob-core {
+  width: 96px;
+  height: 96px;
+  border-radius: 56% 44% 60% 40% / 48% 62% 38% 52%;
+  background: #b9c1cd;
+  transition: background 0.4s, width 0.4s, height 0.4s;
+  animation: hyo-blob-morph 7s ease-in-out infinite;
+}
+@keyframes hyo-blob-morph {
+  0%, 100% { border-radius: 56% 44% 60% 40% / 48% 62% 38% 52%; }
+  50% { border-radius: 44% 56% 46% 54% / 60% 42% 58% 40%; }
+}
+.hyo-blob-glow {
+  position: absolute;
+  width: 160px;
+  height: 160px;
+  border-radius: 50%;
+  filter: blur(36px);
+  opacity: 0.28;
+  background: #b9c1cd;
+  z-index: 0;
+  transition: background 0.4s, opacity 0.4s;
+}
+.hyo-blob-core { position: relative; z-index: 1; }
+.hyo-blob-ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  opacity: 0;
+  z-index: 0;
+}
+/* state colours */
+.hyo-blob.idle .hyo-blob-core { width: 74px; height: 74px; background: #b9c1cd; border-radius: 50%; animation-play-state: paused; }
+.hyo-blob.idle .hyo-blob-glow { background: #b9c1cd; opacity: 0.22; }
+.hyo-blob.listening .hyo-blob-core { background: #3b6ef5; animation-duration: 4s; }
+.hyo-blob.listening .hyo-blob-glow { background: #3b6ef5; opacity: 0.42; }
+.hyo-blob.listening .hyo-blob-ring { color: #3b6ef5; animation: hyo-blob-ring 2.2s ease-out infinite; }
+.hyo-blob.thinking .hyo-blob-core { background: #7b5ce6; animation-duration: 2.6s; }
+.hyo-blob.thinking .hyo-blob-glow { background: #7b5ce6; opacity: 0.42; }
+.hyo-blob.speaking .hyo-blob-core { background: #e0932f; width: 120px; height: 120px; animation-duration: 1.7s; }
+.hyo-blob.speaking .hyo-blob-glow { background: #e0932f; opacity: 0.5; }
+.hyo-blob.speaking .hyo-blob-ring { color: #e0932f; animation: hyo-blob-ring 1.8s ease-out infinite; }
+@keyframes hyo-blob-ring {
+  0% { width: 150px; height: 150px; opacity: 0.32; }
+  100% { width: 214px; height: 214px; opacity: 0; }
+}
+
+/* --- status text --- */
+.hyo-vv-status { text-align: center; }
+.hyo-vv-state { font-size: 17px; font-weight: 600; color: var(--text-muted); }
+.hyo-vv-doing { font-size: 13px; color: var(--text-muted); margin-top: 3px; min-height: 1.2em; }
+.hyo-vv-status.listening .hyo-vv-state { color: #3b6ef5; }
+.hyo-vv-status.thinking .hyo-vv-state { color: #7b5ce6; }
+.hyo-vv-status.speaking .hyo-vv-state { color: #e0932f; }
+
+/* --- frosted on-screen overlay --- */
+.hyo-vv-overlay {
+  position: absolute;
+  inset: 14px 14px 14px 14px;
+  background: color-mix(in srgb, var(--background-primary) 72%, transparent);
+  backdrop-filter: blur(20px) saturate(1.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  border: 1px solid color-mix(in srgb, var(--background-modifier-border) 70%, transparent);
+  border-radius: 16px;
+  box-shadow: 0 16px 50px var(--background-modifier-box-shadow);
+  padding: 12px 16px 16px;
+  overflow: auto;
+  z-index: 5;
+  animation: hyo-vv-overlay-in 0.2s ease-out;
+}
+@keyframes hyo-vv-overlay-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.hyo-vv-overlay-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  position: sticky;
+  top: 0;
+}
+.hyo-vv-overlay-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: #c2892f;
+}
+.hyo-vv-overlay-close {
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 5px;
+  border-radius: 5px;
+}
+.hyo-vv-overlay-close:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.hyo-vv-overlay-card + .hyo-vv-overlay-card {
+  margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--background-modifier-border);
+}
+.hyo-vv-overlay-card > :first-child { margin-top: 0; }
+.hyo-vv-overlay-card > :last-child { margin-bottom: 0; }
+
+/* --- in-view permission prompt --- */
+.hyo-vv-perm {
+  position: absolute;
+  left: 16px; right: 16px; bottom: 16px;
+  background: var(--background-primary);
+  border: 1px solid color-mix(in srgb, #e0932f 45%, var(--background-modifier-border));
+  border-radius: 14px;
+  box-shadow: 0 12px 34px var(--background-modifier-box-shadow);
+  padding: 14px;
+  z-index: 6;
+  animation: hyo-vv-overlay-in 0.2s ease-out;
+}
+.hyo-vv-perm-h { font-size: 12px; font-weight: 700; color: #b98328; margin-bottom: 4px; }
+.hyo-vv-perm-txt { font-size: 13px; color: var(--text-normal); margin-bottom: 12px; line-height: 1.4; }
+.hyo-vv-perm-txt code { background: var(--background-modifier-hover); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+.hyo-vv-perm-btns { display: flex; gap: 8px; }
+/* Specificity bumped (button.class) to beat the global `.hyo-plugin button` reset. */
+.hyo-vv-perm-btns button.hyo-vv-perm-allow,
+.hyo-vv-perm-btns button.hyo-vv-perm-always,
+.hyo-vv-perm-btns button.hyo-vv-perm-deny {
+  flex: 1; border: none; border-radius: 8px; padding: 8px 6px; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.hyo-vv-perm-btns button.hyo-vv-perm-allow { background: var(--interactive-accent); color: var(--text-on-accent); }
+.hyo-vv-perm-btns button.hyo-vv-perm-always { background: var(--background-modifier-hover); color: var(--text-normal); }
+.hyo-vv-perm-btns button.hyo-vv-perm-deny { background: color-mix(in srgb, var(--text-error) 16%, transparent); color: var(--text-error); }
+.hyo-blob.dim .hyo-blob-core { opacity: 0.45; }
+
+/* --- back-to-voice bar (shown above the transcript when flipped open) --- */
+.hyo-vv-backbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 14px; border-bottom: 1px solid var(--background-modifier-border);
+}
+.hyo-vv-backbar a { color: var(--interactive-accent); font-size: 12px; font-weight: 600; cursor: pointer; }
+.hyo-vv-backbar span { font-size: 12px; color: var(--text-muted); }
+
+/* control-bar side buttons (transcript toggle, end) */
+.hyo-voice-side-btn { cursor: pointer; }
+.hyo-voice-side-btn.active { color: var(--interactive-accent); }
+.hyo-voice-end-btn { margin-left: auto; }
+.hyo-voice-record-btn.muted { background: var(--background-modifier-border); color: var(--text-muted); box-shadow: none; }
+
+/* voice-view top bar + new conversation */
+.hyo-vv-topbar { display: flex; justify-content: flex-end; padding: 8px 10px 0; }
+.hyo-vv-topbar button.hyo-vv-newbtn {
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-muted);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.hyo-vv-topbar button.hyo-vv-newbtn:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+
+/* "show last on screen" pill (re-summon a dismissed overlay) */
+.hyo-vv-stage button.hyo-vv-showlast {
+  border: 1px solid color-mix(in srgb, #e0932f 40%, var(--background-modifier-border));
+  background: color-mix(in srgb, #e0932f 8%, var(--background-primary));
+  color: #b98328;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.hyo-vv-stage button.hyo-vv-showlast:hover { background: color-mix(in srgb, #e0932f 14%, var(--background-primary)); }
+
+</style></head>
+<body class="theme-light"><div class="hyo-plugin" style="font-family:var(--font-ui);">
+  <div class="hyo-chat-panel" style="width:620px;height:520px;display:flex;flex-direction:column;background:var(--background-primary-alt);">
+    <div class="hyo-messages" style="flex:1;overflow:hidden;padding:16px;">
+      <div class="hyo-message hyo-message-user"><div class="hyo-message-content"><div class="hyo-message-text">Get me ready for the week.</div></div></div>
+      <div class="hyo-message hyo-message-assistant"><div class="hyo-message-content">
+        <div class="hyo-tool-call"><div class="hyo-tool-call-header"><span class="hyo-tool-call-arrow">&#9654;</span><span class="hyo-tool-call-name">Read</span><span class="hyo-tool-call-summary">weekly-plan.md</span></div></div>
+        <div class="hyo-tool-call"><div class="hyo-tool-call-header"><span class="hyo-tool-call-arrow">&#9654;</span><span class="hyo-tool-call-name">Grep</span><span class="hyo-tool-call-summary">"this week"</span></div></div>
+        <div class="hyo-tool-call"><div class="hyo-tool-call-header"><span class="hyo-tool-call-arrow">&#9654;</span><span class="hyo-tool-call-name">Task</span><span class="hyo-tool-call-summary">Fetch overdue tasks</span></div></div>
+        <div class="hyo-message-text"><p>You&rsquo;ve got 3 meetings, 5 overdue tasks, and a payment landed overnight. Here&rsquo;s what I&rsquo;d start with this morning.</p></div>
+      </div></div>
+    </div>
+    <div class="hyo-input-area">
+      <div class="hyo-input-row">
+        <button class="hyo-attach-btn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+        <textarea class="hyo-input" placeholder="Message Claude&#8230;" rows="1"></textarea>
+        <button class="hyo-send-btn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
+      </div>
+    </div>
+    <div class="hyo-status-bar">
+      <div class="hyo-usage-bars-group">
+        <span class="hyo-usage-bar-label">5HR</span>
+        <span class="hyo-usage-bar-track-wrap"><span class="hyo-usage-bar-track"><span class="hyo-usage-bar-fill" style="width:60%"></span></span></span>
+        <span class="hyo-usage-bar-label">7D</span>
+        <span class="hyo-usage-bar-track-wrap"><span class="hyo-usage-bar-track"><span class="hyo-usage-bar-fill" style="width:38%"></span></span></span>
+      </div>
+      <span style="flex:1"></span>
+      <button class="hyo-voice-toggle"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span>Voice</span></button>
+      <button class="hyo-agent-selector" style="--agent-color:#8b5cf6"><span class="hyo-agent-dot"></span><span class="hyo-agent-name">Chad</span></button>
+      <button class="hyo-permission-mode-selector"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0L2 3v5c0 3.5 2.5 6.5 6 7 3.5-.5 6-3.5 6-7V3L8 0z"/></svg><span class="hyo-permission-mode-name">Ask first</span></button>
+      <button class="hyo-model-selector"><span class="hyo-model-selector-name">Opus 4.8 1M</span><span class="hyo-model-selector-effort">Medium</span><svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M4 6l4 4 4-4z"/></svg></button>
+    </div>
+  </div>
+</div></body></html>

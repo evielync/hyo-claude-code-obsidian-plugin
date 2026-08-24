@@ -26,7 +26,9 @@ import {
   shouldInline,
   writeAttachmentToDisk,
 } from "../attachments";
-import * as path from "path";
+import { Platform } from "obsidian";
+// Node built-in; deferred so this module loads on mobile.
+const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
 
 interface AttachedFile {
   name: string;

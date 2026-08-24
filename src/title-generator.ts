@@ -1,6 +1,8 @@
 import { debug } from "./debug";
-import { spawn } from "child_process";
-import * as os from "os";
+import { Platform } from "obsidian";
+// Node built-ins are desktop-only; deferred so this module loads on mobile.
+const spawn: typeof import("child_process").spawn = Platform.isMobile ? (undefined as any) : require("child_process").spawn;
+const os: typeof import("os") = Platform.isMobile ? (undefined as any) : require("os");
 
 interface TitleGenOptions {
   cliPath: string;

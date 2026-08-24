@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
+import { Platform } from "obsidian";
+// Node built-ins are desktop-only; deferred so this module loads on mobile.
+const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
+const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
+const os: typeof import("os") = Platform.isMobile ? (undefined as any) : require("os");
 
 export interface Agent {
   name: string;

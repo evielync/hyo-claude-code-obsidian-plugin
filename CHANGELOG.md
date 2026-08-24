@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0
+
+**The one where Hyo comes to your phone**
+
+- **Hyo now works on your phone.** It's the same plugin — install it in your phone's vault and it talks to Claude Code running on your Mac. Start a conversation at your desk, pick it up from the couch, the car, anywhere.
+- **Setup is a toggle, not a project.** Install Tailscale (a free private-network app) on both devices, then flip on mobile access in Settings → Mobile. Hyo sets up the connection itself and the address syncs to your phone — nothing to copy, no Terminal. There's a full setup guide at docs.gethyo.co.
+- **You can always see it's working.** The status bar shows 📱 Mobile: on — and "1 connected" while your phone is attached. If something's wrong it says so, instead of leaving you guessing.
+- **Every vault can have its own phone connection.** Turn mobile access on in as many vaults as you like — each gets its own address, and they don't fight over anything.
+- **Your tabs come back.** Closing Obsidian used to take every open conversation with it. Now Hyo reopens with the tabs you had open — and your phone remembers its own set, separately from your desk.
+- **Titles and pins follow you across devices.** Name a conversation or pin it on one device, and it shows up that way on the other.
+- **History puts the urgent stuff first.** Within each day: conversations that need you, then ones working right now, then ones waiting on a reply.
+- **Voice works on the go.** On the phone it's a walkie-talkie — hold the mic, talk, and Hyo talks back. Desktop keeps full hands-free voice mode.
+- **A little chip on mobile.** Agent, model, and permissions live behind a small chip in the message bar — everything desktop has, sized for a phone.
+- **Settings got a proper tidy.** Five clear tabs — General, Voice, Mobile, Commands, Advanced — with live status where it matters, and a check next to the CLI path so you can see at a glance it's found.
+- **Commands moved in.** The note-header command buttons from the AI Commands plugin now live inside Hyo: attach a skill to a note type and every note of that type gets a one-click ✨ button.
+
 ## 0.4.0
 
 **The one where history gets a proper upgrade**

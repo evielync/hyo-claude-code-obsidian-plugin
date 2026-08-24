@@ -25,6 +25,11 @@ const context = await esbuild.context({
   ],
   format: "cjs",
   target: "es2020",
+  // `ws` ships a browser stub that throws on construction; esbuild's default
+  // browser resolution picks it, which silently killed the gateway host. The
+  // real Node implementation is what runs (desktop-only, behind Platform
+  // guards), so resolve `ws` to its Node entry explicitly.
+  alias: { ws: "./node_modules/ws/index.js" },
   // CHANGELOG.md is inlined as a string so the release card and the in-app
   // notes view work offline — no fetch, no extra release asset to ship.
   loader: { ".md": "text" },

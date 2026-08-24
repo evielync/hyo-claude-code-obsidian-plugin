@@ -1,7 +1,8 @@
-import { ItemView, WorkspaceLeaf } from "obsidian";
+import { ItemView, WorkspaceLeaf, Platform } from "obsidian";
 import { createRoot, Root } from "react-dom/client";
 import { createElement } from "react";
 import { HyoApp } from "./components/HyoApp";
+import { HyoApp as MobileHyoApp } from "./mobile/components/HyoApp";
 import type HyoPlugin from "./main";
 
 export const VIEW_TYPE_HYO = "hyo-plugin-view";
@@ -28,18 +29,22 @@ export class HyoView extends ItemView {
   }
 
   async onOpen() {
-    // Hide Obsidian's native view header — plugin has its own tab bar
-    const header = this.containerEl.children[0] as HTMLElement;
-    if (header) header.style.display = "none";
+    // Desktop draws its own tab bar, so it hides Obsidian's native view
+    // header; mobile leaves the native header in place (matches the mobile app).
+    if (!Platform.isMobile) {
+      const header = this.containerEl.children[0] as HTMLElement;
+      if (header) header.style.display = "none";
+    }
 
     const container = this.containerEl.children[1] as HTMLElement;
     container.style.padding = "0";
     container.empty();
     container.addClass("hyo-plugin");
 
+    const AppComponent = Platform.isMobile ? MobileHyoApp : HyoApp;
     this.root = createRoot(container);
     this.root.render(
-      createElement(HyoApp, {
+      createElement(AppComponent, {
         app: this.app,
         plugin: this.plugin,
       })

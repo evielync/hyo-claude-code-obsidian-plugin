@@ -1,4 +1,6 @@
-import * as fs from "fs";
+import { Platform } from "obsidian";
+// Node built-in; deferred so this module loads on mobile.
+const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
 
 // Detects and repairs the "thinking block poisoning" failure mode.
 //

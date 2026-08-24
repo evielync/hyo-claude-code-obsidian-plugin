@@ -14,12 +14,14 @@
     "exceljs": "^4.4.0",
     "onnxruntime-web": "^1.27.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
+    "@types/ws": "^8.18.1",
     "esbuild": "^0.25.0",
     "obsidian": "latest",
     "typescript": "^5.8.0"

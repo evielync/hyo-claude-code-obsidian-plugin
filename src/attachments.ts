@@ -1,6 +1,8 @@
 import { debug } from "./debug";
-import * as fs from "fs";
-import * as path from "path";
+import { Platform } from "obsidian";
+// Node built-ins are desktop-only; deferred so this module loads on mobile.
+const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
+const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
 
 // Rough heuristic: 1 token ≈ 4 characters (English/code).
 // Good enough for chip display and inline/reference routing.

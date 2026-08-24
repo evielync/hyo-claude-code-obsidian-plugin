@@ -1,6 +1,6 @@
 import { debug } from "../debug";
 import { useState, useCallback, useRef, useEffect } from "react";
-import { ClaudeTransport, normalizeModelId } from "../claude-transport";
+import { GatewayTransport } from "../gateway-transport";
 import { VOICE_PERSONA } from "../voice/voice-persona";
 import type {
   Message,
@@ -9,27 +9,21 @@ import type {
   AskQuestionData,
   PlanReviewData,
 } from "./useChatEngine";
-import { listPastSessions, loadSessionHistory, saveCustomTitle, setTaskMeta as persistTaskMeta, type PastSession, getProjectDir } from "../session-parser";
+import { listPastSessions, loadSessionHistory, saveCustomTitle, setTaskMeta as persistTaskMeta, type PastSession } from "../session-parser";
 import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
 import { generateConversationTitle } from "../title-generator";
-import { Platform } from "obsidian";
-// Node built-in; deferred so this module loads on mobile.
-const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
 
 // Re-export for convenience
 export type { PastSession };
 
-// A bare greeting opener ("hi chad", "hey", "good morning") carries no topic —
-// used to skip it when picking what to title a conversation from, so voice
-// chats started with a hello don't end up titled off the hello (or untitled).
-function isTrivialOpener(text: string): boolean {
-  const s = text.trim().toLowerCase().replace(/[.!,?'"]/g, "");
-  if (!s) return true;
-  if (s.split(/\s+/).length > 6) return false;
-  return /^(hi|hey|hello|hiya|heya|yo|sup|hola|morning|good morning|good afternoon|good evening|hey there)\b/.test(
-    s
-  );
-}
+// Locked scope: mobile Hyo always talks to Chad on Sonnet 5, asking before
+// it acts. The gateway enforces all three server-side regardless of what's
+// sent — these are just the values shown in the UI.
+const LOCKED_MODEL = "claude-sonnet-5";
+const LOCKED_AGENT = "chad";
+// Display value only — matches PERMISSION_MODES' "manual" ("Ask First"),
+// which reflects the gateway's actual hardcoded behaviour.
+const LOCKED_PERMISSION_MODE = "manual";
 
 // ------- types -------
 
@@ -48,15 +42,13 @@ export interface TabSession {
   messages: Message[];
   generating: boolean;
   model: string;
-  effort: string;
   permissionMode: string;
   agent: string;
   inputTokens: number;
   contextWindow?: number;
   voiceMode: boolean;
-  // Task mode: set true when a turn finishes on a tab that isn't the one being
-  // viewed, cleared when the task is opened. Makes a background/finished result
-  // read as "waiting for you" on the board. See hyo-task-mode-build-spec.
+  // Task mode: set when a turn finishes on a tab you aren't viewing, cleared
+  // when you open it. Makes a finished result read as "waiting on you".
   hasUnseenReply?: boolean;
 }
 
@@ -66,34 +58,23 @@ interface SessionState {
 }
 
 interface SessionManagerOptions {
-  cliPath: string;
-  cwd: string;
-  model: string;
-  effort: string;
-  permissionMode: string;
-  defaultAgent: string;
-  maxOutputTokens?: number;
+  gatewayUrl: string;
+  model?: string;
+  agent?: string;
   settingsVersion?: number;
   autoGenerateTitles?: boolean;
+  // Live value of the "Ask First" toggle (plugin settings). Read fresh on
+  // every sendMessage call and sent with each prompt — see gateway-client's
+  // sendPrompt.
+  askFirst?: boolean;
 }
 
 // ------- utilities -------
 
-function readPlanFile(cwd: string): string | null {
-  try {
-    const fs = require("fs");
-    const planPath = path.join(cwd, ".claude", "plan.md");
-    if (fs.existsSync(planPath)) {
-      return fs.readFileSync(planPath, "utf-8");
-    }
-    // Also check project root
-    const rootPlanPath = path.join(cwd, "plan.md");
-    if (fs.existsSync(rootPlanPath)) {
-      return fs.readFileSync(rootPlanPath, "utf-8");
-    }
-  } catch {
-    // File system not available or file not found
-  }
+// Desktop read a locally-written plan.md off disk here. There's no fs on
+// mobile — the ExitPlanMode handler below gets plan content from the Write
+// tool call that created it instead, so this always reports null.
+function readPlanFile(_cwd?: string): string | null {
   return null;
 }
 
@@ -217,10 +198,9 @@ export function useSessionManager(options: SessionManagerOptions) {
           title: "New conversation",
           messages: [],
           generating: false,
-          model: options.model,
-          effort: options.effort,
-          permissionMode: options.permissionMode,
-          agent: options.defaultAgent,
+          model: LOCKED_MODEL,
+          permissionMode: LOCKED_PERMISSION_MODE,
+          agent: LOCKED_AGENT,
           inputTokens: 0,
           voiceMode: false,
         },
@@ -231,7 +211,7 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   const [pastSessions, setPastSessions] = useState<PastSession[]>([]);
 
-  const transportsRef = useRef<Record<string, ClaudeTransport>>({});
+  const transportsRef = useRef<Record<string, GatewayTransport>>({});
   const streamStatesRef = useRef<Record<string, StreamState>>({});
   const scrollRef = useRef({ nearBottom: true });
   const stateRef = useRef(state);
@@ -404,7 +384,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           if (toolName === "ExitPlanMode") {
             // Get plan content: first try the Write tool call that created
             // the plan (the content is right there in the input), then fall
-            // back to reading from disk.
+            // back to readPlanFile (always null on mobile — no fs).
             let planContent: string | null = null;
             const writeCalls = ss.toolCalls.filter(
               (t) => t.name === "Write" && t.input?.content
@@ -413,7 +393,7 @@ export function useSessionManager(options: SessionManagerOptions) {
               planContent = writeCalls[writeCalls.length - 1].input.content;
             }
             if (!planContent) {
-              planContent = readPlanFile(options.cwd);
+              planContent = readPlanFile();
             }
 
             const allowedPrompts = req.input?.allowedPrompts || [];
@@ -447,12 +427,6 @@ export function useSessionManager(options: SessionManagerOptions) {
         // is tracked from individual assistant events (see below) since result.usage
         // aggregates across multiple API calls within a turn.
         if (event.type === "result") {
-          // A sub-agent finishing emits its own `result` — that must NOT end the
-          // main turn (which is still running the delegation). Otherwise the
-          // main tab flips to "not generating" mid-turn: in voice mode the mic
-          // un-suspends and the Blob drops to "Listening" while Chad's still
-          // working. Only the main-chain result ends the turn.
-          if (event.isSidechain || event.parent_tool_use_id) return;
           updateTabLastAssistant(tabId, () => ({ streaming: false }));
           const mu: any = event.modelUsage || {};
           const firstModel: any = Object.values(mu)[0];
@@ -465,8 +439,6 @@ export function useSessionManager(options: SessionManagerOptions) {
                     ...tab,
                     generating: false,
                     ...(contextWindow ? { contextWindow } : {}),
-                    // Task mode: a turn that finished on a tab the user isn't
-                    // looking at is a result waiting for them.
                     ...(prev.activeTabId !== tabId
                       ? { hasUnseenReply: true }
                       : {}),
@@ -479,30 +451,13 @@ export function useSessionManager(options: SessionManagerOptions) {
           if (options.autoGenerateTitles) {
             const currentTab = stateRef.current.tabs.find((t) => t.id === tabId);
             if (currentTab && currentTab.messages.length >= 2) {
-              const msgs = currentTab.messages;
-              const textOf = (m: Message) =>
-                m.displayText ||
-                (typeof m.content === "string" ? m.content : "");
-              // Title from the first user message with real substance — skip a
-              // "hi chad" opener so the title reflects the actual topic. If only
-              // a greeting exists so far, wait for the next turn.
-              const firstUser =
-                msgs.find(
-                  (m) =>
-                    m.role === "user" &&
-                    !m.isCompaction &&
-                    !isTrivialOpener(textOf(m))
-                ) || undefined;
-              const userIdx = firstUser ? msgs.indexOf(firstUser) : -1;
-              const firstAssistant =
-                userIdx >= 0
-                  ? msgs
-                      .slice(userIdx + 1)
-                      .find((m) => m.role === "assistant" && !m.isCompaction)
-                  : undefined;
+              const firstUser = currentTab.messages.find((m) => m.role === "user" && !m.isCompaction);
+              const firstAssistant = currentTab.messages.find((m) => m.role === "assistant" && !m.isCompaction);
 
               if (firstUser && firstAssistant) {
-                const userText = textOf(firstUser);
+                const userText =
+                  firstUser.displayText ||
+                  (typeof firstUser.content === "string" ? firstUser.content : "");
                 const truncatedTitle =
                   userText.slice(0, 40) + (userText.length > 40 ? "..." : "");
 
@@ -521,7 +476,7 @@ export function useSessionManager(options: SessionManagerOptions) {
                   debug("[hyo][title] Generating for tab", tabId);
 
                   generateConversationTitle({
-                    cliPath: options.cliPath,
+                    gatewayUrl: options.gatewayUrl,
                     userMessage: userText,
                     assistantMessage: assistantText,
                   }).then((generatedTitle) => {
@@ -546,12 +501,6 @@ export function useSessionManager(options: SessionManagerOptions) {
 
         // User event (tool results)
         if (event.type === "user") {
-          // A sub-agent's messages stream in as sidechain user events — and the
-          // FIRST one is its user message, which is the delegation prompt itself.
-          // Without this gate that prompt lands as a text block in the main reply
-          // and voice reads the raw instructions aloud. The main chain's own tool
-          // results are NOT sidechain, so they still process normally below.
-          if (event.isSidechain || event.parent_tool_use_id) return;
           const contentArr = event.message?.content || [];
           processContentBlocks(contentArr, ss, "user");
           updateTabLastAssistant(tabId, () => buildSnapshot(ss));
@@ -580,16 +529,9 @@ export function useSessionManager(options: SessionManagerOptions) {
               }));
             }
           }
-          // A sub-agent's completed messages (its narration and final report)
-          // arrive as sidechain assistant events. Do NOT merge them into the
-          // main reply — otherwise voice reads the agent's raw output aloud and
-          // it clutters the transcript. The Agent tool block + its result still
-          // show the work.
-          if (!isSidechain) {
-            const contentArr = event.message?.content || [];
-            processContentBlocks(contentArr, ss, "assistant");
-            updateTabLastAssistant(tabId, () => buildSnapshot(ss));
-          }
+          const contentArr = event.message?.content || [];
+          processContentBlocks(contentArr, ss, "assistant");
+          updateTabLastAssistant(tabId, () => buildSnapshot(ss));
 
           // Eagerly detect AskUserQuestion from the complete assistant event.
           // The control_request arrives AFTER this, so set the question UI now.
@@ -671,14 +613,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           if (evt.type === "content_block_delta") {
             const delta = evt.delta;
 
-            // A sub-agent's own narration and final report stream through here as
-            // sidechain text. Keep it OUT of the main reply — otherwise voice
-            // mode reads the agent's raw output aloud (and it clutters the
-            // transcript). The agent's tool calls still render.
-            const isSidechain =
-              event.isSidechain || event.parent_tool_use_id;
-
-            if (delta?.type === "text_delta" && delta.text && !isSidechain) {
+            if (delta?.type === "text_delta" && delta.text) {
               if (ss.toolResultSinceLastText && ss.orderedBlocks.length > 0)
                 ss.turnIndex++;
               const existing = ss.orderedBlocks.find(
@@ -733,17 +668,16 @@ export function useSessionManager(options: SessionManagerOptions) {
             title: "New conversation",
             messages: [],
             generating: false,
-            model: activeTab?.model || options.model,
-            effort: activeTab?.effort || options.effort,
-            permissionMode: activeTab?.permissionMode || options.permissionMode,
-            agent: options.defaultAgent,
+            model: activeTab?.model || LOCKED_MODEL,
+            permissionMode: activeTab?.permissionMode || LOCKED_PERMISSION_MODE,
+            agent: LOCKED_AGENT,
             voiceMode: false,
           },
         ],
         activeTabId: id,
       };
     });
-  }, [options.model, options.effort, options.permissionMode]);
+  }, []);
 
   const closeTab = useCallback((tabIdToClose: string) => {
     transportsRef.current[tabIdToClose]?.stop();
@@ -763,10 +697,9 @@ export function useSessionManager(options: SessionManagerOptions) {
               title: "New conversation",
               messages: [],
               generating: false,
-              model: options.model,
-              effort: options.effort,
-              permissionMode: options.permissionMode,
-              agent: options.defaultAgent,
+              model: LOCKED_MODEL,
+              permissionMode: LOCKED_PERMISSION_MODE,
+              agent: LOCKED_AGENT,
               voiceMode: false,
             },
           ],
@@ -789,7 +722,6 @@ export function useSessionManager(options: SessionManagerOptions) {
     setState((prev) => ({
       ...prev,
       activeTabId: id,
-      // Opening a task clears its "unseen reply" flag — you've now seen it.
       tabs: prev.tabs.map((t) =>
         t.id === id && t.hasUnseenReply ? { ...t, hasUnseenReply: false } : t
       ),
@@ -803,9 +735,9 @@ export function useSessionManager(options: SessionManagerOptions) {
 
       // If this tab has a persisted session, save the custom title and refresh dropdown
       if (tab?.cliSessionId) {
-        saveCustomTitle(options.cwd, tab.cliSessionId, title);
-        // Refresh past sessions to update dropdown
-        setTimeout(() => refreshPastSessions(), 0);
+        saveCustomTitle(options.gatewayUrl, tab.cliSessionId, title).then(() => {
+          refreshPastSessions();
+        });
       }
 
       return {
@@ -815,52 +747,32 @@ export function useSessionManager(options: SessionManagerOptions) {
         ),
       };
     });
-  }, [options.cwd]); // refreshPastSessions intentionally omitted — declared later, referenced via closure
+  }, [options.gatewayUrl]); // refreshPastSessions intentionally omitted — declared later, referenced via closure
 
-  // Rename a conversation that isn't open as a tab (from the task list). Writes
-  // the custom title to the on-disk metadata and refreshes the list. If it does
-  // happen to be open, update the tab's title too so they stay in sync.
+  // Rename a conversation from the task list (open tab or not). Saves the custom
+  // title via the gateway and refreshes; updates the tab title too if it's open.
   const renamePastSession = useCallback((sessionId: string, title: string) => {
-    saveCustomTitle(options.cwd, sessionId, title);
+    saveCustomTitle(options.gatewayUrl, sessionId, title).then(() => {
+      refreshPastSessions();
+    });
     setState((prev) => ({
       ...prev,
       tabs: prev.tabs.map((t) =>
         t.cliSessionId === sessionId ? { ...t, title } : t
       ),
     }));
-    setTimeout(() => refreshPastSessions(), 0);
-  }, [options.cwd]);
+  }, [options.gatewayUrl]);
 
-  // Persist task state (pinned / closed) to the shared session metadata, then
-  // refresh so the list reflects it. Keyed by cliSessionId — a brand-new tab
-  // with no session yet can't be pinned/closed (nothing to persist to).
+  // Persist pinned / closed to the shared metadata via the gateway, then refresh
+  // so the list reflects it. WebSocket messages are ordered, so the write lands
+  // before the subsequent list request reads it back.
   const setTaskMeta = useCallback(
     (sessionId: string, patch: { pinned?: boolean; closed?: boolean; lastActive?: string }) => {
-      persistTaskMeta(options.cwd, sessionId, patch);
+      persistTaskMeta(options.gatewayUrl, sessionId, patch);
       setTimeout(() => refreshPastSessions(), 0);
     },
-    [options.cwd]
+    [options.gatewayUrl]
   );
-
-  // Move a tab to sit where another tab currently is. Dropping onto the right
-  // half of the target lands after it, which is what makes dragging a tab to
-  // the end of the bar feel natural.
-  const reorderTab = useCallback((draggedId: string, targetId: string, after: boolean) => {
-    if (draggedId === targetId) return;
-    setState((prev) => {
-      const from = prev.tabs.findIndex((t) => t.id === draggedId);
-      const target = prev.tabs.findIndex((t) => t.id === targetId);
-      if (from === -1 || target === -1) return prev;
-
-      const tabs = [...prev.tabs];
-      const [moved] = tabs.splice(from, 1);
-      const targetAfterRemoval = tabs.findIndex((t) => t.id === targetId);
-      const insertAt = after ? targetAfterRemoval + 1 : targetAfterRemoval;
-      tabs.splice(insertAt, 0, moved);
-
-      return { ...prev, tabs };
-    });
-  }, []);
 
   // ------- messaging -------
 
@@ -930,22 +842,19 @@ export function useSessionManager(options: SessionManagerOptions) {
         );
         const cliSessionId = currentTab?.cliSessionId;
 
-        const transport = new ClaudeTransport({
-          cliPath: options.cliPath,
-          cwd: options.cwd,
-          model: currentTab?.model || options.model,
-          effort: currentTab?.effort || options.effort,
-          permissionMode: currentTab?.permissionMode || options.permissionMode,
-          agent: currentTab?.agent || "",
+        const transport = new GatewayTransport({
+          gatewayUrl: options.gatewayUrl,
+          model: options.model,
+          agent: options.agent,
+          tabId,
           sessionId: cliSessionId || undefined,
           resume: !!cliSessionId,
-          maxOutputTokens: options.maxOutputTokens,
-          // Voice conversation mode: append the voice persona so Chad speaks for
-          // listening. toggleVoiceMode kills the transport, so the next spawn
-          // (here) picks up or drops the persona and --resumes the same session.
+          // Voice mode is a fresh conversation, so the persona is fixed for the
+          // tab's life — inject it at spawn (and on any respawn, since it's sent
+          // per-prompt). Text tabs send nothing and behave exactly as before.
           appendSystemPrompt: currentTab?.voiceMode ? VOICE_PERSONA : undefined,
           onMessage: makeProcessEvent(tabId),
-          onError: (error) => console.error("[hyo] CLI error:", error),
+          onError: (error) => console.error("[hyo] Gateway error:", error),
           onClose: (code) => {
             const wasGenerating = stateRef.current.tabs.find(
               (t) => t.id === tabId
@@ -957,7 +866,8 @@ export function useSessionManager(options: SessionManagerOptions) {
               ),
             }));
             updateTabLastAssistant(tabId, () => ({ streaming: false }));
-            // If process exited with error while generating, show error message
+            // If the CLI process exited with an error while generating, show
+            // an error message
             if (code !== 0 && code !== null && wasGenerating) {
               const errorMsg: Message = {
                 role: "assistant",
@@ -983,7 +893,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         transportsRef.current[tabId] = transport;
       }
 
-      transportsRef.current[tabId].sendUserMessage(content);
+      transportsRef.current[tabId].sendUserMessage(content, options.askFirst);
     },
     [options, makeProcessEvent, updateTabLastAssistant]
   );
@@ -1067,25 +977,6 @@ export function useSessionManager(options: SessionManagerOptions) {
     updateTabLastAssistant(tabId, () => ({ streaming: false }));
   }, [updateTabLastAssistant]);
 
-  const setTabModel = useCallback((model: string) => {
-    const normalized = normalizeModelId(model);
-    setState((prev) => ({
-      ...prev,
-      tabs: prev.tabs.map((tab) =>
-        tab.id === prev.activeTabId ? { ...tab, model: normalized } : tab
-      ),
-    }));
-  }, []);
-
-  const setTabEffort = useCallback((effort: string) => {
-    setState((prev) => ({
-      ...prev,
-      tabs: prev.tabs.map((tab) =>
-        tab.id === prev.activeTabId ? { ...tab, effort } : tab
-      ),
-    }));
-  }, []);
-
   const setTabPermissionMode = useCallback((permissionMode: string) => {
     setState((prev) => ({
       ...prev,
@@ -1096,50 +987,35 @@ export function useSessionManager(options: SessionManagerOptions) {
   }, []);
 
   const toggleVoiceMode = useCallback(() => {
-    // Entering/leaving voice mode changes the system prompt (the voice persona
-    // is passed via --append-system-prompt at spawn). Kill the current
-    // transport so the next sendMessage respawns with the persona attached or
-    // dropped; --resume against the tab's cliSessionId keeps the conversation.
-    setState((prev) => {
-      const tabId = prev.activeTabId;
-      transportsRef.current[tabId]?.stop();
+    const tabId = stateRef.current.activeTabId;
+    // The persona is a spawn-time CLI arg, so flipping voice mode has to reach
+    // a fresh process. Kill the live transport — the next send respawns and
+    // --resumes the SAME session (history intact), now with the persona added
+    // (entering) or removed (leaving). Mirrors recoverSession's kill+resume.
+    const existing = transportsRef.current[tabId];
+    if (existing) {
+      try {
+        existing.stop();
+      } catch {}
       delete transportsRef.current[tabId];
-      return {
-        ...prev,
-        tabs: prev.tabs.map((tab) =>
-          tab.id === tabId ? { ...tab, voiceMode: !tab.voiceMode } : tab
-        ),
-      };
-    });
-  }, []);
-
-  const setTabAgent = useCallback((agent: string) => {
-    // Switching agents requires a fresh CLI process — kill the current transport.
-    // Next sendMessage will respawn with the new --agent flag.
-    setState((prev) => {
-      const tabId = prev.activeTabId;
-      transportsRef.current[tabId]?.stop();
-      delete transportsRef.current[tabId];
-      delete streamStatesRef.current[tabId];
-      return {
-        ...prev,
-        tabs: prev.tabs.map((tab) =>
-          tab.id === tabId ? { ...tab, agent, cliSessionId: null } : tab
-        ),
-      };
-    });
+    }
+    setState((prev) => ({
+      ...prev,
+      tabs: prev.tabs.map((tab) =>
+        tab.id === tabId
+          ? { ...tab, voiceMode: !tab.voiceMode }
+          : tab
+      ),
+    }));
   }, []);
 
   // ------- past sessions -------
 
   const refreshPastSessions = useCallback(() => {
-    try {
-      const sessions = listPastSessions(options.cwd);
-      setPastSessions(sessions);
-    } catch (e) {
-      console.error("[hyo] Failed to list past sessions:", e);
-    }
-  }, [options.cwd]);
+    listPastSessions(options.gatewayUrl)
+      .then(setPastSessions)
+      .catch((e) => console.error("[hyo] Failed to list past sessions:", e));
+  }, [options.gatewayUrl]);
 
   useEffect(() => {
     refreshPastSessions();
@@ -1154,17 +1030,9 @@ export function useSessionManager(options: SessionManagerOptions) {
       return;
     }
 
-    // Load conversation history from JSONL
-    const history = loadSessionHistory(options.cwd, pastSession.id);
-    const messages: Message[] = history.map((m) => ({
-      role: m.role,
-      content: m.content,
-      thinking: m.thinking || "",
-      toolCalls: m.toolCalls || [],
-      orderedBlocks: m.orderedBlocks || [],
-      streaming: false,
-    }));
-
+    // Open the tab immediately (empty) and switch to it — history is
+    // fetched from the gateway asynchronously and back-filled once it
+    // arrives, so opening a past session doesn't block the UI.
     const id = genId();
     setState((prev) => {
       const activeTab = prev.tabs.find((t) => t.id === prev.activeTabId);
@@ -1175,30 +1043,50 @@ export function useSessionManager(options: SessionManagerOptions) {
             id,
             cliSessionId: pastSession.id,
             title: pastSession.title,
-            messages,
+            messages: [],
             generating: false,
-            model: activeTab?.model || options.model,
-            effort: activeTab?.effort || options.effort,
-            permissionMode: activeTab?.permissionMode || options.permissionMode,
-            agent: options.defaultAgent,
+            model: activeTab?.model || LOCKED_MODEL,
+            permissionMode: activeTab?.permissionMode || LOCKED_PERMISSION_MODE,
+            agent: LOCKED_AGENT,
             voiceMode: false,
           },
         ],
         activeTabId: id,
       };
     });
-  }, [options.cwd, options.model, options.effort, options.permissionMode, options.defaultAgent]);
+
+    loadSessionHistory(options.gatewayUrl, pastSession.id).then((history) => {
+      const messages: Message[] = history.messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+        thinking: m.thinking || "",
+        toolCalls: m.toolCalls || [],
+        orderedBlocks: m.orderedBlocks || [],
+        streaming: false,
+      }));
+      // Continue on the model the conversation was actually built with, rather
+      // than the hardcoded mobile default. Resuming must not silently switch
+      // models mid-conversation — and forcing a long conversation onto a
+      // different model's context window is what caused "Prompt is too long".
+      const inheritedModel = history.model || LOCKED_MODEL;
+      setState((prev) => ({
+        ...prev,
+        tabs: prev.tabs.map((t) =>
+          t.id === id ? { ...t, messages, model: inheritedModel } : t
+        ),
+      }));
+    });
+  }, [options.gatewayUrl]);
 
   // ---- Reopen the tabs from last time ---------------------------------------
-  // Closing Obsidian used to take every open Hyo tab with it. Remember which
-  // conversations are open and restore them on mount. Deliberately
-  // device-local (localStorage, keyed by vault) rather than synced settings:
-  // the desktop restores the desktop's desk, the phone restores the phone's.
-  const restoreKey = `hyo-open-tabs:${options.cwd}`;
+  // Same behaviour as desktop: remember which conversations are open and
+  // restore them on mount. Device-local (this webview's localStorage), so the
+  // phone's desk is its own — closing the app doesn't lose your open tabs.
+  const restoreKey = `hyo-open-tabs:${options.gatewayUrl}`;
   const restoredRef = useRef(false);
 
   useEffect(() => {
-    if (restoredRef.current) return;
+    if (restoredRef.current || !options.gatewayUrl) return;
     restoredRef.current = true;
     let saved: { sessions: { id: string; title: string }[]; activeId?: string | null } | null = null;
     try {
@@ -1220,10 +1108,10 @@ export function useSessionManager(options: SessionManagerOptions) {
       return { tabs, activeTabId: active?.id || tabs[tabs.length - 1].id };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openPastSession]);
+  }, [openPastSession, options.gatewayUrl]);
 
   useEffect(() => {
-    if (!restoredRef.current) return; // never clobber the stored desk before restore reads it
+    if (!restoredRef.current || !options.gatewayUrl) return; // never clobber before restore reads it
     try {
       const sessions = state.tabs
         .filter((t) => t.cliSessionId)
@@ -1236,18 +1124,18 @@ export function useSessionManager(options: SessionManagerOptions) {
     } catch {
       /* storage unavailable — restore just won't happen */
     }
-  }, [state.tabs, state.activeTabId, restoreKey]);
+  }, [state.tabs, state.activeTabId, restoreKey, options.gatewayUrl]);
 
   const compact = useCallback(() => {
     sendMessage("/compact", { isCompaction: true });
   }, [sendMessage]);
 
-  // Recover a session that's been poisoned by an orphaned `thinking` block
-  // (the result of an output-cap mid-stream truncation). Reads the .jsonl,
-  // surgically removes the orphan + cap-error + failed retries, repairs
-  // parent UUIDs, kills the broken transport so the next send re-spawns
-  // with `--resume` against the cleaned file. Returns the user's last
-  // attempted message text so the UI can prefill the input.
+  // On desktop this surgically repaired a session poisoned by an orphaned
+  // `thinking` block, editing the .jsonl directly via fs. There's no fs on
+  // mobile and the gateway protocol doesn't expose a repair RPC, so
+  // repairSession always reports failure here — the "Recover session"
+  // button still appears (ChatMessage.tsx detects the same error text) but
+  // tells the user recovery isn't available yet instead of silently no-op'ing.
   const recoverSession = useCallback(
     (tabId: string): RepairResult => {
       const tab = stateRef.current.tabs.find((t) => t.id === tabId);
@@ -1260,9 +1148,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         };
       }
 
-      const projectDir = getProjectDir(options.cwd);
-      const jsonlPath = path.join(projectDir, `${tab.cliSessionId}.jsonl`);
-      const result = repairSession(jsonlPath);
+      const result = repairSession(tab.cliSessionId);
       if (!result.success) return result;
 
       // Kill the existing transport so the next sendMessage spawns a fresh
@@ -1308,7 +1194,7 @@ export function useSessionManager(options: SessionManagerOptions) {
 
       return result;
     },
-    [options.cwd]
+    []
   );
 
   // ------- return -------
@@ -1320,10 +1206,9 @@ export function useSessionManager(options: SessionManagerOptions) {
     activeTabId: state.activeTabId,
     activeMessages: activeTab?.messages || [],
     activeGenerating: activeTab?.generating || false,
-    activeModel: activeTab?.model || options.model,
-    activeEffort: activeTab?.effort || options.effort,
-    activePermissionMode: activeTab?.permissionMode || options.permissionMode,
-    activeAgent: activeTab?.agent || "",
+    activeModel: activeTab?.model || LOCKED_MODEL,
+    activePermissionMode: activeTab?.permissionMode || LOCKED_PERMISSION_MODE,
+    activeAgent: activeTab?.agent || LOCKED_AGENT,
     activeVoiceMode: activeTab?.voiceMode || false,
     activeTabHasSession: !!activeTab?.cliSessionId,
     activeInputTokens: activeTab?.inputTokens || 0,
@@ -1334,11 +1219,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     renameTab,
     renamePastSession,
     setTaskMeta,
-    reorderTab,
-    setTabModel,
-    setTabEffort,
     setTabPermissionMode,
-    setTabAgent,
     toggleVoiceMode,
     sendMessage,
     sendPermissionResponse,

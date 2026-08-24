@@ -74,8 +74,10 @@ interface OAuthCreds {
 /**
  * Read OAuth credentials from macOS Keychain (async — does not block UI)
  */
-const CACHE_DIR = require("path").join(require("os").homedir(), ".hyo");
-const CACHE_PATH = require("path").join(CACHE_DIR, "oauth-cache.json");
+import { Platform } from "obsidian";
+// Desktop-only cache path; guarded so this module-level code is mobile-safe.
+const CACHE_DIR = Platform.isMobile ? "" : require("path").join(require("os").homedir(), ".hyo");
+const CACHE_PATH = Platform.isMobile ? "" : require("path").join(CACHE_DIR, "oauth-cache.json");
 
 function cacheOAuthCreds(oauth: OAuthCreds): void {
   try {

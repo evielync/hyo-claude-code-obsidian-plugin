@@ -1,9 +1,19 @@
-import { App, Notice, PluginSettingTab, Setting } from "obsidian";
-import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
+import { App, Notice, PluginSettingTab, Setting, Platform } from "obsidian";
+// Node built-ins are desktop-only; deferred so this module loads on mobile.
+const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
+const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
+const os: typeof import("os") = Platform.isMobile ? (undefined as any) : require("os");
 import type HyoPlugin from "./main";
 import { MODEL_OPTIONS, EFFORT_OPTIONS, DEFAULT_EFFORT } from "./models";
+import type { Skill } from "./hooks/useSkills";
+
+// A single command: which skill it fires, what its header-menu label reads,
+// and any extra instruction text appended after the skill invocation.
+export interface HyoCommand {
+  skill: string;
+  label: string;
+  extra?: string;
+}
 
 export interface HyoSettings {
   cliPath: string;
@@ -15,6 +25,16 @@ export interface HyoSettings {
   defaultAgent: string;
   maxOutputTokens: number;
   autoGenerateTitles: boolean;
+  // Mobile: the gateway URL the phone connects to (also what desktop hosts
+  // when "enable mobile access" is on), and the permission default sent with
+  // every mobile prompt.
+  gatewayUrl: string;
+  askFirst: boolean;
+  enableMobileAccess: boolean;
+  // The local port this vault's gateway listens on. Per-vault so more than one
+  // vault can host mobile access at once without colliding, and so a user whose
+  // 8787 is already taken can move it.
+  gatewayPort: number;
   // Last version whose release card was seen. Empty on a fresh install, which
   // suppresses the card — a first-time user doesn't need to be told what
   // changed in a version they never had.
@@ -29,6 +49,12 @@ export interface HyoSettings {
   // else about a task (its state) is derived live; only these few things need
   // to persist across reloads. See hyo-task-mode-build-spec.
   tasks: Record<string, TaskMeta>;
+  // Commands — note `type` frontmatter -> the header-button commands for that
+  // type. Ported from the standalone AI Commands plugin (see commandsMigrated).
+  commands: Record<string, HyoCommand[]>;
+  // Set once the one-time import of the standalone plugin's data.json has
+  // run (successfully or not), so it's never re-attempted on every load.
+  commandsMigrated: boolean;
 }
 
 // Persisted per-task metadata. Keyed by cliSessionId in settings.tasks.
@@ -51,6 +77,10 @@ export const DEFAULT_SETTINGS: HyoSettings = {
   defaultAgent: "",
   maxOutputTokens: 64000,
   autoGenerateTitles: true,
+  gatewayUrl: "",
+  askFirst: true,
+  enableMobileAccess: false,
+  gatewayPort: 8787,
   lastSeenVersion: "",
   // Voice
   elevenLabsApiKey: "",
@@ -59,6 +89,8 @@ export const DEFAULT_SETTINGS: HyoSettings = {
   voicePlaybackSpeed: 1.25,
   voiceAutoSpeak: true,
   tasks: {},
+  commands: {},
+  commandsMigrated: false,
 };
 
 export function dispatchSettingsChanged(): void {
@@ -69,6 +101,9 @@ export class HyoSettingTab extends PluginSettingTab {
   plugin: HyoPlugin;
   private savedIndicator: HTMLElement | null = null;
   private savedTimeout: ReturnType<typeof setTimeout> | null = null;
+  // Which settings tab is showing. Survives re-renders (display() is called
+  // after most edits) so adding a command doesn't bounce you back to General.
+  private activeTab = "general";
 
   constructor(app: App, plugin: HyoPlugin) {
     super(app, plugin);
@@ -103,10 +138,23 @@ export class HyoSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
+    // One row: title, links, and the saved indicator all on the same baseline.
     const header = containerEl.createEl("div", {
-      attr: { style: "display: flex; align-items: baseline; gap: 12px; margin-bottom: 0;" },
+      attr: {
+        style: "display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 20px;",
+      },
     });
     header.createEl("h2", { text: "Hyo Plugin", attr: { style: "margin: 0;" } });
+    header.createEl("a", {
+      text: "Read the docs →",
+      href: "https://docs.gethyo.co",
+      attr: { target: "_blank", rel: "noopener" },
+    });
+    header.createEl("a", {
+      text: "Watch the user guide →",
+      href: "https://www.loom.com/share/349eaac59e514142bc47b10469287db0",
+      attr: { target: "_blank", rel: "noopener" },
+    });
     this.savedIndicator = header.createEl("span", {
       text: "Saved",
       attr: {
@@ -114,13 +162,58 @@ export class HyoSettingTab extends PluginSettingTab {
       },
     });
 
-    const guideLink = containerEl.createEl("p", { attr: { style: "margin: 0 0 20px;" } });
-    guideLink.createEl("a", {
-      text: "Watch the user guide →",
-      href: "https://www.loom.com/share/349eaac59e514142bc47b10469287db0",
-      attr: { target: "_blank", rel: "noopener" },
-    });
+    // Tab bar. On a phone only the tabs that apply there are shown — Commands
+    // and Advanced are desktop concerns (note-header buttons, CLI paths).
+    const tabs: { id: string; label: string }[] = Platform.isMobile
+      ? [
+          { id: "general", label: "General" },
+          { id: "voice", label: "Voice" },
+          { id: "mobile", label: "Mobile" },
+        ]
+      : [
+          { id: "general", label: "General" },
+          { id: "voice", label: "Voice" },
+          { id: "mobile", label: "Mobile" },
+          { id: "commands", label: "Commands" },
+          { id: "advanced", label: "Advanced" },
+        ];
+    if (!tabs.some((t) => t.id === this.activeTab)) this.activeTab = "general";
 
+    const bar = containerEl.createEl("div", {
+      attr: {
+        style:
+          "display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--background-modifier-border);",
+      },
+    });
+    for (const tab of tabs) {
+      const active = tab.id === this.activeTab;
+      const btn = bar.createEl("div", {
+        text: tab.label,
+        attr: {
+          style:
+            `padding: 8px 14px; cursor: pointer; font-size: 0.95em; border-bottom: 2px solid ${
+              active ? "var(--interactive-accent)" : "transparent"
+            }; color: ${active ? "var(--text-normal)" : "var(--text-muted)"}; font-weight: ${
+              active ? "600" : "400"
+            };`,
+        },
+      });
+      btn.addEventListener("click", () => {
+        this.activeTab = tab.id;
+        this.display();
+      });
+    }
+
+    const body = containerEl.createDiv();
+    if (this.activeTab === "voice") this.renderVoice(body);
+    else if (this.activeTab === "mobile") this.renderMobile(body);
+    else if (this.activeTab === "commands") this.renderCommands(body);
+    else if (this.activeTab === "advanced") this.renderAdvanced(body);
+    else this.renderGeneral(body);
+  }
+
+  // ---- General: everyday defaults for new conversations ---------------------
+  private renderGeneral(containerEl: HTMLElement): void {
     // Model
     new Setting(containerEl)
       .setName("Model")
@@ -175,7 +268,7 @@ export class HyoSettingTab extends PluginSettingTab {
     // Permission mode
     new Setting(containerEl)
       .setName("Permission mode")
-      .setDesc("How Claude handles tool permissions")
+      .setDesc("What Claude may do without asking you first. 'Default' asks before every action; 'Accept edits' lets it change files freely; 'Bypass all' never asks; 'Plan mode' makes it propose a plan before doing anything.")
       .addDropdown((dropdown) =>
         dropdown
           .addOption("manual", "Default (ask for each)")
@@ -206,18 +299,22 @@ export class HyoSettingTab extends PluginSettingTab {
           })
       );
 
-    // Default agent — only show if agent files exist
-    const agentDir = path.join(os.homedir(), ".claude", "agents");
+    // Default agent — desktop only (scans the filesystem), and only shown if
+    // agent files exist. On mobile the agent is picked per conversation from
+    // the gateway's list instead.
     let agentFiles: string[] = [];
-    try {
-      if (fs.existsSync(agentDir)) {
-        agentFiles = fs
-          .readdirSync(agentDir)
-          .filter((f) => f.endsWith(".md"))
-          .map((f) => f.replace(/\.md$/, "").toLowerCase())
-          .sort();
-      }
-    } catch {}
+    if (!Platform.isMobile) {
+      try {
+        const agentDir = path.join(os.homedir(), ".claude", "agents");
+        if (fs.existsSync(agentDir)) {
+          agentFiles = fs
+            .readdirSync(agentDir)
+            .filter((f) => f.endsWith(".md"))
+            .map((f) => f.replace(/\.md$/, "").toLowerCase())
+            .sort();
+        }
+      } catch {}
+    }
 
     if (agentFiles.length > 0) {
       const agentSetting = new Setting(containerEl)
@@ -237,11 +334,41 @@ export class HyoSettingTab extends PluginSettingTab {
         });
     }
 
-    // Voice Settings
-    containerEl.createEl("h3", {
-      text: "Voice",
-      attr: { style: "margin-top: 24px; margin-bottom: 12px;" },
-    });
+    // Custom models — added via the picker's "Custom model ID" field; managed
+    // (removed) here, next to the Model default they feed. Only rendered once
+    // at least one has been added, so it never shows as an empty section.
+    if (this.plugin.settings.customModels.length > 0) {
+      new Setting(containerEl).setName("Custom models").setHeading();
+      new Setting(containerEl).setDesc(
+        "Models you've added from the picker. Remove any you no longer want here."
+      );
+      for (const id of [...this.plugin.settings.customModels]) {
+        new Setting(containerEl)
+          .setName(id)
+          .setDesc("Added from the model picker")
+          .addExtraButton((btn) =>
+            btn
+              .setIcon("trash")
+              .setTooltip("Remove")
+              .onClick(async () => {
+                this.plugin.settings.customModels =
+                  this.plugin.settings.customModels.filter((m) => m !== id);
+                // If the removed model was the current default, fall back to
+                // the first built-in so nothing points at a now-absent entry.
+                if (this.plugin.settings.model === id) {
+                  this.plugin.settings.model = MODEL_OPTIONS[0].id;
+                }
+                await this.plugin.saveSettings();
+                this.showSaved();
+                this.display();
+              })
+          );
+      }
+    }
+  }
+
+  // ---- Voice: ElevenLabs voice mode ------------------------------------------
+  private renderVoice(containerEl: HTMLElement): void {
     containerEl.createEl("p", {
       text: "Connect ElevenLabs to enable voice mode — speak to Claude and hear responses read aloud.",
       attr: { style: "margin: 0 0 16px; color: var(--text-muted); font-size: 0.9em;" },
@@ -347,13 +474,12 @@ export class HyoSettingTab extends PluginSettingTab {
           })
       );
 
-    // Advanced Settings
-    containerEl.createEl("h3", {
-      text: "Advanced",
-      attr: { style: "margin-top: 24px; margin-bottom: 12px;" },
-    });
+  }
+
+  // ---- Advanced: paths and caps ----------------------------------------------
+  private renderAdvanced(containerEl: HTMLElement): void {
     containerEl.createEl("p", {
-      text: "Optional settings for custom configurations.",
+      text: "You shouldn't need these unless something isn't working or your setup is unusual.",
       attr: { style: "margin: 0 0 16px; color: var(--text-muted); font-size: 0.9em;" },
     });
 
@@ -411,22 +537,38 @@ export class HyoSettingTab extends PluginSettingTab {
           })
       );
 
-    // CLI path
+    // CLI path — with a live found/not-found indicator, because a stale path
+    // here used to surface only as a cryptic "exited (code -2)" mid-chat.
     const cliPathSetting = new Setting(containerEl)
       .setName("Claude Code CLI path")
       .setDesc(
         "Where Claude Code is installed on your machine. Click 'Auto-detect' to find it automatically."
-      )
-      .addText((text) =>
-        text
-          .setPlaceholder("/usr/local/bin/claude")
-          .setValue(this.plugin.settings.cliPath)
-          .onChange(async (value) => {
-            this.plugin.settings.cliPath = value;
-            await this.plugin.saveSettings();
-            this.showSavedNear(cliPathSetting.nameEl as HTMLElement);
-          })
       );
+    const cliStatusEl = cliPathSetting.descEl.createEl("div", {
+      attr: { style: "margin-top: 4px; font-size: 0.95em;" },
+    });
+    const updateCliStatus = (p: string) => {
+      let found = false;
+      try {
+        found = !!p && fs.existsSync(p);
+      } catch {
+        found = false;
+      }
+      cliStatusEl.setText(found ? "✓ Found" : "✗ Not found — click Auto-detect");
+      cliStatusEl.style.color = found ? "var(--color-green)" : "var(--color-red)";
+    };
+    updateCliStatus(this.plugin.settings.cliPath);
+    cliPathSetting.addText((text) =>
+      text
+        .setPlaceholder("/usr/local/bin/claude")
+        .setValue(this.plugin.settings.cliPath)
+        .onChange(async (value) => {
+          this.plugin.settings.cliPath = value;
+          await this.plugin.saveSettings();
+          updateCliStatus(value);
+          this.showSavedNear(cliPathSetting.nameEl as HTMLElement);
+        })
+    );
 
     cliPathSetting.addButton((button) =>
       button.setButtonText("Auto-detect").onClick(async () => {
@@ -497,37 +639,251 @@ export class HyoSettingTab extends PluginSettingTab {
       })
     );
 
-    // Custom models — its own section at the bottom. These are models the user
-    // added via the picker's "Custom model ID" field; managed (removed) here,
-    // while adding happens in the picker, in the flow of work. Only rendered
-    // once at least one has been added, so it never shows as an empty section.
-    if (this.plugin.settings.customModels.length > 0) {
-      new Setting(containerEl).setName("Custom models").setHeading();
-      new Setting(containerEl).setDesc(
-        "Models you've added from the picker. Remove any you no longer want here."
+  }
+
+  // ---- Commands: note-header buttons ------------------------------------------
+  // Ported from the standalone AI Commands plugin. A note's `type` frontmatter
+  // drives which commands show.
+  private renderCommands(containerEl: HTMLElement): void {
+    const intro = containerEl.createEl("p", {
+      attr: { style: "margin: 0 0 16px; color: var(--text-muted); font-size: 0.9em;" },
+    });
+    intro.setText(
+      "Attach a skill to a note type in your vault and run one-click commands. For example: a Summarise command on your meeting notes. ",
+    );
+    intro.createEl("a", {
+      text: "How commands work →",
+      href: "https://docs.gethyo.co/skills/note-commands/",
+      attr: { target: "_blank", rel: "noopener" },
+    });
+
+    const commandSkills = this.plugin.commands.getSkills();
+    const configuredTypes = Object.keys(this.plugin.settings.commands).sort();
+
+    for (const type of configuredTypes) {
+      this.renderCommandType(containerEl, type, commandSkills);
+    }
+
+    const availableTypes = this.plugin.commands
+      .getNoteTypes()
+      .filter((t) => !this.plugin.settings.commands[t]);
+
+    if (availableTypes.length) {
+      let newType = availableTypes[0];
+      new Setting(containerEl)
+        .setName("Add a note type")
+        .setDesc("Pick a note type found in your vault to add commands for.")
+        .addDropdown((d) => {
+          for (const t of availableTypes) d.addOption(t, t);
+          d.setValue(newType);
+          d.onChange((v) => {
+            newType = v;
+          });
+        })
+        .addButton((b) =>
+          b
+            .setButtonText("Add")
+            .setCta()
+            .onClick(async () => {
+              if (!newType || this.plugin.settings.commands[newType]) return;
+              this.plugin.settings.commands[newType] = [];
+              await this.plugin.saveSettings();
+              this.display();
+            })
+        );
+    } else {
+      new Setting(containerEl)
+        .setName("Add a note type")
+        .setDesc(
+          configuredTypes.length
+            ? "Every note type in your vault already has commands configured."
+            : "No note types found — open a note with a `type` in its frontmatter first."
+        );
+    }
+
+  }
+
+  // ---- Mobile: gateway hosting (desktop) / gateway address (phone) ------------
+  private renderMobile(containerEl: HTMLElement): void {
+    if (Platform.isMobile) {
+      const intro = containerEl.createEl("p", {
+        attr: { style: "margin: 0 0 16px; color: var(--text-muted); font-size: 0.9em;" },
+      });
+      intro.setText(
+        "Hyo on your phone talks to Claude running on your Mac. Set up your Mac first — this side mostly takes care of itself. ",
       );
-      for (const id of [...this.plugin.settings.customModels]) {
+      intro.createEl("a", {
+        text: "Read the setup guide →",
+        href: "https://docs.gethyo.co/mobile/setup/",
+        attr: { target: "_blank", rel: "noopener" },
+      });
+    } else {
+      const mutedStyle = "margin: 0 0 12px; color: var(--text-muted); font-size: 0.9em;";
+      containerEl.createEl("p", {
+        text: "Set up Hyo to work on your mobile devices, so you can talk to your agent from anywhere. This involves setting up a mobile gateway on your desktop that the mobile can connect to.",
+        attr: { style: mutedStyle },
+      });
+      const guide = containerEl.createEl("p", { attr: { style: mutedStyle } });
+      guide.createEl("a", {
+        text: "Read the setup guide to get started →",
+        href: "https://docs.gethyo.co/mobile/setup/",
+        attr: { target: "_blank", rel: "noopener" },
+      });
+      const steps = containerEl.createEl("ol", {
+        attr: { style: "margin: 0 0 16px; padding-left: 20px; color: var(--text-muted); font-size: 0.9em;" },
+      });
+      steps.createEl("li", {
+        text: "Download Tailscale on your desktop and mobile device first (it won't work without Tailscale).",
+      });
+      steps.createEl("li", {
+        text: "Switch on mobile access. You'll need to leave your Obsidian vault open and your computer on for the mobile gateway to work.",
+      });
+    }
+
+    if (Platform.isMobile) {
+      const gwSetting = new Setting(containerEl)
+        .setName("Gateway address")
+        .setDesc(
+          "The address of your Mac. It fills in by itself when this vault syncs from your Mac — only enter it by hand if it hasn't come through. You can copy it from the Mac's Hyo settings, under Mobile.",
+        )
+        .addText((text) =>
+          text
+            .setPlaceholder("wss://your-mac.tailXXXX.ts.net/")
+            .setValue(this.plugin.settings.gatewayUrl)
+            .onChange(async (value) => {
+              this.plugin.settings.gatewayUrl = value.trim();
+              await this.plugin.saveSettings();
+              this.showSavedNear(gwSetting.nameEl as HTMLElement);
+            })
+        );
+    } else {
+      new Setting(containerEl)
+        .setName("Enable mobile access")
+        .setDesc("Host the gateway from this Mac while Obsidian is open, so your phone can connect.")
+        .addToggle((toggle) =>
+          toggle
+            .setValue(this.plugin.settings.enableMobileAccess)
+            .onChange(async (value) => {
+              this.plugin.settings.enableMobileAccess = value;
+              await this.plugin.saveSettings();
+              if (value) this.plugin.startMobileHost();
+              else this.plugin.stopMobileHost();
+              // The gateway comes up (or down) asynchronously — re-render once
+              // it has had a moment, so the status below tells the truth.
+              setTimeout(() => {
+                if (this.activeTab === "mobile") this.display();
+              }, 2500);
+            })
+        );
+
+      // Live status — same truth as the status bar item, shown where you'd
+      // look for it. Includes the address the phone connects to, copyable.
+      const s = this.plugin.gatewayStatus;
+      const statusText =
+        !s || s.state === "off"
+          ? "Off"
+          : s.state === "starting"
+            ? "Starting…"
+            : s.state === "error"
+              ? `Not working — ${s.detail || "unknown error"}`
+              : s.clients > 0
+                ? `On · ${s.clients} device${s.clients === 1 ? "" : "s"} connected`
+                : "On";
+      const statusSetting = new Setting(containerEl).setName("Status").setDesc(statusText);
+      statusSetting.descEl.style.color =
+        s?.state === "on" ? "var(--color-green)" : s?.state === "error" ? "var(--color-red)" : "var(--text-muted)";
+
+      if (s?.state === "on" && s.url) {
         new Setting(containerEl)
-          .setName(id)
-          .setDesc("Added from the model picker")
-          .addExtraButton((btn) =>
-            btn
-              .setIcon("trash")
-              .setTooltip("Remove")
-              .onClick(async () => {
-                this.plugin.settings.customModels =
-                  this.plugin.settings.customModels.filter((m) => m !== id);
-                // If the removed model was the current default, fall back to
-                // the first built-in so nothing points at a now-absent entry.
-                if (this.plugin.settings.model === id) {
-                  this.plugin.settings.model = MODEL_OPTIONS[0].id;
-                }
-                await this.plugin.saveSettings();
-                this.showSaved();
-                this.display();
-              })
+          .setName("Phone address")
+          .setDesc(s.url)
+          .addButton((b) =>
+            b.setButtonText("Copy").onClick(async () => {
+              await navigator.clipboard.writeText(s.url as string);
+              new Notice("Address copied. It also syncs to your phone automatically.");
+            })
           );
       }
+
+      // The gateway port isn't shown: it's internal (Tailscale fronts it) and
+      // the host auto-picks a free one. gatewayPort stays in settings only as
+      // the starting point for that search.
     }
+  }
+
+  // One card per configured note type: a header (count + add/remove-type
+  // buttons) and a row per command (label, skill, extra instruction, delete).
+  private renderCommandType(containerEl: HTMLElement, type: string, skills: Skill[]): void {
+    const commands = this.plugin.settings.commands[type];
+
+    const typeHeading = new Setting(containerEl)
+      .setName(type)
+      .setDesc(
+        commands.length === 0
+          ? "No commands"
+          : commands.length === 1
+          ? "1 command"
+          : `${commands.length} commands`
+      );
+    typeHeading.addButton((b) =>
+      b.setButtonText("Add command").onClick(async () => {
+        commands.push({ skill: skills.length ? skills[0].name : "", label: "", extra: "" });
+        await this.plugin.saveSettings();
+        this.display();
+      })
+    );
+    typeHeading.addExtraButton((b) =>
+      b
+        .setIcon("trash")
+        .setTooltip("Remove this note type")
+        .onClick(async () => {
+          delete this.plugin.settings.commands[type];
+          await this.plugin.saveSettings();
+          this.display();
+        })
+    );
+
+    commands.forEach((cmd, i) => {
+      const row = new Setting(containerEl).setName(cmd.label || "(untitled command)");
+      row.addText((text) =>
+        text
+          .setPlaceholder("Command name")
+          .setValue(cmd.label || "")
+          .onChange(async (v) => {
+            cmd.label = v;
+            await this.plugin.saveSettings();
+          })
+      );
+      row.addDropdown((dropdown) => {
+        for (const sk of skills) dropdown.addOption(sk.name, sk.name);
+        if (cmd.skill && !skills.find((sk) => sk.name === cmd.skill)) {
+          dropdown.addOption(cmd.skill, `${cmd.skill} (not found)`);
+        }
+        dropdown.setValue(cmd.skill || skills[0]?.name || "");
+        dropdown.onChange(async (v) => {
+          cmd.skill = v;
+          await this.plugin.saveSettings();
+        });
+      });
+      row.addText((text) =>
+        text
+          .setPlaceholder("Extra instruction (optional)")
+          .setValue(cmd.extra || "")
+          .onChange(async (v) => {
+            cmd.extra = v;
+            await this.plugin.saveSettings();
+          })
+      );
+      row.addExtraButton((b) =>
+        b
+          .setIcon("trash-2")
+          .setTooltip("Delete command")
+          .onClick(async () => {
+            commands.splice(i, 1);
+            await this.plugin.saveSettings();
+            this.display();
+          })
+      );
+    });
   }
 }

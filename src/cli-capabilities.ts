@@ -14,8 +14,14 @@
 // Detection reads `--help` rather than comparing version numbers, so it stays
 // correct without anyone maintaining a table of which version added what.
 
-import { execFile } from "child_process";
+import { Platform } from "obsidian";
 import { debug } from "./debug";
+
+// Desktop-only. Deferred so importing this module never runs `require` on a
+// phone; the probe below is guarded and never called on mobile anyway.
+const execFile: typeof import("child_process").execFile = Platform.isMobile
+  ? (undefined as any)
+  : require("child_process").execFile;
 
 const supportsEffort = new Map<string, boolean>();
 const inFlight = new Map<string, Promise<boolean>>();
