@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.3
+
+**The one where the Commands page gets a tidy**
+
+- **Each command sits on one clean row.** Name, skill, and extra instruction side by side, grouped under their note type — you can read the whole page at a glance.
+
 ## 0.5.2
 
 **The one where mobile access survives updates**

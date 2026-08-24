@@ -825,6 +825,8 @@ export class HyoSettingTab extends PluginSettingTab {
           ? "1 command"
           : `${commands.length} commands`
       );
+    typeHeading.nameEl.style.fontWeight = "600";
+    typeHeading.settingEl.style.marginTop = "8px";
     typeHeading.addButton((b) =>
       b.setButtonText("Add command").onClick(async () => {
         commands.push({ skill: skills.length ? skills[0].name : "", label: "", extra: "" });
@@ -844,16 +846,26 @@ export class HyoSettingTab extends PluginSettingTab {
     );
 
     commands.forEach((cmd, i) => {
-      const row = new Setting(containerEl).setName(cmd.label || "(untitled command)");
-      row.addText((text) =>
+      const row = new Setting(containerEl);
+      // The row's built-in name column would only duplicate the label input —
+      // and crush it to a couple of characters. Remove it and give the whole
+      // row to the controls, nested under the note-type heading.
+      row.infoEl.remove();
+      row.settingEl.style.paddingLeft = "24px";
+      row.settingEl.style.borderTop = "none";
+      row.controlEl.style.flex = "1";
+      row.controlEl.style.justifyContent = "flex-start";
+      row.addText((text) => {
         text
           .setPlaceholder("Command name")
           .setValue(cmd.label || "")
           .onChange(async (v) => {
             cmd.label = v;
             await this.plugin.saveSettings();
-          })
-      );
+          });
+        text.inputEl.style.flex = "1";
+        text.inputEl.style.minWidth = "120px";
+      });
       row.addDropdown((dropdown) => {
         for (const sk of skills) dropdown.addOption(sk.name, sk.name);
         if (cmd.skill && !skills.find((sk) => sk.name === cmd.skill)) {
@@ -864,16 +876,19 @@ export class HyoSettingTab extends PluginSettingTab {
           cmd.skill = v;
           await this.plugin.saveSettings();
         });
+        dropdown.selectEl.style.maxWidth = "220px";
       });
-      row.addText((text) =>
+      row.addText((text) => {
         text
           .setPlaceholder("Extra instruction (optional)")
           .setValue(cmd.extra || "")
           .onChange(async (v) => {
             cmd.extra = v;
             await this.plugin.saveSettings();
-          })
-      );
+          });
+        text.inputEl.style.flex = "1.4";
+        text.inputEl.style.minWidth = "160px";
+      });
       row.addExtraButton((b) =>
         b
           .setIcon("trash-2")
