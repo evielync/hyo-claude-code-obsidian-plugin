@@ -9,7 +9,7 @@
 - **Voice comes with you.** On the phone it's a walkie-talkie — hold the mic, talk, and Hyo talks back. Desktop keeps full hands-free voice mode.
 - **Titles and pins follow you across devices.** Name or pin a conversation on your desktop and it shows up the same way on your phone, and the other way around.
 - **New: commands on your notes.** Attach a skill to a note type and every note of that type gets a ✨ button in its header. One click runs the skill on that note — a Summarise button on your meeting notes, a Draft post button on your ideas. Set them up in Settings → Commands.
-- **Your open conversations survive a restart.** Close Obsidian and open it again — the tabs you had open are still there, on desktop and on your phone.
+- **Hyo remembers your open tabs.** Restart Obsidian and the conversations you had open are still open — on your desktop and on your phone.
 - **History puts the urgent stuff first.** Conversations that need you, then ones working right now, then ones waiting on a reply.
 - **Settings got a tidy.** Five clear tabs — General, Voice, Mobile, Commands, Advanced.
 
