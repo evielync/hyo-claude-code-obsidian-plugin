@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.6
+
+**The one where the usage meter stops dropping out**
+
+- **The usage bars stay put.** The 5-hour and weekly meters kept falling back to "waiting for credentials" and sitting there stuck. Hyo now reads your live Claude login straight from where Claude Code already keeps it, checks it's still good, and quietly refreshes it when it isn't — so the numbers stay on screen instead of dropping out.
+
 ## 0.5.5
 
 **The one where you can put your phone away**

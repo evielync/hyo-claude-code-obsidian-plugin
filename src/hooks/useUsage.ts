@@ -1,5 +1,5 @@
 import { debug } from "../debug";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { requestUrl } from "obsidian";
 
 // Type definitions for the usage API response
@@ -67,109 +67,79 @@ export function scopedLimit(
 interface OAuthCreds {
   accessToken: string;
   refreshToken?: string;
-  /** Epoch millis. Used to reject a stale cache before it shadows a live source. */
+  /** Epoch millis. Read before every request so we can refresh a dead token. */
   expiresAt?: number;
 }
 
-/**
- * Read OAuth credentials from macOS Keychain (async — does not block UI)
- */
 import { Platform } from "obsidian";
-// Desktop-only cache path; guarded so this module-level code is mobile-safe.
-const CACHE_DIR = Platform.isMobile ? "" : require("path").join(require("os").homedir(), ".hyo");
-const CACHE_PATH = Platform.isMobile ? "" : require("path").join(CACHE_DIR, "oauth-cache.json");
 
-function cacheOAuthCreds(oauth: OAuthCreds): void {
-  try {
-    const fs = require("fs");
-    if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
-    fs.writeFileSync(CACHE_PATH, JSON.stringify(oauth), { mode: 0o600 });
-  } catch {
-    // Non-critical — cache is best-effort
-  }
-}
+/**
+ * Read Claude Code's OAuth credentials from wherever it stores them on this
+ * platform. Hyo never writes or caches these — Claude Code owns the token and
+ * keeps it current, so we always read the live source and copy nothing. Copies
+ * are what went stale and shadowed the real token every time this broke before.
+ *
+ * macOS: the keychain is Claude Code's live store; the `~/.claude` file is a
+ * leftover that goes stale, so the keychain is read first and the file is only
+ * a fallback for when the keychain can't be read. Everywhere else there is no
+ * keychain, so the file is the live store.
+ */
+async function getOAuthCreds(): Promise<OAuthCreds | null> {
+  // Mobile has no filesystem or keychain access — usage isn't available there.
+  if (Platform.isMobile) return null;
 
-function readCachedOAuthCreds(): OAuthCreds | null {
-  try {
-    const fs = require("fs");
-    const raw = fs.readFileSync(CACHE_PATH, "utf-8");
-    const oauth = JSON.parse(raw);
-    if (!oauth?.accessToken) return null;
-
-    // An expired cached token is worse than none: it satisfies the "found
-    // credentials" check, so the live keychain is never consulted and usage
-    // silently stops updating. Reject it and let the caller fall through.
-    if (typeof oauth.expiresAt === "number" && oauth.expiresAt <= Date.now()) {
-      debug("[hyo][usage] Cached token expired — ignoring cache");
+  const readFile = (): OAuthCreds | null => {
+    try {
+      const fs = require("fs");
+      const path = require("path");
+      const home = require("os").homedir();
+      const credsPath = path.join(home, ".claude", ".credentials.json");
+      const oauth = JSON.parse(fs.readFileSync(credsPath, "utf-8"))?.claudeAiOauth;
+      return oauth?.accessToken ? oauth : null;
+    } catch {
       return null;
     }
-    return oauth;
-  } catch {
-    // No cache yet
+  };
+
+  const readKeychain = async (): Promise<OAuthCreds | null> => {
+    try {
+      const { execFile } = require("child_process");
+      const { promisify } = require("util");
+      const execFileAsync = promisify(execFile);
+      const username: string = require("os").userInfo().username;
+      const { stdout } = await execFileAsync(
+        "security",
+        ["find-generic-password", "-s", "Claude Code-credentials", "-a", username, "-w"],
+        { timeout: 5000, maxBuffer: 1024 * 1024 }
+      );
+      const oauth = JSON.parse(stdout.trim())?.claudeAiOauth;
+      return oauth?.accessToken ? oauth : null;
+    } catch {
+      // Keychain missing (non-mac) or unreadable/truncated — caller falls back.
+      return null;
+    }
+  };
+
+  if (Platform.isMacOS) {
+    const fromKeychain = await readKeychain();
+    const creds = fromKeychain ?? readFile();
+    if (creds) debug("[hyo][usage] Creds from:", fromKeychain ? "keychain" : "file", "| hasRefresh:", !!creds.refreshToken);
+    else console.warn("[hyo][usage] No credentials in keychain or file");
+    return creds;
   }
-  return null;
+
+  const creds = readFile();
+  if (!creds) console.warn("[hyo][usage] No credentials file found");
+  return creds;
 }
 
-async function getOAuthCreds(): Promise<OAuthCreds | null> {
-  const fs = require("fs");
-  const path = require("path");
-  const home = require("os").homedir();
-
-  // Try 1: Claude Code's credentials file (full data, exists while CLI runs)
-  try {
-    const credsPath = path.join(home, ".claude", ".credentials.json");
-    const raw = fs.readFileSync(credsPath, "utf-8");
-    const creds = JSON.parse(raw);
-    const oauth = creds?.claudeAiOauth;
-    if (oauth?.accessToken) {
-      cacheOAuthCreds(oauth);
-      debug("[hyo][usage] Creds from: credentials file | hasRefresh:", !!oauth.refreshToken);
-      return oauth;
-    }
-  } catch {
-    // File may not exist — fall through
-  }
-
-  // Try 2: macOS keychain — the live source of truth, so it comes before our
-  // own cache. A cache that outranks it goes stale and never recovers.
-  try {
-    const { execFile } = require("child_process");
-    const { promisify } = require("util");
-    const execFileAsync = promisify(execFile);
-    const username: string = require("os").userInfo().username;
-    const { stdout } = await execFileAsync(
-      "security",
-      ["find-generic-password", "-s", "Claude Code-credentials", "-a", username, "-w"],
-      { timeout: 5000, maxBuffer: 1024 * 1024 }
-    );
-    const raw = stdout.trim();
-
-    try {
-      const creds = JSON.parse(raw);
-      const oauth = creds?.claudeAiOauth;
-      if (oauth?.accessToken) {
-        cacheOAuthCreds(oauth);
-        debug("[hyo][usage] Creds from: keychain (full parse) | hasRefresh:", !!oauth.refreshToken);
-        return oauth;
-      }
-    } catch {
-      console.warn("[hyo][usage] Keychain truncated (", raw.length, "bytes) — claudeAiOauth not reachable");
-    }
-  } catch {
-    // Keychain not available (Linux/Windows)
-  }
-
-  // Last resort: our own cache. Only reached when the keychain is unreadable
-  // (Linux/Windows, or a locked keychain) — and only ever returns an unexpired
-  // token, so a stale one can't shadow a live source.
-  const cached = readCachedOAuthCreds();
-  if (cached) {
-    debug("[hyo][usage] Creds from: cache | hasRefresh:", !!cached.refreshToken);
-    return cached;
-  }
-
-  console.warn("[hyo][usage] No credentials found from any source");
-  return null;
+/**
+ * Treat a token as expired slightly early so we refresh before a request can
+ * fail on it. A token with no expiry date is assumed live.
+ */
+function isExpired(creds: OAuthCreds): boolean {
+  const EXPIRY_SKEW_MS = 60_000;
+  return typeof creds.expiresAt === "number" && creds.expiresAt <= Date.now() + EXPIRY_SKEW_MS;
 }
 
 /**
@@ -229,44 +199,50 @@ async function fetchUsageWithToken(
 }
 
 /**
- * Fetch usage from Anthropic API with automatic token refresh
+ * Fetch usage from the Anthropic API.
+ *
+ * The flow that ends the recurring breakage: read the live token, check its
+ * expiry date, refresh it with the refresh token if it's dead, then use it.
+ * The refreshed token is used in memory only — nothing is written back, so no
+ * copy can go stale and shadow the real one. Returns the HTTP status too, so
+ * the caller can back off on rate limits instead of hammering.
  */
-async function fetchUsage(): Promise<UsageData | null> {
+async function fetchUsage(): Promise<{ status: number; data: UsageData | null }> {
   const creds = await getOAuthCreds();
   if (!creds?.accessToken) {
     console.warn("[hyo][usage] No credentials available");
-    return null;
+    return { status: 0, data: null };
   }
 
   try {
-    // Try with current token
-    let result = await fetchUsageWithToken(creds.accessToken);
+    // Check the date first. If the token is dead (or nearly), refresh before
+    // spending a request on it. Use whatever we have if refresh fails.
+    let token = creds.accessToken;
+    if (isExpired(creds) && creds.refreshToken) {
+      debug("[hyo][usage] Token expired/near expiry — refreshing before request");
+      const newToken = await refreshOAuthToken(creds.refreshToken);
+      if (newToken) token = newToken;
+      else console.warn("[hyo][usage] Proactive refresh failed — using stored token");
+    }
 
-    // If expired, refresh and retry
-    if (result.status === 401) {
-      debug("[hyo][usage] Got 401 — refreshToken?", !!creds.refreshToken, "type:", typeof creds.refreshToken, "len:", creds.refreshToken?.length);
-      if (creds.refreshToken) {
-        debug("[hyo][usage] Attempting token refresh...");
-        const newToken = await refreshOAuthToken(creds.refreshToken);
-        if (newToken) {
-          debug("[hyo][usage] Refresh succeeded, retrying...");
-          // Update cache with new access token
-          cacheOAuthCreds({ ...creds, accessToken: newToken });
-          result = await fetchUsageWithToken(newToken);
-        } else {
-          console.warn("[hyo][usage] Refresh returned null");
-        }
-      }
+    let result = await fetchUsageWithToken(token);
+
+    // Safety net: server still says unauthorised (clock skew, early rotation).
+    // Refresh once and retry.
+    if (result.status === 401 && creds.refreshToken) {
+      debug("[hyo][usage] 401 — refreshing and retrying once");
+      const newToken = await refreshOAuthToken(creds.refreshToken);
+      if (newToken) result = await fetchUsageWithToken(newToken);
     }
 
     if (result.data) {
       debug("[hyo][usage] Fetch OK — 5hr:", result.data.five_hour?.utilization, "7d:", result.data.seven_day?.utilization);
     }
 
-    return result.data;
+    return result;
   } catch (e: any) {
     console.warn("[hyo][usage] fetchUsage error:", e?.message || e);
-    return null;
+    return { status: 0, data: null };
   }
 }
 
@@ -300,30 +276,46 @@ export function useUsage() {
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [stale, setStale] = useState(false);
+  // Consecutive failures, in a ref so the scheduler can read it without a
+  // re-render. Drives exponential backoff so a failing fetch can't hammer the
+  // API — hammering a dead token is what got us rate-limited and kept us stuck.
+  const failuresRef = useRef(0);
 
   const poll = useCallback(async () => {
     try {
-      const data = await fetchUsage();
+      const { status, data } = await fetchUsage();
       if (data) {
         setUsage(data);
         setLastUpdated(new Date());
         setStale(false);
+        failuresRef.current = 0;
       } else {
         setStale(true);
-        console.warn("[hyo] Usage fetch returned null — check keychain or token");
+        failuresRef.current += 1;
+        console.warn(`[hyo] Usage fetch failed (status ${status}, attempt ${failuresRef.current})`);
       }
     } catch (e) {
       setStale(true);
+      failuresRef.current += 1;
       console.error("[hyo] Usage fetch failed:", e);
     }
   }, []);
 
+  // Self-scheduling loop: 5 min when healthy; on failure, back off from 30s up
+  // to a 5 min cap (30s, 60s, 120s, 240s, 300s...) instead of a fixed 15s hammer.
   useEffect(() => {
-    poll();
-    // Poll every 5 minutes when healthy, every 15 seconds when stale
-    const interval = setInterval(poll, stale ? 15_000 : 300_000);
-    return () => clearInterval(interval);
-  }, [poll, stale]);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const run = async () => {
+      await poll();
+      if (cancelled) return;
+      const n = failuresRef.current;
+      const delay = n === 0 ? 300_000 : Math.min(300_000, 30_000 * 2 ** (n - 1));
+      timer = setTimeout(run, delay);
+    };
+    run();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [poll]);
 
   // Re-poll when window regains visibility (catches stale token after long idle)
   useEffect(() => {
