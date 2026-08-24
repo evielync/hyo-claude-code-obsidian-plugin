@@ -1,7 +1,7 @@
 {
   "id": "hyo",
   "name": "Hyo Claude Code Agent",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "minAppVersion": "1.5.0",
   "description": "Chat with Claude Code inside your vault.",
   "author": "Ev Chapman",

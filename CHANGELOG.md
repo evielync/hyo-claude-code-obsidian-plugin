@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.4
+
+**The one where Commands get a proper home**
+
+- **Each note type has its own screen.** The Commands tab shows a simple list of your note types — click one to see and edit its commands. However many commands you build, there's never a wall to scroll through.
+- **Drag to reorder.** Grab the grip on a command row and drag it where you want — the ✨ menu shows commands in the order you set.
+- **Removing asks first.** Taking a note type's commands away now asks before doing anything, and the wording is clear that it only removes the buttons — your notes and their type property stay exactly as they are.
+- **Cleaner rows.** Each command is a name and the skill it runs, lined up in tidy columns with headers.
+- **The extra-instruction field is retired.** Commands are just a name and a skill now. If you'd saved an extra instruction on a command before, it still fires with the command — it just isn't shown.
+
 ## 0.5.3
 
 **The one where the Commands page gets a tidy**

@@ -1,4 +1,4 @@
-import { App, Notice, PluginSettingTab, Setting, Platform } from "obsidian";
+import { App, Modal, Notice, PluginSettingTab, Setting, Platform, setIcon } from "obsidian";
 // Node built-ins are desktop-only; deferred so this module loads on mobile.
 const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
 const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
@@ -104,6 +104,10 @@ export class HyoSettingTab extends PluginSettingTab {
   // Which settings tab is showing. Survives re-renders (display() is called
   // after most edits) so adding a command doesn't bounce you back to General.
   private activeTab = "general";
+
+  // Commands drill-down: null shows the list of note types; a type name shows
+  // that type's own screen. Survives re-renders for the same reason.
+  private commandsDetailType: string | null = null;
 
   constructor(app: App, plugin: HyoPlugin) {
     super(app, plugin);
@@ -657,16 +661,20 @@ export class HyoSettingTab extends PluginSettingTab {
       attr: { target: "_blank", rel: "noopener" },
     });
 
-    const commandSkills = this.plugin.commands.getSkills();
-    const configuredTypes = Object.keys(this.plugin.settings.commands).sort();
-
-    for (const type of configuredTypes) {
-      this.renderCommandType(containerEl, type, commandSkills);
+    // Drill-down: the tab shows either the list of note types, or one type's
+    // own screen with its commands.
+    if (this.commandsDetailType && this.plugin.settings.commands[this.commandsDetailType]) {
+      this.renderCommandTypeDetail(containerEl, this.commandsDetailType);
+      return;
     }
+    this.commandsDetailType = null;
 
+    // Add a note type — at the top, where you can find it however long the
+    // list below gets. Adding one opens its screen straight away.
     const availableTypes = this.plugin.commands
       .getNoteTypes()
       .filter((t) => !this.plugin.settings.commands[t]);
+    const configuredTypes = Object.keys(this.plugin.settings.commands).sort();
 
     if (availableTypes.length) {
       let newType = availableTypes[0];
@@ -688,6 +696,7 @@ export class HyoSettingTab extends PluginSettingTab {
               if (!newType || this.plugin.settings.commands[newType]) return;
               this.plugin.settings.commands[newType] = [];
               await this.plugin.saveSettings();
+              this.commandsDetailType = newType;
               this.display();
             })
         );
@@ -696,11 +705,110 @@ export class HyoSettingTab extends PluginSettingTab {
         .setName("Add a note type")
         .setDesc(
           configuredTypes.length
-            ? "Every note type in your vault already has commands configured."
-            : "No note types found — open a note with a `type` in its frontmatter first."
+            ? 'Note types come from the "type" property on your notes. Every type in this vault already has commands set up — give a note a new type and it will appear here to choose.'
+            : 'Note types come from the "type" property on your notes. Give a note one in its frontmatter and it will appear here to choose.'
         );
     }
 
+    // One row per note type. The whole row opens that type's screen.
+    for (const type of configuredTypes) {
+      const commands = this.plugin.settings.commands[type];
+      const row = new Setting(containerEl)
+        .setName(type)
+        .setDesc(
+          commands.length === 0
+            ? "No commands yet"
+            : commands.length === 1
+              ? "1 command"
+              : `${commands.length} commands`,
+        );
+      row.nameEl.style.fontWeight = "600";
+      row.settingEl.style.cursor = "pointer";
+      row.addExtraButton((b) => b.setIcon("chevron-right").setTooltip("Open"));
+      row.settingEl.addEventListener("click", () => {
+        this.commandsDetailType = type;
+        this.display();
+      });
+    }
+  }
+
+  // One note type's own screen: its commands, an add button, and — behind a
+  // confirmation — the only place the type can be deleted.
+  private renderCommandTypeDetail(containerEl: HTMLElement, type: string): void {
+    const skills = this.plugin.commands.getSkills();
+    const commands = this.plugin.settings.commands[type];
+
+    const back = containerEl.createEl("div", {
+      text: "← All note types",
+      attr: { style: "cursor: pointer; color: var(--text-accent); margin: 0 0 14px; font-size: 0.95em;" },
+    });
+    back.addEventListener("click", () => {
+      this.commandsDetailType = null;
+      this.display();
+    });
+
+    const heading = new Setting(containerEl)
+      .setName(type)
+      .setDesc("Every note with this type gets these commands in its header.");
+    heading.nameEl.style.fontWeight = "700";
+    heading.nameEl.style.fontSize = "1.1em";
+    heading.addButton((b) =>
+      b
+        .setButtonText("Add command")
+        .setCta()
+        .onClick(async () => {
+          commands.push({ skill: skills.length ? skills[0].name : "", label: "", extra: "" });
+          await this.plugin.saveSettings();
+          this.display();
+        }),
+    );
+
+    if (commands.length === 0) {
+      containerEl.createEl("p", {
+        text: "No commands yet — add one above.",
+        attr: { style: "color: var(--text-muted); font-size: 0.9em; margin: 8px 0 16px;" },
+      });
+    } else {
+      // Column headers, sized exactly like the row controls below so the
+      // whole thing reads as one table.
+      const header = containerEl.createEl("div", {
+        attr: {
+          style:
+            "display: flex; gap: 8px; padding: 10px 0 4px; font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);",
+        },
+      });
+      header.createEl("span", { attr: { style: "width: 18px; flex-shrink: 0;" } });
+      header.createEl("span", { text: "Name", attr: { style: "width: 170px; flex-shrink: 0;" } });
+      header.createEl("span", { text: "Skill it runs", attr: { style: "flex: 1;" } });
+      header.createEl("span", { attr: { style: "width: 28px; flex-shrink: 0;" } });
+    }
+
+    commands.forEach((cmd, i) => this.renderCommandRow(containerEl, commands, cmd, i, skills));
+
+    // Removing a type's commands takes all of them at once — never one stray
+    // click. The wording stays clearly about commands: nothing here touches
+    // the user's notes or their type property.
+    const danger = new Setting(containerEl)
+      .setName("Remove these commands")
+      .setDesc(`Stops showing command buttons on "${type}" notes. Your notes and their type stay exactly as they are.`);
+    danger.settingEl.style.marginTop = "24px";
+    danger.addButton((b) =>
+      b
+        .setButtonText("Remove")
+        .setWarning()
+        .onClick(() => {
+          const what =
+            commands.length === 0
+              ? `Remove "${type}" from this list?`
+              : `Remove ${commands.length === 1 ? "the 1 command" : `all ${commands.length} commands`} from "${type}" notes? This can't be undone.`;
+          new ConfirmDeleteModal(this.app, what, async () => {
+            delete this.plugin.settings.commands[type];
+            await this.plugin.saveSettings();
+            this.commandsDetailType = null;
+            this.display();
+          }).open();
+        }),
+    );
   }
 
   // ---- Mobile: gateway hosting (desktop) / gateway address (phone) ------------
@@ -813,48 +921,66 @@ export class HyoSettingTab extends PluginSettingTab {
 
   // One card per configured note type: a header (count + add/remove-type
   // buttons) and a row per command (label, skill, extra instruction, delete).
-  private renderCommandType(containerEl: HTMLElement, type: string, skills: Skill[]): void {
-    const commands = this.plugin.settings.commands[type];
-
-    const typeHeading = new Setting(containerEl)
-      .setName(type)
-      .setDesc(
-        commands.length === 0
-          ? "No commands"
-          : commands.length === 1
-          ? "1 command"
-          : `${commands.length} commands`
-      );
-    typeHeading.nameEl.style.fontWeight = "600";
-    typeHeading.settingEl.style.marginTop = "8px";
-    typeHeading.addButton((b) =>
-      b.setButtonText("Add command").onClick(async () => {
-        commands.push({ skill: skills.length ? skills[0].name : "", label: "", extra: "" });
-        await this.plugin.saveSettings();
-        this.display();
-      })
-    );
-    typeHeading.addExtraButton((b) =>
-      b
-        .setIcon("trash")
-        .setTooltip("Remove this note type")
-        .onClick(async () => {
-          delete this.plugin.settings.commands[type];
-          await this.plugin.saveSettings();
-          this.display();
-        })
-    );
-
-    commands.forEach((cmd, i) => {
+  private renderCommandRow(
+    containerEl: HTMLElement,
+    commands: { skill: string; label?: string; extra?: string }[],
+    cmd: { skill: string; label?: string; extra?: string },
+    i: number,
+    skills: Skill[],
+  ): void {
+    {
       const row = new Setting(containerEl);
       // The row's built-in name column would only duplicate the label input —
       // and crush it to a couple of characters. Remove it and give the whole
-      // row to the controls, nested under the note-type heading.
+      // row to the controls.
       row.infoEl.remove();
-      row.settingEl.style.paddingLeft = "24px";
-      row.settingEl.style.borderTop = "none";
       row.controlEl.style.flex = "1";
       row.controlEl.style.justifyContent = "flex-start";
+
+      // Drag to reorder — same interaction as the chat tabs. The grip is the
+      // drag surface (dragging from an input would fight text selection).
+      const grip = row.controlEl.createDiv();
+      setIcon(grip, "grip-vertical");
+      grip.style.cssText = "cursor: grab; color: var(--text-faint); display: flex; align-items: center; flex-shrink: 0;";
+      grip.setAttribute("aria-label", "Drag to reorder");
+      grip.addEventListener("mousedown", () => (row.settingEl.draggable = true));
+      grip.addEventListener("mouseup", () => (row.settingEl.draggable = false));
+      row.settingEl.addEventListener("dragstart", (e: DragEvent) => {
+        e.dataTransfer?.setData("text/plain", String(i));
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+        row.settingEl.style.opacity = "0.5";
+      });
+      // The drop indicator is its own element laid over the row's top edge —
+      // a shadow or border would follow the card's rounded corners and read
+      // as a curve rather than a line.
+      row.settingEl.style.position = "relative";
+      const dropLine = row.settingEl.createDiv();
+      dropLine.style.cssText =
+        "position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--interactive-accent); display: none; pointer-events: none;";
+      row.settingEl.addEventListener("dragend", () => {
+        row.settingEl.draggable = false;
+        row.settingEl.style.opacity = "";
+        dropLine.style.display = "none";
+      });
+      row.settingEl.addEventListener("dragover", (e: DragEvent) => {
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+        dropLine.style.display = "block";
+      });
+      row.settingEl.addEventListener("dragleave", () => {
+        dropLine.style.display = "none";
+      });
+      row.settingEl.addEventListener("drop", async (e: DragEvent) => {
+        e.preventDefault();
+        dropLine.style.display = "none";
+        const from = parseInt(e.dataTransfer?.getData("text/plain") ?? "", 10);
+        if (isNaN(from) || from === i) return;
+        const [moved] = commands.splice(from, 1);
+        commands.splice(i, 0, moved);
+        await this.plugin.saveSettings();
+        this.display();
+      });
+
       row.addText((text) => {
         text
           .setPlaceholder("Command name")
@@ -863,8 +989,10 @@ export class HyoSettingTab extends PluginSettingTab {
             cmd.label = v;
             await this.plugin.saveSettings();
           });
-        text.inputEl.style.flex = "1";
-        text.inputEl.style.minWidth = "120px";
+        // Fixed column widths, not flex-to-content: every row lines up with
+        // the headers and each other regardless of how long a skill name is.
+        text.inputEl.style.width = "170px";
+        text.inputEl.style.flexShrink = "0";
       });
       row.addDropdown((dropdown) => {
         for (const sk of skills) dropdown.addOption(sk.name, sk.name);
@@ -876,18 +1004,11 @@ export class HyoSettingTab extends PluginSettingTab {
           cmd.skill = v;
           await this.plugin.saveSettings();
         });
-        dropdown.selectEl.style.maxWidth = "220px";
-      });
-      row.addText((text) => {
-        text
-          .setPlaceholder("Extra instruction (optional)")
-          .setValue(cmd.extra || "")
-          .onChange(async (v) => {
-            cmd.extra = v;
-            await this.plugin.saveSettings();
-          });
-        text.inputEl.style.flex = "1.4";
-        text.inputEl.style.minWidth = "160px";
+        // (Legacy `extra` instructions from the standalone plugin still fire
+        // with the command — there's just no editing UI for them anymore.)
+        dropdown.selectEl.style.flex = "1";
+        dropdown.selectEl.style.textAlign = "left";
+        (dropdown.selectEl.style as any).textAlignLast = "left";
       });
       row.addExtraButton((b) =>
         b
@@ -899,6 +1020,37 @@ export class HyoSettingTab extends PluginSettingTab {
             this.display();
           })
       );
+    }
+  }
+}
+
+// Small yes/no gate for destructive actions. Cancel is the safe default.
+class ConfirmDeleteModal extends Modal {
+  private message: string;
+  private onConfirm: () => void | Promise<void>;
+
+  constructor(app: App, message: string, onConfirm: () => void | Promise<void>) {
+    super(app);
+    this.message = message;
+    this.onConfirm = onConfirm;
+  }
+
+  onOpen(): void {
+    this.contentEl.createEl("p", { text: this.message });
+    const row = this.contentEl.createEl("div", {
+      attr: { style: "display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;" },
     });
+    const cancel = row.createEl("button", { text: "Cancel" });
+    cancel.addEventListener("click", () => this.close());
+    const del = row.createEl("button", { text: "Delete", cls: "mod-warning" });
+    del.addEventListener("click", async () => {
+      this.close();
+      await this.onConfirm();
+    });
+    cancel.focus();
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
   }
 }
