@@ -7,11 +7,10 @@
 - 🎉 **Hyo now works on your phone.** Turn on mobile access on your desktop and Hyo shows up in the same vault on your phone — your conversations, your history, wherever you are.
 - **Setup is simple.** Install Tailscale (a free app that links your devices privately) on both devices, then switch on mobile access in Settings → Mobile. Hyo handles the rest — and the status bar always shows it's on, and when your phone is connected. Full guide: docs.gethyo.co.
 - **Voice comes with you.** On the phone it's a walkie-talkie — hold the mic, talk, and Hyo talks back. Desktop keeps full hands-free voice mode.
-- **New: commands on your notes.** Attach a skill to a note type and every note of that type gets a ✨ button in its header. One click runs the skill on that note — a Summarise button on your meeting notes, a Draft post button on your ideas.
-- **Shape each command to the note it lives on.** The same skill can behave differently per note type — add an extra instruction when you set it up, like "keep it to five bullets" on meetings. It's all in Settings → Commands, and the docs walk you through it.
-- **Your tabs come back.** Hyo reopens with the conversations you had open — and each device remembers its own set.
+- **Titles and pins follow you across devices.** Name or pin a conversation on your desktop and it shows up the same way on your phone, and the other way around.
+- **New: commands on your notes.** Attach a skill to a note type and every note of that type gets a ✨ button in its header. One click runs the skill on that note — a Summarise button on your meeting notes, a Draft post button on your ideas. Set them up in Settings → Commands.
+- **Your open conversations survive a restart.** Close Obsidian and open it again — the tabs you had open are still there, on desktop and on your phone.
 - **History puts the urgent stuff first.** Conversations that need you, then ones working right now, then ones waiting on a reply.
-- **Titles and pins follow you across devices.** Name or pin a conversation anywhere and it's the same everywhere.
 - **Settings got a tidy.** Five clear tabs — General, Voice, Mobile, Commands, Advanced.
 
 ## 0.4.0
