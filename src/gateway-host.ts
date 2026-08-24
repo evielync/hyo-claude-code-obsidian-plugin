@@ -485,7 +485,16 @@ function spawnTab(
   const resolvedAgent = agent || config.defaultAgent;
   if (resolvedAgent) args.push("--agent", resolvedAgent);
   if (ask) {
-    args.push("--permission-mode", "default", "--permission-prompt-tool", "stdio", "--setting-sources", "user,project");
+    // Ask-first drops desktop local settings, then loads the phone's own
+    // allowlist back on via --settings (non-destructive defaults + anything
+    // the user has "Always allow"ed on the device).
+    ensureMobileSettings();
+    args.push(
+      "--permission-mode", "default",
+      "--permission-prompt-tool", "stdio",
+      "--setting-sources", "user,project",
+      "--settings", mobileSettingsPath(),
+    );
   } else {
     args.push("--permission-mode", "bypassPermissions");
   }
@@ -575,6 +584,100 @@ function vaultSlug(vaultPath: string): string {
 }
 
 let activeSlug: string | null = null;
+
+// ---- Mobile allowlist --------------------------------------------------------
+// Phone sessions in "ask first" mode deliberately drop the desktop's local
+// settings (`--setting-sources user,project` in spawnTab). Instead they carry
+// their OWN allowlist, loaded via `--settings` — a file the desktop never
+// touches. Seeded with tools that are non-destructive by nature (reads,
+// search, fetch); "Always allow" on the phone appends to it (addMobileAllow),
+// so the list grows on the device without leaking into desktop rules.
+const MOBILE_ALLOW_DEFAULTS = [
+  // QMD — the context layer. Read-only semantic search over the vault.
+  "mcp__qmd__query",
+  "mcp__qmd__get",
+  "mcp__qmd__multi_get",
+  "mcp__qmd__status",
+  // Local read/search family — no mutation.
+  "Read",
+  "Glob",
+  "Grep",
+  // Web — read-only lookups.
+  "WebSearch",
+  "WebFetch",
+];
+
+function mobileSettingsPath(): string {
+  return process.env.HYO_MOBILE_SETTINGS || path.join(os.homedir(), ".hyo", "mobile-settings.json");
+}
+
+function readMobileAllow(): string[] {
+  try {
+    const j = JSON.parse(fs.readFileSync(mobileSettingsPath(), "utf8"));
+    return Array.isArray(j?.permissions?.allow) ? j.permissions.allow : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeMobileAllow(allow: string[]): void {
+  fs.mkdirSync(path.dirname(mobileSettingsPath()), { recursive: true });
+  fs.writeFileSync(mobileSettingsPath(), JSON.stringify({ permissions: { allow } }, null, 2));
+}
+
+// Ensure the file exists and every default is present, preserving any tools
+// the user has since added via "Always allow". Union, not overwrite — so a new
+// default reaches existing installs without wiping the device's own picks.
+function ensureMobileSettings(): void {
+  try {
+    writeMobileAllow(Array.from(new Set([...MOBILE_ALLOW_DEFAULTS, ...readMobileAllow()])));
+  } catch {
+    /* best-effort — a failed write just means ask-first prompts more */
+  }
+}
+
+// Append one tool to the device allowlist (dedup). Called on "Always allow".
+function addMobileAllow(toolName: string): void {
+  try {
+    const allow = readMobileAllow();
+    if (!allow.includes(toolName)) writeMobileAllow([...allow, toolName]);
+  } catch {
+    /* best-effort */
+  }
+}
+
+// ---- Gateway discovery -------------------------------------------------------
+// Anything on this machine that needs to reach a vault's gateway (the Voice OS
+// capture sweeper, future automations) reads its actual port from here instead
+// of assuming one. Written when the server binds, removed on stop.
+let discoverySlug: string | null = null;
+
+function gatewaysDir(): string {
+  return path.join(os.homedir(), ".hyo", "gateways");
+}
+
+function writeDiscovery(slug: string, vault: string, port: number): void {
+  try {
+    fs.mkdirSync(gatewaysDir(), { recursive: true });
+    fs.writeFileSync(
+      path.join(gatewaysDir(), `${slug}.json`),
+      JSON.stringify({ vault, slug, port, pid: process.pid, startedAt: new Date().toISOString() }, null, 2),
+    );
+    discoverySlug = slug;
+  } catch {
+    /* best-effort — consumers fall back to their default port */
+  }
+}
+
+function removeDiscovery(): void {
+  if (!discoverySlug) return;
+  try {
+    fs.unlinkSync(path.join(gatewaysDir(), `${discoverySlug}.json`));
+  } catch {
+    /* already gone */
+  }
+  discoverySlug = null;
+}
 
 // Live status, pushed to the plugin's status bar indicator via onStatus.
 let statusCb: ((s: GatewayStatus) => void) | null = null;
@@ -828,6 +931,9 @@ export function startGatewayHost(config: GatewayHostConfig): void {
     `[hyo][gateway] listening on ws://127.0.0.1:${resolved.port} vault=${resolved.vault} agent=${resolved.defaultAgent} model=${resolved.defaultModel}`,
   );
 
+  // Local port discovery for same-machine consumers (capture sweeper etc.).
+  writeDiscovery(vaultSlug(resolved.vault), resolved.vault, resolved.port);
+
   // Expose the gateway over the user's tailnet and tell them the phone URL, so
   // the toggle is the entire Mac-side setup — no Terminal command.
   setupTailscaleServe(resolved.port, vaultSlug(resolved.vault), resolved.onConnectUrl);
@@ -925,6 +1031,10 @@ export function startGatewayHost(config: GatewayHostConfig): void {
             if (m.behavior === "deny") {
               response = { behavior: "deny", message: "Denied by user", decisionClassification: "user_reject" };
             } else if (m.behavior === "allow_always" && m.toolName) {
+              // Persist to the mobile allowlist (durable across sessions,
+              // device-only — never desktop rules). `session` destination
+              // makes it take effect immediately in the running process.
+              addMobileAllow(m.toolName);
               response = withInput({
                 behavior: "allow",
                 decisionClassification: "user_permanent",
@@ -1014,6 +1124,7 @@ export function stopGatewayHost(): void {
     }
     activeSlug = null;
   }
+  removeDiscovery();
   setStatus({ state: "off", clients: 0, url: undefined, detail: undefined });
   statusCb = null;
   activeConfig = null;

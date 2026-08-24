@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1
+
+**The one where the phone stops asking so much**
+
+- **"Ask first" on the phone now asks only when it matters.** Safe, read-only tools — searching your vault, reading notes, looking things up on the web — are allowed automatically. Anything that changes something still asks.
+- **"Always allow" is remembered.** Tap it once on the phone and that tool stays allowed for every future conversation, not just the current one.
+
 ## 0.5.0
 
 **The one where Hyo comes to your phone**
