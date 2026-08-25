@@ -12,7 +12,7 @@ import { App, Notice, requestUrl } from "obsidian";
  */
 
 const RELEASE_BASE =
-  "https://github.com/evielync/hyo-claude-code-obsidian-plugin/releases/download/voice-models-v1";
+  "https://github.com/evielync/hyo-claude-code-obsidian-plugin/releases/download/voice-models";
 
 // local path (under vad-assets/) → flat asset name in the release (GitHub
 // release asset names can't contain slashes).

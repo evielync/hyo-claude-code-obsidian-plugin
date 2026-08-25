@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.7
+
+**The one where the install error goes away**
+
+- **Adding Hyo through BRAT no longer shows an error.** A voice-models file release on our GitHub repo had a name that BRAT mistook for a plugin version, so fresh installs complained about a missing manifest file (and recent installs still flashed the error even when they worked). The release has a new name BRAT can't misread, and the error is gone for good.
+- **Voice mode downloads its models from the new home.** Nothing changes if you've already used voice — the files are cached on your machine. First-time voice users just download from the renamed spot.
+
 ## 0.5.6
 
 **The one where the usage meter stops dropping out**
