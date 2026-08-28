@@ -8,6 +8,11 @@ const path: typeof import("path") = Platform.isMobile ? (undefined as any) : req
 const os: typeof import("os") = Platform.isMobile ? (undefined as any) : require("os");
 import { HyoView, VIEW_TYPE_HYO } from "./HyoView";
 import { HyoSettingTab, HyoSettings, DEFAULT_SETTINGS, dispatchSettingsChanged } from "./settings";
+import {
+  resolveModelForEngine,
+  resolveEffortForEngine,
+  DEFAULT_EFFORT,
+} from "./models";
 import { cleanupOldAttachments } from "./attachments";
 import { setDebug } from "./debug";
 import { probeCliCapabilities } from "./cli-capabilities";
@@ -206,6 +211,25 @@ export default class HyoPlugin extends Plugin {
       DEFAULT_SETTINGS,
       await this.loadData()
     );
+    // The saved model and effort must belong to the engine this vault runs.
+    // A live switch resolves them, but settings can also arrive mismatched —
+    // edited by hand, synced from another machine, or left over from before
+    // the engine was changed — and then the picker shows one engine's model
+    // while offering the other's list.
+    {
+      const engine = this.settings.engine || "claude";
+      const model = resolveModelForEngine(engine, this.settings.model);
+      const effort = resolveEffortForEngine(
+        engine,
+        this.settings.effortLevel || DEFAULT_EFFORT,
+      );
+      if (model !== this.settings.model || effort !== this.settings.effortLevel) {
+        this.settings.model = model;
+        this.settings.effortLevel = effort;
+        await this.saveData(this.settings);
+      }
+    }
+
     // Reset stale shorthand model IDs to the default (Sonnet)
     const staleShorthands = ["opus", "sonnet", "haiku"];
     if (staleShorthands.includes(this.settings.model)) {
