@@ -2,6 +2,7 @@ import { debug } from "../debug";
 import { useState, useCallback, useRef, useEffect } from "react";
 import { ClaudeTransport, normalizeModelId } from "../claude-transport";
 import { CodexTransport } from "../codex-transport";
+import { resolveModelForEngine, resolveEffortForEngine } from "../models";
 import type { AgentEvent, AgentTransport, EngineId } from "../agent-transport";
 import { VOICE_PERSONA } from "../voice/voice-persona";
 import type {
@@ -224,7 +225,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           title: "New conversation",
           messages: [],
           generating: false,
-          model: options.model,
+          model: resolveModelForEngine(options.engine || "claude", options.model),
           effort: options.effort,
           permissionMode: options.permissionMode,
           agent: options.defaultAgent,
@@ -917,7 +918,7 @@ export function useSessionManager(options: SessionManagerOptions) {
               title: "New conversation",
               messages: [],
               generating: false,
-              model: options.model,
+              model: resolveModelForEngine(options.engine || "claude", options.model),
               effort: options.effort,
               permissionMode: options.permissionMode,
               agent: options.defaultAgent,
@@ -1086,8 +1087,8 @@ export function useSessionManager(options: SessionManagerOptions) {
 
         const shared = {
           cwd: options.cwd,
-          model: currentTab?.model || options.model,
-          effort: currentTab?.effort || options.effort,
+          model: resolveModelForEngine(options.engine || "claude", currentTab?.model || options.model),
+          effort: resolveEffortForEngine(options.engine || "claude", currentTab?.effort || options.effort),
           permissionMode: currentTab?.permissionMode || options.permissionMode,
           agent: currentTab?.agent || "",
           sessionId: cliSessionId || undefined,

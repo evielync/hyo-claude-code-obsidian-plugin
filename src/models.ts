@@ -97,11 +97,12 @@ export const MODEL_OPTIONS: ModelOption[] = [
   model("claude-haiku-4-5-20251001", "Haiku 4.5"),
 ];
 
-// Codex's models, read from the app server's own `model/list` rather than
-// written from memory. No context figure is shown for them: the app server
-// reports the real window per conversation on `thread/tokenUsage/updated` and
-// the gauge uses that, so a second number here would only be something that
-// could disagree with it.
+// Fallback only. The real list is fetched live from the app server (see
+// codex-models.ts) so it tracks whatever the account and the installed CLI
+// actually offer; this is what shows before that returns, or if it fails.
+// No context figure is shown: the app server reports the real window per
+// conversation on `thread/tokenUsage/updated` and the gauge uses that, so a
+// second number here would only be something that could disagree with it.
 export const CODEX_MODEL_OPTIONS: ModelOption[] = [
   { id: "gpt-5.5", name: "GPT-5.5", context: "" },
   { id: "gpt-5.4", name: "GPT-5.4", context: "" },
@@ -160,9 +161,13 @@ export function effortsForEngine(engine: string): EffortOption[] {
  * back to that engine's default rather than passing a value it will reject.
  */
 export function resolveModelForEngine(engine: string, model: string): string {
-  const list = modelsForEngine(engine);
-  if (list.some((m) => m.id === model)) return model;
-  return engine === "codex" ? DEFAULT_CODEX_MODEL : model;
+  if (engine !== "codex") return model;
+  if (!model) return DEFAULT_CODEX_MODEL;
+  // Any gpt-*/o*/codex-* id passes, not only the ones in the fallback list — a
+  // newer CLI offers models this build has never heard of, and rejecting them
+  // would pin the picker to whatever was known at release. Only an id that
+  // clearly belongs to another engine gets replaced.
+  return /^(gpt|o[0-9]|codex)/i.test(model) ? model : DEFAULT_CODEX_MODEL;
 }
 
 export function resolveEffortForEngine(engine: string, effort: string): string {

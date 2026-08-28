@@ -1,3 +1,4 @@
+import { ENGINE_LABELS } from "../agent-transport";
 import React, { useRef, useState, useCallback, useEffect, useMemo } from "react";
 import type { App } from "obsidian";
 import { Notice } from "obsidian";
@@ -76,6 +77,9 @@ function playPermissionChime() {
 }
 
 export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
+  // The panel is named after whichever engine this vault runs, so it never
+  // says Claude while Codex is answering.
+  const engineLabel = ENGINE_LABELS[plugin.settings.engine || "claude"];
   // Release card: shown when the installed version is newer than the last one
   // acknowledged. A blank lastSeenVersion means a fresh install, which gets no
   // card — nobody needs release notes for a version they never ran.
@@ -1075,7 +1079,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
       ) : (
         <div className="hyo-messages">
           <div className="hyo-empty-state">
-            <p>Start a conversation with Claude</p>
+            <p>Start a conversation with {engineLabel}</p>
           </div>
         </div>
       )}
@@ -1197,7 +1201,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
               <textarea
                 ref={inputRef}
                 className="hyo-input"
-                placeholder="Message Claude..."
+                placeholder={`Message ${engineLabel}...`}
                 rows={1}
                 value={inputValue}
                 onChange={handleInput}
@@ -1238,6 +1242,11 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
 
       <HyoStatusBar
           engine={plugin.settings.engine}
+          engineCliPath={
+            plugin.settings.engine === "codex"
+              ? plugin.settings.codexCliPath
+              : plugin.settings.cliPath
+          }
         model={activeModel}
         effort={activeEffort}
         permissionMode={activePermissionMode}

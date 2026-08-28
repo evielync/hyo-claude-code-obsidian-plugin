@@ -1,10 +1,12 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import type { EngineId } from "../agent-transport";
+import { fetchCodexModels } from "../codex-models";
 import { useUsage, scopedLimit } from "../hooks/useUsage";
 import { useAgents } from "../hooks/useAgents";
 import {
   modelsForEngine,
   effortsForEngine,
+  type ModelOption,
   DEFAULT_EFFORT,
   getContextLimit,
 } from "../models";
@@ -12,6 +14,8 @@ import {
 interface HyoStatusBarProps {
   /** Which engine this vault runs, so the picker offers that engine's models. */
   engine?: EngineId;
+  /** Path to the engine's CLI, used to ask it what models it can run. */
+  engineCliPath?: string;
   model: string;
   effort: string;
   permissionMode: string;
@@ -77,6 +81,7 @@ function formatTokens(n: number): string {
 
 export function HyoStatusBar({
   engine,
+  engineCliPath,
   model,
   effort,
   permissionMode,
@@ -180,7 +185,24 @@ export function HyoStatusBar({
     [onPermissionModeChange]
   );
 
-  const engineModels = modelsForEngine(engine || "claude");
+  // Codex serves its own model list, so ask it rather than shipping one that
+  // goes stale. Claude's is a fixed list and needs no round trip.
+  const [liveModels, setLiveModels] = useState<ModelOption[] | null>(null);
+  useEffect(() => {
+    if (engine !== "codex" || !engineCliPath) {
+      setLiveModels(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchCodexModels(engineCliPath).then((m) => {
+      if (!cancelled) setLiveModels(m);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [engine, engineCliPath]);
+
+  const engineModels = liveModels ?? modelsForEngine(engine || "claude");
   const engineEfforts = effortsForEngine(engine || "claude");
 
   // Built-in models plus any the user added via the custom field. Custom
