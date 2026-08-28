@@ -22,9 +22,18 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
     return () => window.removeEventListener("hyo-settings-changed", handler);
   }, []);
 
+  // The "is the CLI there?" check follows the selected engine, so running Codex
+  // in this vault doesn't get blocked by a missing Claude binary (and the other
+  // way round).
+  const engine = plugin.settings.engine || "claude";
+  const activeCliPath =
+    engine === "codex"
+      ? plugin.settings.codexCliPath || ""
+      : plugin.settings.cliPath;
+
   useEffect(() => {
-    setCliFound(checkCliExists(plugin.settings.cliPath));
-  }, [plugin.settings.cliPath, settingsVersion]);
+    setCliFound(checkCliExists(activeCliPath));
+  }, [activeCliPath, settingsVersion]);
 
   // Use custom working directory if set, otherwise use vault path
   const workingDirectory = plugin.settings.workingDirectory
@@ -35,7 +44,9 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
     : vaultPath;
 
   const sessionManager = useSessionManager({
+    engine,
     cliPath: plugin.settings.cliPath,
+    codexCliPath: plugin.settings.codexCliPath,
     cwd: workingDirectory,
     model: plugin.settings.model,
     effort: plugin.settings.effortLevel || DEFAULT_EFFORT,

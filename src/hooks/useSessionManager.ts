@@ -1,6 +1,8 @@
 import { debug } from "../debug";
 import { useState, useCallback, useRef, useEffect } from "react";
 import { ClaudeTransport, normalizeModelId } from "../claude-transport";
+import { CodexTransport } from "../codex-transport";
+import type { AgentEvent, AgentTransport, EngineId } from "../agent-transport";
 import { VOICE_PERSONA } from "../voice/voice-persona";
 import type {
   Message,
@@ -9,6 +11,7 @@ import type {
   AskQuestionData,
   PlanReviewData,
 } from "./useChatEngine";
+import { HIDDEN_TOOLS } from "./useChatEngine";
 import { listPastSessions, loadSessionHistory, saveCustomTitle, setTaskMeta as persistTaskMeta, type PastSession, getProjectDir } from "../session-parser";
 import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
 import { generateConversationTitle } from "../title-generator";
@@ -66,7 +69,11 @@ interface SessionState {
 }
 
 interface SessionManagerOptions {
+  /** Which agent engine this vault runs. Defaults to Claude Code. */
+  engine?: EngineId;
   cliPath: string;
+  /** Path to the Codex CLI, used when `engine` is "codex". */
+  codexCliPath?: string;
   cwd: string;
   model: string;
   effort: string;
@@ -231,7 +238,7 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   const [pastSessions, setPastSessions] = useState<PastSession[]>([]);
 
-  const transportsRef = useRef<Record<string, ClaudeTransport>>({});
+  const transportsRef = useRef<Record<string, AgentTransport>>({});
   const streamStatesRef = useRef<Record<string, StreamState>>({});
   const scrollRef = useRef({ nearBottom: true });
   const stateRef = useRef(state);
@@ -266,6 +273,153 @@ export function useSessionManager(options: SessionManagerOptions) {
       }));
     },
     []
+  );
+
+  /**
+   * Handler for the engine-neutral `AgentEvent` stream (Codex today, further
+   * engines after it). Claude Code keeps its own handler below, because that
+   * path carries Claude-only behaviour — AskUserQuestion, plan review, skill
+   * output suppression — with no counterpart on other engines yet. Both write
+   * into the same per-tab `StreamState`, so everything downstream is shared.
+   */
+  const makeProcessAgentEvent = useCallback(
+    (tabId: string) => {
+      return (event: AgentEvent) => {
+        const ss = streamStatesRef.current[tabId];
+        if (!ss) return;
+
+        switch (event.type) {
+          case "session-ready":
+            setState((prev) => ({
+              ...prev,
+              tabs: prev.tabs.map((tab) =>
+                tab.id === tabId ? { ...tab, cliSessionId: event.sessionId } : tab,
+              ),
+            }));
+            return;
+
+          case "text-delta": {
+            if (!event.text) return;
+            // A tool ran since the last prose, so this starts a new block
+            // rather than continuing the paragraph from before the tool call.
+            if (ss.toolResultSinceLastText && ss.orderedBlocks.length > 0) {
+              ss.turnIndex++;
+            }
+            const existing = ss.orderedBlocks.find(
+              (b) => b.type === "text" && b.turnIndex === ss.turnIndex,
+            );
+            if (existing) existing.content = (existing.content || "") + event.text;
+            else
+              ss.orderedBlocks.push({
+                type: "text",
+                content: event.text,
+                turnIndex: ss.turnIndex,
+              });
+            ss.toolResultSinceLastText = false;
+            updateTabLastAssistant(tabId, () => buildSnapshot(ss));
+            return;
+          }
+
+          case "thinking-delta": {
+            if (!event.text) return;
+            const existing = ss.orderedBlocks.find(
+              (b) => b.type === "thinking" && b.turnIndex === ss.turnIndex,
+            );
+            if (existing) existing.content = (existing.content || "") + event.text;
+            else
+              ss.orderedBlocks.push({
+                type: "thinking",
+                content: event.text,
+                turnIndex: ss.turnIndex,
+              });
+            updateTabLastAssistant(tabId, () => buildSnapshot(ss));
+            return;
+          }
+
+          case "tool-start": {
+            if (ss.toolCalls.some((t) => t.id === event.id)) return;
+            ss.toolCalls.push({
+              id: event.id,
+              name: event.name,
+              input: event.input ?? {},
+              result: null,
+            });
+            if (!HIDDEN_TOOLS.has(event.name)) {
+              ss.orderedBlocks.push({
+                type: "tool",
+                toolId: event.id,
+                turnIndex: ss.turnIndex,
+              });
+            }
+            updateTabLastAssistant(tabId, () => buildSnapshot(ss));
+            return;
+          }
+
+          case "tool-input-delta": {
+            const tool = ss.toolCalls.find((t) => t.id === event.id);
+            if (!tool) return;
+            tool._inputJson = (tool._inputJson || "") + event.partialJson;
+            try {
+              tool.input = JSON.parse(tool._inputJson);
+            } catch {
+              // Still partial — wait for the rest.
+            }
+            updateTabLastAssistant(tabId, () => buildSnapshot(ss));
+            return;
+          }
+
+          case "tool-result": {
+            const tool = ss.toolCalls.find((t) => t.id === event.id);
+            if (!tool) return;
+            tool.result =
+              typeof event.content === "string"
+                ? event.content
+                : JSON.stringify(event.content ?? "");
+            ss.toolResultSinceLastText = true;
+            updateTabLastAssistant(tabId, () => buildSnapshot(ss));
+            return;
+          }
+
+          case "permission-request":
+            updateTabLastAssistant(tabId, (msg) => {
+              const existing = msg.permissionRequests || [];
+              if (existing.some((r) => r.requestId === event.requestId)) return {};
+              return {
+                permissionRequests: [
+                  ...existing,
+                  {
+                    requestId: event.requestId,
+                    toolName: event.toolName,
+                    input: event.input,
+                  },
+                ],
+              };
+            });
+            return;
+
+          case "turn-complete":
+            updateTabLastAssistant(tabId, () => ({ streaming: false }));
+            setState((prev) => ({
+              ...prev,
+              tabs: prev.tabs.map((tab) =>
+                tab.id === tabId ? { ...tab, generating: false } : tab,
+              ),
+            }));
+            if (event.error) console.error("[hyo] turn failed:", event.error);
+            return;
+
+          case "error":
+            console.error("[hyo] engine error:", event.message);
+            return;
+
+          case "tool-end":
+          case "status":
+          case "rate-limits":
+            return;
+        }
+      };
+    },
+    [updateTabLastAssistant],
   );
 
   const makeProcessEvent = useCallback(
@@ -395,7 +549,7 @@ export function useSessionManager(options: SessionManagerOptions) {
 
           // EnterPlanMode — auto-approve silently. No user gate needed.
           if (toolName === "EnterPlanMode") {
-            transportsRef.current[tabId]?.sendPermissionResponse(requestId, "allow");
+            transportsRef.current[tabId]?.respondToPermission(requestId, "allow");
             return;
           }
 
@@ -930,8 +1084,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         );
         const cliSessionId = currentTab?.cliSessionId;
 
-        const transport = new ClaudeTransport({
-          cliPath: options.cliPath,
+        const shared = {
           cwd: options.cwd,
           model: currentTab?.model || options.model,
           effort: currentTab?.effort || options.effort,
@@ -944,42 +1097,61 @@ export function useSessionManager(options: SessionManagerOptions) {
           // listening. toggleVoiceMode kills the transport, so the next spawn
           // (here) picks up or drops the persona and --resumes the same session.
           appendSystemPrompt: currentTab?.voiceMode ? VOICE_PERSONA : undefined,
-          onMessage: makeProcessEvent(tabId),
-          onError: (error) => console.error("[hyo] CLI error:", error),
-          onClose: (code) => {
-            const wasGenerating = stateRef.current.tabs.find(
-              (t) => t.id === tabId
-            )?.generating;
+        };
+
+        const engineName = options.engine === "codex" ? "Codex" : "Claude";
+        const onClose = (code: number | null) => {
+          const wasGenerating = stateRef.current.tabs.find(
+            (t) => t.id === tabId
+          )?.generating;
+          setState((prev) => ({
+            ...prev,
+            tabs: prev.tabs.map((tab) =>
+              tab.id === tabId ? { ...tab, generating: false } : tab
+            ),
+          }));
+          updateTabLastAssistant(tabId, () => ({ streaming: false }));
+          // If the process exited with an error mid-turn, say so in the chat —
+          // otherwise the reply just stops and looks like the agent ignored you.
+          if (code !== 0 && code !== null && wasGenerating) {
+            const errorMsg: Message = {
+              role: "assistant",
+              content: `_${engineName} process exited unexpectedly (code ${code}). Start a new conversation to continue._`,
+              thinking: "",
+              toolCalls: [],
+              orderedBlocks: [],
+              streaming: false,
+            };
             setState((prev) => ({
               ...prev,
               tabs: prev.tabs.map((tab) =>
-                tab.id === tabId ? { ...tab, generating: false } : tab
+                tab.id === tabId
+                  ? { ...tab, messages: [...tab.messages, errorMsg] }
+                  : tab
               ),
             }));
-            updateTabLastAssistant(tabId, () => ({ streaming: false }));
-            // If process exited with error while generating, show error message
-            if (code !== 0 && code !== null && wasGenerating) {
-              const errorMsg: Message = {
-                role: "assistant",
-                content: `_Claude process exited unexpectedly (code ${code}). Start a new conversation to continue._`,
-                thinking: "",
-                toolCalls: [],
-                orderedBlocks: [],
-                streaming: false,
-              };
-              setState((prev) => ({
-                ...prev,
-                tabs: prev.tabs.map((tab) =>
-                  tab.id === tabId
-                    ? { ...tab, messages: [...tab.messages, errorMsg] }
-                    : tab
-                ),
-              }));
-            }
-            delete transportsRef.current[tabId];
-          },
-        });
-        transport.spawn();
+          }
+          delete transportsRef.current[tabId];
+        };
+
+        const transport: AgentTransport =
+          options.engine === "codex"
+            ? new CodexTransport({
+                ...shared,
+                cliPath: options.codexCliPath || options.cliPath,
+                onEvent: makeProcessAgentEvent(tabId),
+                onError: (error) => console.error("[hyo] Codex error:", error),
+                onClose,
+              })
+            : new ClaudeTransport({
+                ...shared,
+                cliPath: options.cliPath,
+                onMessage: makeProcessEvent(tabId),
+                onError: (error) => console.error("[hyo] CLI error:", error),
+                onClose,
+              });
+
+        transport.start();
         transportsRef.current[tabId] = transport;
       }
 
@@ -998,7 +1170,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       const toolName = lastMsg?.permissionRequests?.find(
         (r) => r.requestId === requestId
       )?.toolName;
-      transportsRef.current[tabId]?.sendPermissionResponse(requestId, behavior, toolName);
+      transportsRef.current[tabId]?.respondToPermission(requestId, behavior, toolName);
       updateTabLastAssistant(tabId, (msg) => {
         const updates: Partial<Message> = {};
         if (msg.permissionRequests?.some((r) => r.requestId === requestId)) {
@@ -1041,7 +1213,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       // Send control_response with questions + answers as updatedInput.
       // The CLI was blocked on the control_request — this unblocks it.
       // Claude receives the answers and continues within the same turn.
-      transportsRef.current[tabId]?.sendPermissionResponse(
+      transportsRef.current[tabId]?.respondToPermission(
         questionId,
         "allow",
         undefined,
@@ -1057,7 +1229,7 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   const stopGeneration = useCallback(() => {
     const tabId = stateRef.current.activeTabId;
-    transportsRef.current[tabId]?.sendInterrupt();
+    transportsRef.current[tabId]?.interrupt();
     setState((prev) => ({
       ...prev,
       tabs: prev.tabs.map((tab) =>

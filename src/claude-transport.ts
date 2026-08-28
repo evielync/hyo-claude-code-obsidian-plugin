@@ -7,6 +7,7 @@ const spawn: typeof import("child_process").spawn = Platform.isMobile ? (undefin
 const randomUUID: typeof import("crypto").randomUUID = Platform.isMobile ? (undefined as any) : require("crypto").randomUUID;
 import { isNative1M, baseModelId } from "./models";
 import { supportsEffortFlag, probeCliCapabilities } from "./cli-capabilities";
+import type { AgentTransport, PermissionBehavior } from "./agent-transport";
 
 // Current models run 1M context natively and don't accept a "[1m]" suffix —
 // the API doesn't recognize it as a valid variant and silently falls back to
@@ -47,7 +48,7 @@ export interface TransportOptions {
   onClose: (code: number | null) => void;
 }
 
-export class ClaudeTransport {
+export class ClaudeTransport implements AgentTransport {
   private proc: ChildProcess | null = null;
   private buffer = "";
   private stopped = false;
@@ -340,6 +341,28 @@ export class ClaudeTransport {
 
   isRunning(): boolean {
     return this.proc !== null && !this.stopped && !this.proc.killed;
+  }
+
+  // ---------------------------------------------------------- AgentTransport
+  // Engine-neutral names, so the chat engine drives Claude and Codex through
+  // the same calls. The original names stay as the implementation because the
+  // session manager, voice mode and mobile gateway all call them directly.
+
+  start(): void {
+    this.spawn();
+  }
+
+  respondToPermission(
+    requestId: string,
+    behavior: PermissionBehavior,
+    toolName?: string,
+    updatedInput?: Record<string, unknown>,
+  ): void {
+    this.sendPermissionResponse(requestId, behavior, toolName, updatedInput);
+  }
+
+  interrupt(): void {
+    this.sendInterrupt();
   }
 }
 

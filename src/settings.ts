@@ -5,6 +5,7 @@ const path: typeof import("path") = Platform.isMobile ? (undefined as any) : req
 const os: typeof import("os") = Platform.isMobile ? (undefined as any) : require("os");
 import type HyoPlugin from "./main";
 import { MODEL_OPTIONS, EFFORT_OPTIONS, DEFAULT_EFFORT } from "./models";
+import { ENGINE_LABELS, type EngineId } from "./agent-transport";
 import type { Skill } from "./hooks/useSkills";
 
 // A single command: which skill it fires, what its header-menu label reads,
@@ -16,7 +17,15 @@ export interface HyoCommand {
 }
 
 export interface HyoSettings {
+  /**
+   * Which agent engine this vault runs on. One at a time, per vault — switching
+   * engines is switching platforms, so conversations, history and models come
+   * from whichever engine is selected rather than being merged across both.
+   */
+  engine: EngineId;
   cliPath: string;
+  /** Path to the Codex CLI, used when `engine` is "codex". */
+  codexCliPath: string;
   model: string;
   effortLevel: string;
   customModels: string[];
@@ -66,7 +75,9 @@ export interface TaskMeta {
 }
 
 export const DEFAULT_SETTINGS: HyoSettings = {
+  engine: "claude",
   cliPath: "/usr/local/bin/claude",
+  codexCliPath: "",
   // Must be a model the picker actually offers — otherwise a fresh install
   // shows a raw model ID in the status bar with nothing ticked in the picker.
   model: "claude-sonnet-5",
@@ -218,6 +229,86 @@ export class HyoSettingTab extends PluginSettingTab {
 
   // ---- General: everyday defaults for new conversations ---------------------
   private renderGeneral(containerEl: HTMLElement): void {
+    // Engine. Desktop-only: the phone talks to whichever engine the gateway on
+    // the Mac is already running, so offering a choice there would be a switch
+    // that does nothing.
+    if (!Platform.isMobile) {
+      new Setting(containerEl)
+        .setName("Agent engine")
+        .setDesc(
+          "Which agent Hyo runs in this vault. Each engine keeps its own conversations and history, so switching is like switching apps — you'll see that engine's chats, not the other one's.",
+        )
+        .addDropdown((dropdown) => {
+          for (const id of Object.keys(ENGINE_LABELS) as EngineId[]) {
+            dropdown.addOption(id, ENGINE_LABELS[id]);
+          }
+          dropdown
+            .setValue(this.plugin.settings.engine)
+            .onChange(async (value) => {
+              this.plugin.settings.engine = value as EngineId;
+              await this.plugin.saveSettings();
+              dispatchSettingsChanged();
+              this.showSaved();
+              // Re-render so the Codex path field appears or disappears with
+              // the choice rather than only after reopening settings.
+              this.display();
+            });
+        });
+
+      if (this.plugin.settings.engine === "codex") {
+        const codexSetting = new Setting(containerEl)
+          .setName("Codex CLI path")
+          .setDesc("Full path to the codex binary. Hyo runs it as an app server.");
+
+        const codexStatus = codexSetting.descEl.createEl("div", {
+          attr: { style: "margin-top: 4px; font-size: 0.85em;" },
+        });
+        const updateCodexStatus = (p: string) => {
+          if (!p) {
+            codexStatus.setText("No path set");
+            codexStatus.style.color = "var(--text-muted)";
+            return;
+          }
+          const found = fs.existsSync(p);
+          codexStatus.setText(found ? "✓ Found" : "✗ Not found at this path");
+          codexStatus.style.color = found ? "var(--color-green)" : "var(--color-red)";
+        };
+        updateCodexStatus(this.plugin.settings.codexCliPath);
+
+        codexSetting.addText((text) =>
+          text
+            .setPlaceholder("/usr/local/bin/codex")
+            .setValue(this.plugin.settings.codexCliPath)
+            .onChange(async (value) => {
+              this.plugin.settings.codexCliPath = value;
+              await this.plugin.saveSettings();
+              updateCodexStatus(value);
+              this.showSavedNear(codexSetting.nameEl as HTMLElement);
+            }),
+        );
+
+        codexSetting.addButton((button) =>
+          button.setButtonText("Auto-detect").onClick(async () => {
+            const candidates = [
+              "/usr/local/bin/codex",
+              "/opt/homebrew/bin/codex",
+              `${os.homedir()}/.npm-global/bin/codex`,
+              `${os.homedir()}/.bun/bin/codex`,
+            ];
+            const found = candidates.find((c) => fs.existsSync(c));
+            if (found) {
+              this.plugin.settings.codexCliPath = found;
+              await this.plugin.saveSettings();
+              new Notice(`Found Codex at ${found}`);
+              this.display();
+            } else {
+              new Notice("Could not find the Codex CLI. Set the path manually.");
+            }
+          }),
+        );
+      }
+    }
+
     // Model
     new Setting(containerEl)
       .setName("Model")
