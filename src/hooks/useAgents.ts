@@ -33,6 +33,34 @@ function parseFrontmatter(text: string): { name: string; description: string } {
   };
 }
 
+/**
+ * The system prompt an agent file defines, with its frontmatter removed.
+ *
+ * Claude Code loads these itself from `--agent <name>`. Codex has no agent
+ * concept, so its transport reads the same file and passes the body as the
+ * thread's developer instructions — which means one agent definition works on
+ * both engines rather than being a Claude-only feature.
+ */
+export function loadAgentPrompt(agentName: string): string | null {
+  if (!agentName) return null;
+  try {
+    const dir = path.join(os.homedir(), ".claude", "agents");
+    const candidates = [
+      path.join(dir, `${agentName}.md`),
+      path.join(dir, `${agentName.toLowerCase()}.md`),
+    ];
+    for (const file of candidates) {
+      if (!fs.existsSync(file)) continue;
+      const content = fs.readFileSync(file, "utf8");
+      const body = content.replace(/^---\n[\s\S]*?\n---\n?/, "").trim();
+      return body || null;
+    }
+  } catch {
+    // No agent file — the engine runs without one.
+  }
+  return null;
+}
+
 export function useAgents(): Agent[] {
   const [agents, setAgents] = useState<Agent[]>([]);
 
@@ -65,7 +93,7 @@ export function useAgents(): Agent[] {
       // Always prepend the generic "no agent" default
       loaded.unshift({
         name: "",
-        description: "Standard Claude without a specific agent",
+        description: "No agent — just the model on its own",
         color: "var(--text-muted)",
       });
 
