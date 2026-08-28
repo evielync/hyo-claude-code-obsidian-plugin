@@ -1242,6 +1242,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
 
       <HyoStatusBar
           engine={plugin.settings.engine}
+          engineRateLimits={sessionManager.engineRateLimits}
           engineCliPath={
             plugin.settings.engine === "codex"
               ? plugin.settings.codexCliPath

@@ -13,6 +13,7 @@ import type {
   PlanReviewData,
 } from "./useChatEngine";
 import { HIDDEN_TOOLS } from "./useChatEngine";
+import { listCodexSessions, loadCodexSessionHistory } from "../codex-sessions";
 import { listPastSessions, loadSessionHistory, saveCustomTitle, setTaskMeta as persistTaskMeta, type PastSession, getProjectDir } from "../session-parser";
 import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
 import { generateConversationTitle } from "../title-generator";
@@ -64,6 +65,13 @@ export interface TabSession {
   hasUnseenReply?: boolean;
 }
 
+export interface EngineRateLimits {
+  primaryUsedPercent?: number;
+  secondaryUsedPercent?: number;
+  resetsAt?: number;
+  planType?: string;
+}
+
 interface SessionState {
   tabs: TabSession[];
   activeTabId: string;
@@ -82,6 +90,16 @@ interface SessionManagerOptions {
   defaultAgent: string;
   maxOutputTokens?: number;
   settingsVersion?: number;
+  /**
+   * Called when the engine changes: hand back the tabs the old engine had open
+   * and receive whatever was stored for the new one. Persistence lives with the
+   * plugin settings rather than in here.
+   */
+  onSwitchEngine?: (
+    from: EngineId,
+    openTabs: { cliSessionId: string; title: string }[],
+    to: EngineId,
+  ) => { cliSessionId: string; title: string }[];
   autoGenerateTitles?: boolean;
 }
 
@@ -240,6 +258,9 @@ export function useSessionManager(options: SessionManagerOptions) {
   const [pastSessions, setPastSessions] = useState<PastSession[]>([]);
 
   const transportsRef = useRef<Record<string, AgentTransport>>({});
+  // Plan consumption as the engine itself reports it. Only Codex sends this;
+  // Claude's numbers come from Anthropic's usage API instead.
+  const [engineRateLimits, setEngineRateLimits] = useState<EngineRateLimits | null>(null);
   const streamStatesRef = useRef<Record<string, StreamState>>({});
   const scrollRef = useRef({ nearBottom: true });
   const stateRef = useRef(state);
@@ -253,6 +274,80 @@ export function useSessionManager(options: SessionManagerOptions) {
       }
     };
   }, []);
+
+  /**
+   * Changing engine is changing platform, not swapping a setting underneath the
+   * same conversations. A Claude thread cannot be continued by Codex, so open
+   * tabs belong to the engine that made them: they are put away, the panel
+   * comes back blank, and switching back restores where you were — the way
+   * closing one app and reopening another does.
+   */
+  const previousEngineRef = useRef<EngineId | null>(null);
+  useEffect(() => {
+    const engine = options.engine || "claude";
+    const previous = previousEngineRef.current;
+    previousEngineRef.current = engine;
+    if (previous === null || previous === engine) return;
+
+    // Stop everything the old engine had running — its processes mean nothing
+    // to the new one.
+    for (const id of Object.keys(transportsRef.current)) {
+      transportsRef.current[id]?.stop();
+      delete transportsRef.current[id];
+    }
+    streamStatesRef.current = {};
+
+    const restored =
+      options.onSwitchEngine?.(
+        previous,
+        stateRef.current.tabs
+          .filter((t) => t.cliSessionId)
+          .map((t) => ({ cliSessionId: t.cliSessionId as string, title: t.title })),
+        engine,
+      ) ?? [];
+
+    const blank = {
+      generating: false,
+      model: resolveModelForEngine(engine, options.model),
+      effort: resolveEffortForEngine(engine, options.effort),
+      permissionMode: options.permissionMode,
+      agent: options.defaultAgent,
+      inputTokens: 0,
+      voiceMode: false,
+    };
+
+    const tabs: TabSession[] = restored.length
+      ? restored.map((r) => ({
+          id: genId(),
+          cliSessionId: r.cliSessionId,
+          title: r.title,
+          // Restored tabs load their transcript when opened, the same as
+          // picking the conversation out of history.
+          messages: [],
+          ...blank,
+        }))
+      : [
+          {
+            id: genId(),
+            cliSessionId: null,
+            title: "New conversation",
+            messages: [],
+            ...blank,
+          },
+        ];
+
+    for (const tab of tabs) {
+      streamStatesRef.current[tab.id] = {
+        toolCalls: [],
+        orderedBlocks: [],
+        turnIndex: 0,
+        toolResultSinceLastText: false,
+        skillResultPending: false,
+      };
+    }
+    setState({ tabs, activeTabId: tabs[0].id });
+    debug("[hyo] engine switched", previous, "->", engine, `(${tabs.length} tabs)`);
+  }, [options.engine]);
 
   // ------- internal helpers -------
 
@@ -438,9 +533,17 @@ export function useSessionManager(options: SessionManagerOptions) {
             updateTabLastAssistant(tabId, () => ({ streaming: false }));
             return;
 
+          case "rate-limits":
+            setEngineRateLimits({
+              primaryUsedPercent: event.primaryUsedPercent,
+              secondaryUsedPercent: event.secondaryUsedPercent,
+              resetsAt: event.resetsAt,
+              planType: event.planType,
+            });
+            return;
+
           case "tool-end":
           case "status":
-          case "rate-limits":
             return;
         }
       };
@@ -1332,7 +1435,13 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   const refreshPastSessions = useCallback(() => {
     try {
-      const sessions = listPastSessions(options.cwd);
+      // Each engine serves its own history. Switching engine is switching
+      // platforms, so Claude's conversations never appear under Codex or the
+      // other way round.
+      const sessions =
+        options.engine === "codex"
+          ? listCodexSessions(options.cwd)
+          : listPastSessions(options.cwd);
       setPastSessions(sessions);
     } catch (e) {
       console.error("[hyo] Failed to list past sessions:", e);
@@ -1353,7 +1462,10 @@ export function useSessionManager(options: SessionManagerOptions) {
     }
 
     // Load conversation history from JSONL
-    const history = loadSessionHistory(options.cwd, pastSession.id);
+    const history =
+      options.engine === "codex"
+        ? loadCodexSessionHistory(pastSession.id)
+        : loadSessionHistory(options.cwd, pastSession.id);
     const messages: Message[] = history.map((m) => ({
       role: m.role,
       content: m.content,
@@ -1514,6 +1626,7 @@ export function useSessionManager(options: SessionManagerOptions) {
   const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
 
   return {
+    engineRateLimits,
     tabs: state.tabs,
     activeTabId: state.activeTabId,
     activeMessages: activeTab?.messages || [],

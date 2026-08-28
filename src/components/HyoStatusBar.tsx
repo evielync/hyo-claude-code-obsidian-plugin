@@ -16,6 +16,13 @@ interface HyoStatusBarProps {
   engine?: EngineId;
   /** Path to the engine's CLI, used to ask it what models it can run. */
   engineCliPath?: string;
+  /** Plan consumption as the engine reports it. Codex only. */
+  engineRateLimits?: {
+    primaryUsedPercent?: number;
+    secondaryUsedPercent?: number;
+    resetsAt?: number;
+    planType?: string;
+  } | null;
   model: string;
   effort: string;
   permissionMode: string;
@@ -82,6 +89,7 @@ function formatTokens(n: number): string {
 export function HyoStatusBar({
   engine,
   engineCliPath,
+  engineRateLimits,
   model,
   effort,
   permissionMode,
@@ -241,17 +249,31 @@ export function HyoStatusBar({
     (fablePct ?? 0) > 80 ? "danger" : (fablePct ?? 0) > 50 ? "warning" : "";
   const fableResetsAt = scopedLimit(usage, "Fable")?.resets_at;
 
+  // Claude's figures come from Anthropic's usage API; Codex reports its own
+  // over the transport. Showing one engine's plan usage while the other is
+  // answering would be worse than showing nothing.
+  const onCodex = engine === "codex";
+  const shownSessionPct = onCodex ? engineRateLimits?.primaryUsedPercent ?? 0 : sessionPct;
+  const shownWeeklyPct = onCodex ? engineRateLimits?.secondaryUsedPercent ?? 0 : weeklyPct;
+  const showPace = !onCodex;
+
   const sessionBarClass =
-    sessionPct > 80 ? "danger" : sessionPct > 50 ? "warning" : "";
+    shownSessionPct > 80 ? "danger" : shownSessionPct > 50 ? "warning" : "";
   const weeklyBarClass =
-    weeklyPct > 80 ? "danger" : weeklyPct > 50 ? "warning" : "";
+    shownWeeklyPct > 80 ? "danger" : shownWeeklyPct > 50 ? "warning" : "";
 
   return (
     <div className="hyo-status-bar" ref={statusBarRef}>
       <div
         ref={usageRef}
-        className={`hyo-usage-bars-group${stale ? " stale" : ""}`}
-        title={stale ? "Usage data may be outdated — click to refresh" : "Usage"}
+        className={`hyo-usage-bars-group${!onCodex && stale ? " stale" : ""}`}
+        title={
+          onCodex
+            ? `Codex plan usage${engineRateLimits?.planType ? ` (${engineRateLimits.planType})` : ""}`
+            : stale
+              ? "Usage data may be outdated — click to refresh"
+              : "Usage"
+        }
         onClick={() => openPopup("usage")}
       >
         <span className="hyo-usage-bar-label">5HR</span>
@@ -259,10 +281,10 @@ export function HyoStatusBar({
           <span className="hyo-usage-bar-track">
             <span
               className={`hyo-usage-bar-fill ${sessionBarClass}`}
-              style={{ width: sessionPct + "%" }}
+              style={{ width: shownSessionPct + "%" }}
             />
           </span>
-          {sessionPacePct !== null && (
+          {showPace && sessionPacePct !== null && (
             <span
               className="hyo-usage-bar-pace"
               style={{ left: sessionPacePct + "%" }}
@@ -274,10 +296,10 @@ export function HyoStatusBar({
           <span className="hyo-usage-bar-track">
             <span
               className={`hyo-usage-bar-fill ${weeklyBarClass}`}
-              style={{ width: weeklyPct + "%" }}
+              style={{ width: shownWeeklyPct + "%" }}
             />
           </span>
-          {weeklyPacePct !== null && (
+          {showPace && weeklyPacePct !== null && (
             <span
               className="hyo-usage-bar-pace"
               style={{ left: weeklyPacePct + "%" }}
@@ -385,10 +407,10 @@ export function HyoStatusBar({
             <div className="hyo-usage-bar-inline">
               <div
                 className={`hyo-usage-bar-inline-fill ${sessionBarClass}`}
-                style={{ width: sessionPct + "%" }}
+                style={{ width: shownSessionPct + "%" }}
               />
             </div>
-            {sessionPacePct !== null && (
+            {showPace && sessionPacePct !== null && (
               <span
                 className="hyo-usage-bar-pace"
                 style={{ left: sessionPacePct + "%" }}
@@ -414,10 +436,10 @@ export function HyoStatusBar({
             <div className="hyo-usage-bar-inline">
               <div
                 className={`hyo-usage-bar-inline-fill ${weeklyBarClass}`}
-                style={{ width: weeklyPct + "%" }}
+                style={{ width: shownWeeklyPct + "%" }}
               />
             </div>
-            {weeklyPacePct !== null && (
+            {showPace && weeklyPacePct !== null && (
               <span
                 className="hyo-usage-bar-pace"
                 style={{ left: weeklyPacePct + "%" }}

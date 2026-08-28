@@ -65,6 +65,9 @@ export interface HyoSettings {
   // Set once the one-time import of the standalone plugin's data.json has
   // run (successfully or not), so it's never re-attempted on every load.
   commandsMigrated: boolean;
+  // Open conversations per engine, so switching away and back returns you to
+  // where you were instead of a blank panel.
+  openTabsByEngine: Record<string, { cliSessionId: string; title: string }[]>;
 }
 
 // Persisted per-task metadata. Keyed by cliSessionId in settings.tasks.
@@ -103,6 +106,7 @@ export const DEFAULT_SETTINGS: HyoSettings = {
   tasks: {},
   commands: {},
   commandsMigrated: false,
+  openTabsByEngine: {},
 };
 
 export function dispatchSettingsChanged(): void {

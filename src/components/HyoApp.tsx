@@ -72,6 +72,14 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
     maxOutputTokens: plugin.settings.maxOutputTokens,
     autoGenerateTitles: plugin.settings.autoGenerateTitles,
     settingsVersion,
+    onSwitchEngine: (from, openTabs, to) => {
+      const store = { ...(plugin.settings.openTabsByEngine || {}) };
+      store[from] = openTabs;
+      const restored = store[to] || [];
+      plugin.settings.openTabsByEngine = store;
+      void plugin.saveSettings();
+      return restored;
+    },
   });
 
   if (cliFound === null) {
