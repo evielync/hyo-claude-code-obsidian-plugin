@@ -97,6 +97,21 @@ export const MODEL_OPTIONS: ModelOption[] = [
   model("claude-haiku-4-5-20251001", "Haiku 4.5"),
 ];
 
+// Codex's models, read from the app server's own `model/list` rather than
+// written from memory. No context figure is shown for them: the app server
+// reports the real window per conversation on `thread/tokenUsage/updated` and
+// the gauge uses that, so a second number here would only be something that
+// could disagree with it.
+export const CODEX_MODEL_OPTIONS: ModelOption[] = [
+  { id: "gpt-5.5", name: "GPT-5.5", context: "" },
+  { id: "gpt-5.4", name: "GPT-5.4", context: "" },
+  { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", context: "" },
+  { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", context: "" },
+  { id: "gpt-5.2", name: "GPT-5.2", context: "" },
+];
+
+export const DEFAULT_CODEX_MODEL = "gpt-5.5";
+
 // Reasoning effort — how hard the model works before answering. Paired with
 // the model in the picker, the way Claude's own model menu does it.
 //
@@ -119,3 +134,38 @@ export const EFFORT_OPTIONS: EffortOption[] = [
   { id: "high", name: "High", desc: "More thorough — intelligence-sensitive work" },
   { id: "max", name: "Max", desc: "Most thorough, slowest, burns limits fastest" },
 ];
+
+// Codex's own effort ladder. It tops out at "xhigh" and has no "max" — sending
+// Claude's top value to Codex fails the turn, so the two lists are kept
+// separate rather than one being filtered from the other.
+export const CODEX_EFFORT_OPTIONS: EffortOption[] = [
+  { id: "low", name: "Low", desc: "Fastest — for short, simple tasks" },
+  { id: "medium", name: "Medium", desc: "Balanced for everyday work" },
+  { id: "high", name: "High", desc: "More thorough — intelligence-sensitive work" },
+  { id: "xhigh", name: "Extra high", desc: "Most thorough, slowest, burns limits fastest" },
+];
+
+/** The model list for an engine. */
+export function modelsForEngine(engine: string): ModelOption[] {
+  return engine === "codex" ? CODEX_MODEL_OPTIONS : MODEL_OPTIONS;
+}
+
+/** The effort list for an engine. */
+export function effortsForEngine(engine: string): EffortOption[] {
+  return engine === "codex" ? CODEX_EFFORT_OPTIONS : EFFORT_OPTIONS;
+}
+
+/**
+ * A model/effort saved under one engine is meaningless to the other, so fall
+ * back to that engine's default rather than passing a value it will reject.
+ */
+export function resolveModelForEngine(engine: string, model: string): string {
+  const list = modelsForEngine(engine);
+  if (list.some((m) => m.id === model)) return model;
+  return engine === "codex" ? DEFAULT_CODEX_MODEL : model;
+}
+
+export function resolveEffortForEngine(engine: string, effort: string): string {
+  const list = effortsForEngine(engine);
+  return list.some((e) => e.id === effort) ? effort : DEFAULT_EFFORT;
+}

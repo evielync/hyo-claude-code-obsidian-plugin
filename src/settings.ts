@@ -4,7 +4,8 @@ const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require
 const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
 const os: typeof import("os") = Platform.isMobile ? (undefined as any) : require("os");
 import type HyoPlugin from "./main";
-import { MODEL_OPTIONS, EFFORT_OPTIONS, DEFAULT_EFFORT } from "./models";
+import { MODEL_OPTIONS, EFFORT_OPTIONS, DEFAULT_EFFORT, modelsForEngine, effortsForEngine } from "./models";
+import { detectCli } from "./cli-detect";
 import { ENGINE_LABELS, type EngineId } from "./agent-transport";
 import type { Skill } from "./hooks/useSkills";
 
@@ -289,13 +290,7 @@ export class HyoSettingTab extends PluginSettingTab {
 
         codexSetting.addButton((button) =>
           button.setButtonText("Auto-detect").onClick(async () => {
-            const candidates = [
-              "/usr/local/bin/codex",
-              "/opt/homebrew/bin/codex",
-              `${os.homedir()}/.npm-global/bin/codex`,
-              `${os.homedir()}/.bun/bin/codex`,
-            ];
-            const found = candidates.find((c) => fs.existsSync(c));
+            const found = detectCli("codex");
             if (found) {
               this.plugin.settings.codexCliPath = found;
               await this.plugin.saveSettings();
@@ -317,8 +312,9 @@ export class HyoSettingTab extends PluginSettingTab {
         // Built-in models, then any the user added via the picker's custom
         // field. Both come from the shared MODEL_OPTIONS / settings so the
         // dropdown never drifts from the picker.
-        for (const m of MODEL_OPTIONS) {
-          dropdown.addOption(m.id, `${m.name} (${m.context})`);
+        const engineModels = modelsForEngine(this.plugin.settings.engine);
+        for (const m of engineModels) {
+          dropdown.addOption(m.id, m.context ? `${m.name} (${m.context})` : m.name);
         }
         for (const id of this.plugin.settings.customModels) {
           dropdown.addOption(id, id);
@@ -327,7 +323,7 @@ export class HyoSettingTab extends PluginSettingTab {
         // from a previous version), surface it so the dropdown reflects reality
         // instead of silently showing the first option.
         const known =
-          MODEL_OPTIONS.some((m) => m.id === this.plugin.settings.model) ||
+          engineModels.some((m) => m.id === this.plugin.settings.model) ||
           this.plugin.settings.customModels.includes(this.plugin.settings.model);
         if (!known && this.plugin.settings.model) {
           dropdown.addOption(this.plugin.settings.model, this.plugin.settings.model);
@@ -348,7 +344,7 @@ export class HyoSettingTab extends PluginSettingTab {
         "Default reasoning effort for new conversations. Higher effort means more thorough responses, but they take longer and use your limits faster."
       )
       .addDropdown((dropdown) => {
-        for (const e of EFFORT_OPTIONS) {
+        for (const e of effortsForEngine(this.plugin.settings.engine)) {
           dropdown.addOption(e.id, e.name);
         }
         dropdown

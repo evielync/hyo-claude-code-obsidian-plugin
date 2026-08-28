@@ -1237,6 +1237,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
       </div>
 
       <HyoStatusBar
+          engine={plugin.settings.engine}
         model={activeModel}
         effort={activeEffort}
         permissionMode={activePermissionMode}

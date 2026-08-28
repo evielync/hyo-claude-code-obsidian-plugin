@@ -1,14 +1,17 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
+import type { EngineId } from "../agent-transport";
 import { useUsage, scopedLimit } from "../hooks/useUsage";
 import { useAgents } from "../hooks/useAgents";
 import {
-  MODEL_OPTIONS,
-  EFFORT_OPTIONS,
+  modelsForEngine,
+  effortsForEngine,
   DEFAULT_EFFORT,
   getContextLimit,
 } from "../models";
 
 interface HyoStatusBarProps {
+  /** Which engine this vault runs, so the picker offers that engine's models. */
+  engine?: EngineId;
   model: string;
   effort: string;
   permissionMode: string;
@@ -73,6 +76,7 @@ function formatTokens(n: number): string {
 }
 
 export function HyoStatusBar({
+  engine,
   model,
   effort,
   permissionMode,
@@ -176,13 +180,16 @@ export function HyoStatusBar({
     [onPermissionModeChange]
   );
 
+  const engineModels = modelsForEngine(engine || "claude");
+  const engineEfforts = effortsForEngine(engine || "claude");
+
   // Built-in models plus any the user added via the custom field. Custom
   // entries show their raw ID (no friendly name / context label) and are
   // filtered so a custom ID that matches a built-in never double-lists.
   const customOpts = customModels
-    .filter((id) => !MODEL_OPTIONS.some((m) => m.id === id))
+    .filter((id) => !engineModels.some((m) => m.id === id))
     .map((id) => ({ id, name: id, context: "" }));
-  const allModelOpts = [...MODEL_OPTIONS, ...customOpts];
+  const allModelOpts = [...engineModels, ...customOpts];
 
   const modelOpt = allModelOpts.find((m) => m.id === model);
   const modelName = modelOpt
@@ -196,8 +203,8 @@ export function HyoStatusBar({
   // the CLI silently ignores anything outside EFFORT_OPTIONS, so showing a
   // stray value would claim a level that isn't actually in effect.
   const effortOpt =
-    EFFORT_OPTIONS.find((e) => e.id === effort) ||
-    EFFORT_OPTIONS.find((e) => e.id === DEFAULT_EFFORT)!;
+    engineEfforts.find((e) => e.id === effort) ||
+    engineEfforts.find((e) => e.id === DEFAULT_EFFORT)!;
 
   // The CLI sometimes under-reports contextWindow early in a fresh session
   // (--session-id) versus a resumed one (--resume) — same model, same
@@ -494,7 +501,7 @@ export function HyoStatusBar({
             Higher effort means more thorough responses, but takes longer and
             uses your limits faster.
           </div>
-          {EFFORT_OPTIONS.map((opt) => (
+          {engineEfforts.map((opt) => (
             <div
               key={opt.id}
               className={`hyo-model-popup-item ${opt.id === effortOpt.id ? "active" : ""}`}

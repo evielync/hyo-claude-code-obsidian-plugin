@@ -1,4 +1,5 @@
 import { debug } from "./debug";
+import { resolveModelForEngine, resolveEffortForEngine } from "./models";
 import type { ChildProcess } from "child_process";
 import { Platform } from "obsidian";
 import type {
@@ -198,7 +199,9 @@ export class CodexTransport implements AgentTransport {
     void this.request("turn/start", {
       threadId: this.threadId,
       input: [{ type: "text", text, text_elements: [] }],
-      ...(this.options.effort ? { effort: this.options.effort } : {}),
+      ...(this.resolveEffort(this.options.effort)
+        ? { effort: this.resolveEffort(this.options.effort) }
+        : {}),
     }).catch((e) => {
       this.options.onError(`Codex turn failed: ${e?.message ?? e}`);
     });
@@ -481,15 +484,16 @@ export class CodexTransport implements AgentTransport {
   }
 
   /**
-   * Hyo stores Anthropic model ids on tabs created under the Claude engine. If
-   * one of those is still on the tab when the vault switches to Codex, sending
-   * it through would fail the turn, so anything that isn't a Codex model falls
-   * back to the engine default.
+   * A tab created under Claude carries an Anthropic model id and possibly the
+   * "max" effort, neither of which Codex accepts. Both are resolved to this
+   * engine's own values rather than passed through to fail the turn.
    */
-  private resolveModel(model: string): string | undefined {
-    if (!model) return undefined;
-    if (/^(claude|opus|sonnet|haiku)/i.test(model)) return undefined;
-    return model;
+  private resolveModel(model: string): string {
+    return resolveModelForEngine("codex", model);
+  }
+
+  private resolveEffort(effort?: string): string | undefined {
+    return effort ? resolveEffortForEngine("codex", effort) : undefined;
   }
 
   /** Codex's approval policies, from Hyo's permission-mode vocabulary. */

@@ -3,7 +3,7 @@ import type { App } from "obsidian";
 import type HyoPlugin from "../main";
 import { ChatPanel } from "./ChatPanel";
 import { useSessionManager } from "../hooks/useSessionManager";
-import { checkCliExists } from "../claude-transport";
+import { detectCli, cliExists, ENGINE_SETUP } from "../cli-detect";
 import { DEFAULT_EFFORT } from "../models";
 
 interface HyoAppProps {
@@ -31,9 +31,26 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
       ? plugin.settings.codexCliPath || ""
       : plugin.settings.cliPath;
 
+  // Find the engine's binary without making anyone go looking for it. Codex
+  // installs to npm's global bin, which isn't on the PATH an Obsidian window
+  // inherits from the Dock, so "it's installed" and "Hyo can see it" are two
+  // different things. Runs whenever the path is empty — switching engine is
+  // enough to trigger it.
   useEffect(() => {
-    setCliFound(checkCliExists(activeCliPath));
-  }, [activeCliPath, settingsVersion]);
+    if (activeCliPath) {
+      setCliFound(cliExists(activeCliPath));
+      return;
+    }
+    const detected = detectCli(engine);
+    if (detected) {
+      if (engine === "codex") plugin.settings.codexCliPath = detected;
+      else plugin.settings.cliPath = detected;
+      void plugin.saveSettings();
+      setCliFound(true);
+      return;
+    }
+    setCliFound(false);
+  }, [activeCliPath, engine, settingsVersion, plugin]);
 
   // Use custom working directory if set, otherwise use vault path
   const workingDirectory = plugin.settings.workingDirectory
@@ -70,9 +87,10 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
     const isMac = platform === "darwin";
     const isWindows = platform === "win32";
 
+    const setup = ENGINE_SETUP[engine];
     const installCommand = isWindows
-      ? "irm https://claude.ai/install.ps1 | iex"
-      : "curl -fsSL https://claude.ai/install.sh | bash";
+      ? setup.windowsInstallCommand
+      : setup.installCommand;
 
     const terminalName = isWindows ? "PowerShell" : "Terminal";
     const openInstructions = isMac
@@ -85,12 +103,13 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
       ? "Right-click in the PowerShell window to paste"
       : "Press Cmd+V to paste";
 
-    const claudeDesktopPrompt = `I need you to install Claude Code on my machine. Here's what to do:
+    const which = isWindows ? "where" : "which";
+    const assistantPrompt = `I need you to install ${setup.label} on my machine. Here's what to do:
 
-1. Check if it's already installed by running: ${isWindows ? "where claude" : "which claude"}
+1. Check if it's already installed by running: ${which} ${setup.binary}
 2. If not found, install it by running: ${installCommand}
-3. After install, verify it works by running: ${isWindows ? "where claude" : "which claude"}
-4. Then run: claude
+3. After install, verify it works by running: ${which} ${setup.binary}
+4. Then run: ${setup.loginCommand}
    My browser will open to log in — that's expected. Once I've logged in, tell me to come back to Obsidian and reopen the Hyo panel.
 
 Be friendly and walk me through each step. I might not be technical.`;
@@ -100,7 +119,7 @@ Be friendly and walk me through each step. I might not be technical.`;
         <div className="hyo-onboarding">
           <h3>Welcome to Hyo</h3>
           <p className="hyo-onboarding-intro">
-            Hyo needs Claude Code installed to work. This is a one-time setup
+            Hyo needs {setup.label} installed to work. This is a one-time setup
             that takes about 2 minutes.
           </p>
           <p className="hyo-onboarding-intro">
@@ -114,15 +133,16 @@ Be friendly and walk me through each step. I might not be technical.`;
           </p>
 
           <div className="hyo-onboarding-option-quick">
-            <strong>Quickest way: Let Claude do it</strong>
+            <strong>Quickest way: let an assistant do it</strong>
             <p className="hyo-step-instruction">
-              Open the Claude desktop app, switch to the Code tab, and paste
-              this prompt. Claude will handle the installation for you.
+              Paste this prompt into any assistant that can run commands on your
+              machine — the Claude desktop app's Code tab, or a terminal agent.
+              It will handle the installation for you.
             </p>
             <button
               className="hyo-copy-prompt-button"
               onClick={(e) => {
-                navigator.clipboard.writeText(claudeDesktopPrompt);
+                navigator.clipboard.writeText(assistantPrompt);
                 const btn = e.currentTarget;
                 btn.textContent = "Copied!";
                 setTimeout(() => {
@@ -133,7 +153,7 @@ Be friendly and walk me through each step. I might not be technical.`;
               Copy install prompt
             </button>
             <p className="hyo-step-note">
-              Once Claude Code is installed, close and reopen this panel.
+              Once {setup.label} is installed, close and reopen this panel.
             </p>
           </div>
 
@@ -152,7 +172,7 @@ Be friendly and walk me through each step. I might not be technical.`;
             </div>
 
             <div className="hyo-onboarding-step">
-              <strong>Step 2: Install Claude Code</strong>
+              <strong>Step 2: Install {setup.label}</strong>
               <p className="hyo-step-instruction">
                 Copy this command by clicking the code box:
               </p>
@@ -180,14 +200,14 @@ Be friendly and walk me through each step. I might not be technical.`;
             </div>
 
             <div className="hyo-onboarding-step">
-              <strong>Step 3: Start Claude Code</strong>
+              <strong>Step 3: Sign in to {setup.label}</strong>
               <p className="hyo-step-instruction">
-                When the installation finishes, type <code>claude</code> and
-                press Enter.
+                When the installation finishes, type{" "}
+                <code>{setup.loginCommand}</code> and press Enter.
               </p>
               <p className="hyo-step-note">
-                Your browser will open asking you to log in with your Anthropic
-                account (the same one you use for Claude.ai).
+                Your browser will open asking you to log in with your{" "}
+                {setup.accountName} account — the same one you already pay for.
               </p>
             </div>
 
@@ -207,23 +227,25 @@ Be friendly and walk me through each step. I might not be technical.`;
               </p>
               <p>
                 Close {terminalName} completely, then open it again. The{" "}
-                <code>claude</code> command will be available in the new window.
+                <code>{setup.binary}</code> command will be available in the new
+                window.
               </p>
               <p>
-                <strong>Claude installed in a different location?</strong>
+                <strong>{setup.label} installed somewhere unusual?</strong>
               </p>
               <p>
-                Go to Settings → Hyo Plugin and update the CLI path to where
-                Claude Code is installed on your machine.
+                Hyo checks the common install locations itself. If yours isn't
+                one of them, run <code>{isWindows ? "where" : "which"}{" "}
+                {setup.binary}</code> in {terminalName} and paste the result into
+                Settings → Hyo Plugin.
               </p>
               <p>
-                <strong>Need a Claude account?</strong>
+                <strong>Need an account?</strong>
               </p>
               <p>
-                Claude Code requires a Pro, Max, Team, or Enterprise account.
-                Sign up at{" "}
-                <a href="https://claude.ai" target="_blank" rel="noopener">
-                  claude.ai
+                {setup.planNote} Sign up at{" "}
+                <a href={setup.accountUrl} target="_blank" rel="noopener">
+                  {setup.accountUrl.replace("https://", "")}
                 </a>
                 .
               </p>
