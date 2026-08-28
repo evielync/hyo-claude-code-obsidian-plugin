@@ -50,6 +50,11 @@ export class CodexTransport implements AgentTransport {
    */
   private items = new Map<string, any>();
 
+  /**
+   * Messages sent before the thread finished starting. Flushed once it has.
+   */
+  private queuedMessages: string[] = [];
+
   /** Latest token usage the thread reported, attached to the next turn-complete. */
   private lastUsage: AgentUsage | undefined = undefined;
 
@@ -173,7 +178,7 @@ export class CodexTransport implements AgentTransport {
 
       this.threadId = started?.thread?.id ?? started?.threadId ?? null;
       if (!this.threadId) {
-        this.options.onError("Codex did not return a thread id");
+        this.failPendingTurn("Codex did not return a conversation id.");
         return;
       }
       this.emit({
@@ -182,20 +187,49 @@ export class CodexTransport implements AgentTransport {
         model: started?.model,
       });
       debug("[hyo] Codex thread ready:", this.threadId);
+      this.flushQueue();
     } catch (e: any) {
-      this.options.onError(`Codex handshake failed: ${e?.message ?? e}`);
-      this.options.onClose(1);
+      this.failPendingTurn(`Codex could not start: ${e?.message ?? e}`);
     }
   }
 
+  /**
+   * Something went wrong before any turn could run. Anything queued is dropped
+   * and the turn is closed out with a visible error — otherwise the chat shows
+   * "Thinking…" indefinitely for a conversation that will never produce one.
+   */
+  private failPendingTurn(message: string): void {
+    this.queuedMessages = [];
+    this.emit({ type: "error", message });
+    this.emit({ type: "turn-complete", error: message });
+    this.options.onError(message);
+  }
+
   sendUserMessage(content: string | unknown[]): void {
-    if (!this.threadId) {
-      this.options.onError("Codex thread is not ready yet");
-      return;
-    }
     const text =
       typeof content === "string" ? content : this.flattenContent(content);
 
+    // The caller sends the first message on the line after start(), but the
+    // handshake (initialize → thread/start) is a few async round trips and the
+    // app server takes a while to come up when MCP servers are configured. So
+    // the thread usually isn't ready yet. Hold the message and send it when it
+    // is — dropping it here is invisible to the user and leaves the chat
+    // sitting on "Thinking…" with no turn ever running.
+    if (!this.threadId) {
+      this.queuedMessages.push(text);
+      return;
+    }
+
+    this.startTurn(text);
+  }
+
+  private flushQueue(): void {
+    const queued = this.queuedMessages.splice(0);
+    for (const text of queued) this.startTurn(text);
+  }
+
+  private startTurn(text: string): void {
+    if (!this.threadId) return;
     void this.request("turn/start", {
       threadId: this.threadId,
       input: [{ type: "text", text, text_elements: [] }],

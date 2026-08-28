@@ -410,7 +410,32 @@ export function useSessionManager(options: SessionManagerOptions) {
             return;
 
           case "error":
+            // Into the conversation, not just the console. A failure the user
+            // cannot see reads as the agent ignoring them.
             console.error("[hyo] engine error:", event.message);
+            setState((prev) => ({
+              ...prev,
+              tabs: prev.tabs.map((tab) =>
+                tab.id === tabId
+                  ? {
+                      ...tab,
+                      generating: false,
+                      messages: [
+                        ...tab.messages,
+                        {
+                          role: "assistant",
+                          content: `_${event.message}_`,
+                          thinking: "",
+                          toolCalls: [],
+                          orderedBlocks: [],
+                          streaming: false,
+                        } as Message,
+                      ],
+                    }
+                  : tab,
+              ),
+            }));
+            updateTabLastAssistant(tabId, () => ({ streaming: false }));
             return;
 
           case "tool-end":
