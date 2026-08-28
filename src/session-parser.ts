@@ -151,7 +151,7 @@ export function saveCustomTitle(cwd: string, sessionId: string, title: string): 
   saveMetadata(cwd, metadata);
 }
 
-function getCustomTitle(cwd: string, sessionId: string): string | null {
+export function getCustomTitle(cwd: string, sessionId: string): string | null {
   const metadata = loadMetadata(cwd);
   return metadata[sessionId]?.customTitle || null;
 }

@@ -4,7 +4,11 @@ import type HyoPlugin from "../main";
 import { ChatPanel } from "./ChatPanel";
 import { useSessionManager } from "../hooks/useSessionManager";
 import { detectCli, cliExists, ENGINE_SETUP } from "../cli-detect";
-import { DEFAULT_EFFORT } from "../models";
+import {
+  DEFAULT_EFFORT,
+  resolveModelForEngine,
+  resolveEffortForEngine,
+} from "../models";
 
 interface HyoAppProps {
   app: App;
@@ -77,6 +81,14 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
       store[from] = openTabs;
       const restored = store[to] || [];
       plugin.settings.openTabsByEngine = store;
+      // The saved default belongs to the engine that set it. Left alone, the
+      // picker keeps showing the other engine's model while offering this
+      // engine's list.
+      plugin.settings.model = resolveModelForEngine(to, plugin.settings.model);
+      plugin.settings.effortLevel = resolveEffortForEngine(
+        to,
+        plugin.settings.effortLevel || DEFAULT_EFFORT,
+      );
       void plugin.saveSettings();
       return restored;
     },

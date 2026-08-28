@@ -1016,8 +1016,14 @@ export function useSessionManager(options: SessionManagerOptions) {
             title: "New conversation",
             messages: [],
             generating: false,
-            model: activeTab?.model || options.model,
-            effort: activeTab?.effort || options.effort,
+            model: resolveModelForEngine(
+              options.engine || "claude",
+              activeTab?.model || options.model,
+            ),
+            effort: resolveEffortForEngine(
+              options.engine || "claude",
+              activeTab?.effort || options.effort,
+            ),
             permissionMode: activeTab?.permissionMode || options.permissionMode,
             agent: options.defaultAgent,
             voiceMode: false,
@@ -1098,7 +1104,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         ),
       };
     });
-  }, [options.cwd]); // refreshPastSessions intentionally omitted — declared later, referenced via closure
+  }, [options.cwd, options.engine]); // refreshPastSessions intentionally omitted — declared later, referenced via closure
 
   // Rename a conversation that isn't open as a tab (from the task list). Writes
   // the custom title to the on-disk metadata and refreshes the list. If it does
@@ -1112,7 +1118,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       ),
     }));
     setTimeout(() => refreshPastSessions(), 0);
-  }, [options.cwd]);
+  }, [options.cwd, options.engine]);
 
   // Persist task state (pinned / closed) to the shared session metadata, then
   // refresh so the list reflects it. Keyed by cliSessionId — a brand-new tab
@@ -1446,7 +1452,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     } catch (e) {
       console.error("[hyo] Failed to list past sessions:", e);
     }
-  }, [options.cwd]);
+  }, [options.cwd, options.engine]);
 
   useEffect(() => {
     refreshPastSessions();
@@ -1487,8 +1493,14 @@ export function useSessionManager(options: SessionManagerOptions) {
             title: pastSession.title,
             messages,
             generating: false,
-            model: activeTab?.model || options.model,
-            effort: activeTab?.effort || options.effort,
+            model: resolveModelForEngine(
+              options.engine || "claude",
+              activeTab?.model || options.model,
+            ),
+            effort: resolveEffortForEngine(
+              options.engine || "claude",
+              activeTab?.effort || options.effort,
+            ),
             permissionMode: activeTab?.permissionMode || options.permissionMode,
             agent: options.defaultAgent,
             voiceMode: false,
@@ -1497,7 +1509,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         activeTabId: id,
       };
     });
-  }, [options.cwd, options.model, options.effort, options.permissionMode, options.defaultAgent]);
+  }, [options.cwd, options.engine, options.model, options.effort, options.permissionMode, options.defaultAgent]);
 
   // ---- Reopen the tabs from last time ---------------------------------------
   // Closing Obsidian used to take every open Hyo tab with it. Remember which

@@ -1,7 +1,7 @@
 import { debug } from "./debug";
 import { Platform } from "obsidian";
 import type { Message, ToolCallData, OrderedBlock } from "./hooks/useChatEngine";
-import type { PastSession } from "./session-parser";
+import { getCustomTitle, type PastSession } from "./session-parser";
 
 const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
 const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
@@ -208,7 +208,13 @@ export function listCodexSessions(cwd: string): PastSession[] {
       // keep the timestamp from the file itself
     }
 
-    const title = names[head.id] || firstUserLine(file) || "Untitled";
+    // A title the user set in Hyo wins over the name Codex stored, so renaming
+    // a conversation sticks the same way it does on Claude.
+    const title =
+      getCustomTitle(cwd, head.id) ||
+      names[head.id] ||
+      firstUserLine(file) ||
+      "Untitled";
     sessions.push({ id: head.id, title, date: mtime, size });
   }
 

@@ -398,9 +398,11 @@ export function HyoStatusBar({
           <div className="hyo-usage-popup-title">USAGE</div>
           <div className="hyo-usage-divider" />
           <div className="hyo-usage-row">
-            <span className="hyo-usage-label">5hr window</span>
+            <span className="hyo-usage-label">
+              {onCodex ? "Current window" : "5hr window"}
+            </span>
             <span className="hyo-usage-value">
-              {Math.round(sessionPct)}% used
+              {Math.round(shownSessionPct)}% used
             </span>
           </div>
           <div className="hyo-usage-bar-inline-wrap">
@@ -417,7 +419,15 @@ export function HyoStatusBar({
               />
             )}
           </div>
-          {usage?.five_hour?.resets_at && (
+          {onCodex && engineRateLimits?.resetsAt && (
+            <div className="hyo-usage-row small">
+              <span className="hyo-usage-label">Resets in</span>
+              <span className="hyo-usage-value">
+                {formatResetTime(new Date(engineRateLimits.resetsAt * 1000).toISOString())}
+              </span>
+            </div>
+          )}
+          {!onCodex && usage?.five_hour?.resets_at && (
             <div className="hyo-usage-row small">
               <span className="hyo-usage-label">Resets in</span>
               <span className="hyo-usage-value">
@@ -427,9 +437,11 @@ export function HyoStatusBar({
           )}
           <div className="hyo-usage-divider" />
           <div className="hyo-usage-row">
-            <span className="hyo-usage-label">Weekly (all models)</span>
+            <span className="hyo-usage-label">
+              {onCodex ? "Longer window" : "Weekly (all models)"}
+            </span>
             <span className="hyo-usage-value">
-              {Math.round(weeklyPct)}% used
+              {Math.round(shownWeeklyPct)}% used
             </span>
           </div>
           <div className="hyo-usage-bar-inline-wrap">
@@ -446,7 +458,7 @@ export function HyoStatusBar({
               />
             )}
           </div>
-          {usage?.seven_day?.resets_at && (
+          {!onCodex && usage?.seven_day?.resets_at && (
             <div className="hyo-usage-row small">
               <span className="hyo-usage-label">Resets in</span>
               <span className="hyo-usage-value">
@@ -454,7 +466,7 @@ export function HyoStatusBar({
               </span>
             </div>
           )}
-          {fablePct !== null && (
+          {!onCodex && fablePct !== null && (
             <>
               <div className="hyo-usage-divider" />
               <div className="hyo-usage-row">

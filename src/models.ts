@@ -113,6 +113,9 @@ export const CODEX_MODEL_OPTIONS: ModelOption[] = [
 
 export const DEFAULT_CODEX_MODEL = "gpt-5.5";
 
+/** Matches the fresh-install default in settings. */
+export const DEFAULT_CLAUDE_MODEL = "claude-sonnet-5";
+
 // Reasoning effort — how hard the model works before answering. Paired with
 // the model in the picker, the way Claude's own model menu does it.
 //
@@ -161,13 +164,17 @@ export function effortsForEngine(engine: string): EffortOption[] {
  * back to that engine's default rather than passing a value it will reject.
  */
 export function resolveModelForEngine(engine: string, model: string): string {
-  if (engine !== "codex") return model;
-  if (!model) return DEFAULT_CODEX_MODEL;
-  // Any gpt-*/o*/codex-* id passes, not only the ones in the fallback list — a
-  // newer CLI offers models this build has never heard of, and rejecting them
-  // would pin the picker to whatever was known at release. Only an id that
-  // clearly belongs to another engine gets replaced.
-  return /^(gpt|o[0-9]|codex)/i.test(model) ? model : DEFAULT_CODEX_MODEL;
+  const isCodexId = /^(gpt|o[0-9]|codex)/i.test(model);
+  const isClaudeId = /^(claude|opus|sonnet|haiku|fable)/i.test(model);
+  if (engine === "codex") {
+    if (!model || isClaudeId) return DEFAULT_CODEX_MODEL;
+    // Anything else passes. A newer CLI offers models this build never heard
+    // of, and a custom id the user typed is theirs to keep — only an id that
+    // clearly belongs to the other engine gets replaced.
+    return model;
+  }
+  if (!model || isCodexId) return DEFAULT_CLAUDE_MODEL;
+  return model;
 }
 
 export function resolveEffortForEngine(engine: string, effort: string): string {
