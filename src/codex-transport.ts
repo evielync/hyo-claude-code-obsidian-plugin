@@ -1,6 +1,5 @@
 import { debug } from "./debug";
 import { resolveModelForEngine, resolveEffortForEngine } from "./models";
-import { loadAgentPrompt } from "./hooks/useAgents";
 import type { ChildProcess } from "child_process";
 import { Platform } from "obsidian";
 import type {
@@ -171,8 +170,8 @@ export class CodexTransport implements AgentTransport {
           model: this.resolveModel(model),
           approvalPolicy: this.mapPermissionMode(this.options.permissionMode),
           sandbox: "workspace-write",
-          ...(this.developerInstructions()
-            ? { developerInstructions: this.developerInstructions() }
+          ...(this.options.appendSystemPrompt
+            ? { developerInstructions: this.options.appendSystemPrompt }
             : {}),
         });
       }
@@ -523,19 +522,6 @@ export class CodexTransport implements AgentTransport {
    * "max" effort, neither of which Codex accepts. Both are resolved to this
    * engine's own values rather than passed through to fail the turn.
    */
-  /**
-   * Codex has no `--agent` flag, so the selected agent's prompt is passed as
-   * the thread's developer instructions instead. The voice persona rides along
-   * the same way, appended so it modifies the agent rather than replacing it.
-   */
-  private developerInstructions(): string | undefined {
-    const parts = [
-      loadAgentPrompt(this.options.agent || ""),
-      this.options.appendSystemPrompt,
-    ].filter(Boolean);
-    return parts.length ? parts.join("\n\n") : undefined;
-  }
-
   private resolveModel(model: string): string {
     return resolveModelForEngine("codex", model);
   }

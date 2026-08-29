@@ -1224,7 +1224,9 @@ export function useSessionManager(options: SessionManagerOptions) {
           model: resolveModelForEngine(options.engine || "claude", currentTab?.model || options.model),
           effort: resolveEffortForEngine(options.engine || "claude", currentTab?.effort || options.effort),
           permissionMode: currentTab?.permissionMode || options.permissionMode,
-          agent: currentTab?.agent || "",
+          // Agents are Claude Code's; Codex has no equivalent and is not given
+          // an emulated one, so the selection simply doesn't apply there.
+          agent: options.engine === "codex" ? "" : currentTab?.agent || "",
           sessionId: cliSessionId || undefined,
           resume: !!cliSessionId,
           maxOutputTokens: options.maxOutputTokens,

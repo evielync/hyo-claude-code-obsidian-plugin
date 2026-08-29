@@ -355,7 +355,10 @@ export function HyoStatusBar({
         <span>Voice</span>
       </button>
 
-      {agents.length > 1 && (
+      {/* Agents are a Claude Code feature. Codex has no equivalent, so the
+          picker is absent there rather than offering a control that does
+          nothing. */}
+      {!onCodex && agents.length > 1 && (
         <button
           ref={agentRef}
           className="hyo-agent-selector"
@@ -586,7 +589,7 @@ export function HyoStatusBar({
         </div>
       )}
 
-      {popup === "agent" && (
+      {popup === "agent" && !onCodex && (
         <div
           className="hyo-agent-popup"
           style={{ position: "fixed", bottom: popupBottom, right: 120 }}
