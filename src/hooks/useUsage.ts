@@ -272,7 +272,14 @@ function calcWeeklyPacePct(resetsAt: string | undefined): number | null {
  * Hook for managing Claude usage data
  * Polls the Anthropic API every 5 minutes for usage stats
  */
-export function useUsage() {
+/**
+ * Claude plan consumption, from Anthropic's usage API.
+ *
+ * `enabled` is false when the vault runs another engine — otherwise Hyo keeps
+ * polling Anthropic, and reading Claude credentials, for numbers it isn't
+ * showing.
+ */
+export function useUsage(enabled = true) {
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [stale, setStale] = useState(false);
@@ -282,6 +289,7 @@ export function useUsage() {
   const failuresRef = useRef(0);
 
   const poll = useCallback(async () => {
+    if (!enabled) return;
     try {
       const { status, data } = await fetchUsage();
       if (data) {
@@ -299,11 +307,12 @@ export function useUsage() {
       failuresRef.current += 1;
       console.error("[hyo] Usage fetch failed:", e);
     }
-  }, []);
+  }, [enabled]);
 
   // Self-scheduling loop: 5 min when healthy; on failure, back off from 30s up
   // to a 5 min cap (30s, 60s, 120s, 240s, 300s...) instead of a fixed 15s hammer.
   useEffect(() => {
+    if (!enabled) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
     const run = async () => {
@@ -315,14 +324,15 @@ export function useUsage() {
     };
     run();
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [poll]);
+  }, [poll, enabled]);
 
   // Re-poll when window regains visibility (catches stale token after long idle)
   useEffect(() => {
+    if (!enabled) return;
     const onVisible = () => { if (document.visibilityState === "visible") poll(); };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [poll]);
+  }, [poll, enabled]);
 
   const sessionPct = usage?.five_hour
     ? Math.min(100, Math.max(0, usage.five_hour.utilization || 0))

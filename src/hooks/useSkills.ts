@@ -23,7 +23,7 @@ function parseFrontmatter(text: string): { name: string; description: string } {
   };
 }
 
-export function useSkills(workingDirectory: string): Skill[] {
+export function useSkills(workingDirectory: string, engine: string = "claude"): Skill[] {
   const [skills, setSkills] = useState<Skill[]>([]);
 
   useEffect(() => {
@@ -32,10 +32,13 @@ export function useSkills(workingDirectory: string): Skill[] {
     try {
       const resolved = workingDirectory.replace(/^~/, os.homedir());
 
-      // Check all standard locations (same as Claude Code)
+      // Both engines use the same SKILL.md format but keep skills in their own
+      // home. Listing Claude's while Codex is running would offer skills that
+      // engine can't run.
+      const engineHome = engine === "codex" ? ".codex" : ".claude";
       const paths = [
-        path.join(os.homedir(), '.claude', 'skills'), // User-global
-        path.join(resolved, '.claude', 'skills'),      // Project .claude/skills
+        path.join(os.homedir(), engineHome, 'skills'), // User-global
+        path.join(resolved, engineHome, 'skills'),     // Project-level
         path.join(resolved, 'skills'),                 // Project skills/
       ];
 
@@ -67,7 +70,7 @@ export function useSkills(workingDirectory: string): Skill[] {
     } catch (e) {
       console.warn("[hyo] Failed to load skills:", e);
     }
-  }, [workingDirectory]);
+  }, [workingDirectory, engine]);
 
   return skills;
 }

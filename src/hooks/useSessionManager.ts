@@ -759,7 +759,10 @@ export function useSessionManager(options: SessionManagerOptions) {
           }));
 
           // Auto-generate title after first response
-          if (options.autoGenerateTitles) {
+          // Claude only. Codex names its own threads and Hyo reads those from
+          // its session index, so generating one here would spend the Claude
+          // plan while the user is on Codex.
+          if (options.autoGenerateTitles && options.engine !== "codex") {
             const currentTab = stateRef.current.tabs.find((t) => t.id === tabId);
             if (currentTab && currentTab.messages.length >= 2) {
               const msgs = currentTab.messages;
@@ -805,6 +808,7 @@ export function useSessionManager(options: SessionManagerOptions) {
 
                   generateConversationTitle({
                     cliPath: options.cliPath,
+                    // Claude only — see generateConversationTitle.
                     userMessage: userText,
                     assistantMessage: assistantText,
                   }).then((generatedTitle) => {

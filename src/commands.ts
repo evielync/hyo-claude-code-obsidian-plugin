@@ -165,9 +165,12 @@ export class CommandsManager {
       ? this.plugin.settings.workingDirectory.replace(/^~/, os.homedir())
       : vaultPath;
 
+    // Same folders the "/" picker uses, for whichever engine is running.
+    const engineHome =
+      this.plugin.settings.engine === "codex" ? ".codex" : ".claude";
     const bases = [
-      path.join(os.homedir(), ".claude", "skills"),
-      path.join(workingDirectory, ".claude", "skills"),
+      path.join(os.homedir(), engineHome, "skills"),
+      path.join(workingDirectory, engineHome, "skills"),
       path.join(workingDirectory, "skills"),
     ];
 

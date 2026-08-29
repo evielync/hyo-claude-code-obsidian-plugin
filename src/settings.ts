@@ -363,7 +363,7 @@ export class HyoSettingTab extends PluginSettingTab {
     // Permission mode
     new Setting(containerEl)
       .setName("Permission mode")
-      .setDesc("What Claude may do without asking you first. 'Default' asks before every action; 'Accept edits' lets it change files freely; 'Bypass all' never asks; 'Plan mode' makes it propose a plan before doing anything.")
+      .setDesc("What your agent may do without asking you first. 'Default' asks before every action; 'Accept edits' lets it change files freely; 'Bypass all' never asks; 'Plan mode' makes it propose a plan before doing anything.")
       .addDropdown((dropdown) =>
         dropdown
           .addOption("manual", "Default (ask for each)")
@@ -382,7 +382,7 @@ export class HyoSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Auto-generate conversation titles")
       .setDesc(
-        "Uses a small Claude Haiku call after your first message to name the conversation. Uses your Claude subscription."
+        "Names the conversation after your first message, using a small Claude Haiku call on your Claude plan. Codex names its own conversations, so this does nothing there."
       )
       .addToggle((toggle) =>
         toggle
@@ -400,6 +400,7 @@ export class HyoSettingTab extends PluginSettingTab {
     let agentFiles: string[] = [];
     if (!Platform.isMobile) {
       try {
+        // Agents are a Claude Code feature; there is nothing to list on Codex.
         const agentDir = path.join(os.homedir(), ".claude", "agents");
         if (fs.existsSync(agentDir)) {
           agentFiles = fs
@@ -465,7 +466,7 @@ export class HyoSettingTab extends PluginSettingTab {
   // ---- Voice: ElevenLabs voice mode ------------------------------------------
   private renderVoice(containerEl: HTMLElement): void {
     containerEl.createEl("p", {
-      text: "Connect ElevenLabs to enable voice mode — speak to Claude and hear responses read aloud.",
+      text: "Connect ElevenLabs to enable voice mode — speak to your agent and hear responses read aloud.",
       attr: { style: "margin: 0 0 16px; color: var(--text-muted); font-size: 0.9em;" },
     });
 
@@ -582,7 +583,7 @@ export class HyoSettingTab extends PluginSettingTab {
     const workingDirSetting = new Setting(containerEl)
       .setName("Working directory")
       .setDesc(
-        "Claude's home folder — where it looks for your CLAUDE.md and starts working from. Defaults to your current Obsidian vault. Set this to a different folder if your Claude project lives outside your vault."
+        "Your agent's home folder — where it starts working from and picks up instruction files. Defaults to your current Obsidian vault. Set this to a different folder if your Claude project lives outside your vault."
       )
       .addText((text) =>
         text
@@ -909,7 +910,7 @@ export class HyoSettingTab extends PluginSettingTab {
         attr: { style: "margin: 0 0 16px; color: var(--text-muted); font-size: 0.9em;" },
       });
       intro.setText(
-        "Hyo on your phone talks to Claude running on your Mac. Set up your Mac first — this side mostly takes care of itself. ",
+        "Hyo on your phone talks to Claude Code running on your Mac. Set up your Mac first — this side mostly takes care of itself. ",
       );
       intro.createEl("a", {
         text: "Read the setup guide →",

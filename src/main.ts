@@ -255,8 +255,14 @@ export default class HyoPlugin extends Plugin {
     // Clear defaultAgent if no matching file exists in ~/.claude/agents/.
     // Fixes stale state from older plugin versions that hardcoded an agent name.
     // Desktop only — mobile can't scan the filesystem and its agent list comes
-    // from the gateway.
-    if (!Platform.isMobile && this.settings.defaultAgent) {
+    // from the gateway. Claude only too: agents are its feature, and clearing
+    // the setting while another engine is selected would lose the choice for
+    // whenever the user switches back.
+    if (
+      !Platform.isMobile &&
+      (this.settings.engine || "claude") === "claude" &&
+      this.settings.defaultAgent
+    ) {
       try {
         const agentFile = path.join(
           os.homedir(),

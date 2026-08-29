@@ -57,6 +57,14 @@ function cleanTitle(raw: string): string | null {
  * Generate a conversation title using Claude Haiku in --print mode.
  * Returns null on any failure — caller should keep the existing title.
  */
+/**
+ * Names a conversation with a cheap Haiku call.
+ *
+ * Claude Code only. Codex names its own threads and Hyo reads those names from
+ * its session index, so asking a second engine to do it would spend the Claude
+ * plan while the user is on ChatGPT — and `codex exec` starts a whole agent
+ * turn, which takes minutes rather than the second this needs.
+ */
 export async function generateConversationTitle(
   options: TitleGenOptions,
 ): Promise<string | null> {
@@ -64,13 +72,7 @@ export async function generateConversationTitle(
   const prompt = buildPrompt(userMessage, assistantMessage);
 
   return new Promise((resolve) => {
-    const args = [
-      "--print",
-      prompt,
-      "--model",
-      "haiku",
-      "--no-session-persistence",
-    ];
+    const args = ["--print", prompt, "--model", "haiku", "--no-session-persistence"];
 
     const home = os.homedir();
     const env = { ...process.env };

@@ -119,7 +119,7 @@ export function HyoStatusBar({
     lastUpdated,
     stale,
     refresh,
-  } = useUsage();
+  } = useUsage(engine !== "codex");
 
   const [popup, setPopup] = useState<string | null>(null);
   const [popupBottom, setPopupBottom] = useState(0);

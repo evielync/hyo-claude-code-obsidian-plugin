@@ -431,7 +431,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
   }, [activeTabId]);
 
   // Slash command state (checks both .claude/skills and skills/)
-  const skills = useSkills(workingDirectory);
+  const skills = useSkills(workingDirectory, plugin.settings.engine || "claude");
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashFilter, setSlashFilter] = useState("");
   const [slashSelectedIdx, setSlashSelectedIdx] = useState(0);
