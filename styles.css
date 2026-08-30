@@ -2625,6 +2625,18 @@ button.hyo-ask-send:disabled {
 .hyo-ts-filter-empty { opacity: .5; }
 .hyo-ts-filter-empty.hyo-ts-filter-on { opacity: 1; }
 
+/* Bulk actions on the board. Their own row under the filters, so they stay put
+   while the filter chips scroll sideways. */
+.hyo-ts-bulk { display: flex; justify-content: flex-end; padding: 7px 12px 0; }
+.hyo-ts-closeall {
+  font-size: 11.5px; font-weight: 500; color: var(--text-muted);
+  background: transparent; border: none; box-shadow: none;
+  padding: 2px 4px; cursor: pointer;
+}
+.hyo-ts-closeall:hover { background: transparent; color: var(--text-normal); text-decoration: underline; }
+.hyo-ts-closeall-confirm,
+.hyo-ts-closeall-confirm:hover { color: var(--text-error); font-weight: 600; text-decoration: none; }
+
 .hyo-ts-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 12px 14px; }
 .hyo-ts-empty { padding: 44px 12px; text-align: center; color: var(--text-faint); font-size: 12.5px; }
 
@@ -5095,6 +5107,13 @@ button.hyo-ask-send:disabled {
 .is-mobile .hyo-ts-filter-count { font-size: 10px; font-weight: 700; opacity: .75; }
 .is-mobile .hyo-ts-filter-empty { opacity: .5; }
 .is-mobile .hyo-ts-filter-empty.hyo-ts-filter-on { opacity: 1; }
+.is-mobile .hyo-ts-bulk { display: flex; justify-content: flex-end; padding: 7px 12px 0; }
+.is-mobile .hyo-ts-closeall {
+  font-size: 12px; font-weight: 500; color: var(--text-muted);
+  background: transparent; border: none; box-shadow: none;
+  padding: 4px 6px; cursor: pointer;
+}
+.is-mobile .hyo-ts-closeall-confirm { color: var(--text-error); font-weight: 600; }
 .is-mobile .hyo-ts-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 12px 14px; }
 .is-mobile .hyo-ts-empty { padding: 44px 12px; text-align: center; color: var(--text-faint); font-size: 12.5px; }
 .is-mobile /* Sticky, .is-mobile legible day headers */

@@ -75,6 +75,19 @@ export function setTaskMeta(
   }
 }
 
+// The same patch across many conversations at once — what "Close all" sends.
+export function setTaskMetaMany(
+  gatewayUrl: string,
+  sessionIds: string[],
+  patch: { pinned?: boolean; closed?: boolean; lastActive?: string }
+): void {
+  try {
+    GatewayClient.get(gatewayUrl).setTaskMetaMany(sessionIds, patch);
+  } catch (e) {
+    console.error("[hyo] Failed to save task meta:", e);
+  }
+}
+
 export interface SessionHistory {
   messages: HistoryMessage[];
   /** The model this conversation was last running on, read from the transcript.

@@ -124,6 +124,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     renameTab,
     renamePastSession,
     setTaskMeta,
+    setTaskMetaMany,
     reorderTab,
     setTabModel,
     setTabEffort,
@@ -208,6 +209,24 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
         });
     },
     [setTaskMeta]
+  );
+
+  // Close everything currently on the board. The list Hyo builds on a fresh
+  // install is every conversation the CLI has ever written to disk, so the
+  // first job is usually clearing the whole backlog at once. Reversible one at
+  // a time: opening a closed conversation reopens it.
+  const handleCloseAllTasks = useCallback(
+    (tasks: BoardTask[]) => {
+      const ids = tasks
+        .map((t) => t.cliSessionId)
+        .filter((id): id is string => !!id);
+      if (ids.length)
+        setTaskMetaMany(ids, {
+          closed: true,
+          lastActive: new Date().toISOString(),
+        });
+    },
+    [setTaskMetaMany]
   );
 
   const handleTogglePin = useCallback(
@@ -962,6 +981,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           tasks={taskMeta}
           onOpenTask={handleOpenTask}
           onCloseTask={handleCloseTask}
+          onCloseAllTasks={handleCloseAllTasks}
           onTogglePin={handleTogglePin}
           onRenameTask={handleRenameTask}
         />

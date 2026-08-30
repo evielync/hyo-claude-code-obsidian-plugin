@@ -32,7 +32,7 @@
 
 import { Platform, Notice } from "obsidian";
 import { debug } from "./debug";
-import { getProjectDir, saveCustomTitle, setTaskMeta } from "./session-parser";
+import { getProjectDir, saveCustomTitle, setTaskMeta, setTaskMetaMany } from "./session-parser";
 import type * as FsType from "fs";
 import type * as PathType from "path";
 import type * as OsType from "os";
@@ -1055,6 +1055,12 @@ export function startGatewayHost(config: GatewayHostConfig): void {
             setTaskMeta(cfg.vault, m.sessionId, m.patch || {});
             send({ type: "task_meta_set", sessionId: m.sessionId });
             break;
+          case "set_task_meta_many": {
+            const ids: string[] = Array.isArray(m.sessionIds) ? m.sessionIds : [];
+            setTaskMetaMany(cfg.vault, ids, m.patch || {});
+            send({ type: "task_meta_set", sessionIds: ids });
+            break;
+          }
           case "list_agents":
             send({ type: "agents", agents: listAgents(cfg.vault) });
             break;

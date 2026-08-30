@@ -169,6 +169,23 @@ export function setTaskMeta(
   saveMetadata(cwd, metadata);
 }
 
+// Same as setTaskMeta, for a whole set of conversations at once. Closing a
+// board holding hundreds of conversations one call at a time would read and
+// rewrite the metadata file hundreds of times; this is one read, one write.
+export function setTaskMetaMany(
+  cwd: string,
+  sessionIds: string[],
+  patch: { pinned?: boolean; closed?: boolean; lastActive?: string }
+): void {
+  if (!sessionIds.length) return;
+  const metadata = loadMetadata(cwd);
+  for (const sessionId of sessionIds) {
+    if (!metadata[sessionId]) metadata[sessionId] = {};
+    Object.assign(metadata[sessionId], patch);
+  }
+  saveMetadata(cwd, metadata);
+}
+
 export function listPastSessions(cwd: string): PastSession[] {
   const candidates = getCandidateProjectDirs(cwd);
   const seenIds = new Set<string>();

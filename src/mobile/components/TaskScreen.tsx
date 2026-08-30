@@ -15,6 +15,7 @@ interface TaskScreenProps {
   tasks: Record<string, TaskMeta>;
   onOpenTask: (task: BoardTask) => void;
   onCloseTask: (task: BoardTask) => void;
+  onCloseAllTasks: (tasks: BoardTask[]) => void;
   onTogglePin: (task: BoardTask) => void;
   onRenameTask: (task: BoardTask, title: string) => void;
 }
@@ -172,11 +173,15 @@ export function TaskScreen({
   tasks,
   onOpenTask,
   onCloseTask,
+  onCloseAllTasks,
   onTogglePin,
   onRenameTask,
 }: TaskScreenProps) {
   const [filter, setFilter] = useState<TaskState | "all">("all");
   const [visible, setVisible] = useState(PAGE);
+  // Closing a whole board at once asks for the tap twice, since it touches
+  // conversations that are scrolled out of sight.
+  const [confirmingCloseAll, setConfirmingCloseAll] = useState(false);
 
   const all = buildTaskList(tabs, pastSessions, tasks);
   const count = (s: TaskState) => all.filter((t) => t.state === s).length;
@@ -200,6 +205,9 @@ export function TaskScreen({
   const shown = filtered.slice(0, visible);
   const groups = groupTasks(shown);
   const hasMore = filtered.length > visible;
+  // "Close all" acts on what the current filter is showing, not just the page
+  // that's been scrolled into view. Nothing to close under the Closed filter.
+  const closable = filter === "closed" ? [] : filtered;
 
   return (
     <div className="hyo-ts-screen">
@@ -230,6 +238,29 @@ export function TaskScreen({
           );
         })}
       </div>
+      {closable.length > 0 && (
+        // Its own row rather than a chip in the filter bar, which scrolls
+        // sideways — on a phone this is the one control that has to be visible
+        // without hunting for it.
+        <div className="hyo-ts-bulk">
+          <button
+            className={`hyo-ts-closeall${confirmingCloseAll ? " hyo-ts-closeall-confirm" : ""}`}
+            onClick={() => {
+              if (!confirmingCloseAll) {
+                setConfirmingCloseAll(true);
+                return;
+              }
+              onCloseAllTasks(closable);
+              setConfirmingCloseAll(false);
+            }}
+            onBlur={() => setConfirmingCloseAll(false)}
+          >
+            {confirmingCloseAll
+              ? `Close ${closable.length}? Tap again`
+              : "Close all"}
+          </button>
+        </div>
+      )}
       <div className="hyo-ts-list">
         {filtered.length === 0 ? (
           <div className="hyo-ts-empty">Nothing here.</div>

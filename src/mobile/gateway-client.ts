@@ -402,6 +402,16 @@ export class GatewayClient {
     this.send({ type: "set_task_meta", sessionId, patch });
   }
 
+  // The same patch across many conversations, in one message — so closing a
+  // whole board is one round trip and one rewrite of the metadata file.
+  setTaskMetaMany(
+    sessionIds: string[],
+    patch: { pinned?: boolean; closed?: boolean; lastActive?: string }
+  ): void {
+    if (!sessionIds.length) return;
+    this.send({ type: "set_task_meta_many", sessionIds, patch });
+  }
+
   // Mirrors the server's own behaviour: never rejects, resolves null on
   // failure/timeout so callers can just keep the existing title.
   generateTitle(userMessage: string, assistantMessage: string): Promise<string | null> {

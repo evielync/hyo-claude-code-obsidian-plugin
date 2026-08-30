@@ -9,7 +9,7 @@ import type {
   AskQuestionData,
   PlanReviewData,
 } from "./useChatEngine";
-import { listPastSessions, loadSessionHistory, saveCustomTitle, setTaskMeta as persistTaskMeta, type PastSession } from "../session-parser";
+import { listPastSessions, loadSessionHistory, saveCustomTitle, setTaskMeta as persistTaskMeta, setTaskMetaMany as persistTaskMetaMany, type PastSession } from "../session-parser";
 import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
 import { generateConversationTitle } from "../title-generator";
 
@@ -774,6 +774,15 @@ export function useSessionManager(options: SessionManagerOptions) {
     [options.gatewayUrl]
   );
 
+  // The same patch across many conversations, in one message. Behind "Close all".
+  const setTaskMetaMany = useCallback(
+    (sessionIds: string[], patch: { pinned?: boolean; closed?: boolean; lastActive?: string }) => {
+      persistTaskMetaMany(options.gatewayUrl, sessionIds, patch);
+      setTimeout(() => refreshPastSessions(), 0);
+    },
+    [options.gatewayUrl]
+  );
+
   // ------- messaging -------
 
   const sendMessage = useCallback(
@@ -1219,6 +1228,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     renameTab,
     renamePastSession,
     setTaskMeta,
+    setTaskMetaMany,
     setTabPermissionMode,
     toggleVoiceMode,
     sendMessage,
