@@ -48,10 +48,17 @@ export type AgentEvent =
   /** Plan-window consumption, for the usage meter. */
   | {
       type: "rate-limits";
-      /** 0–100 across the shorter window. */
+      /** 0–100 across the primary window. */
       primaryUsedPercent?: number;
-      /** 0–100 across the longer window. */
+      /** How long the primary window runs, in minutes. */
+      primaryWindowMins?: number;
+      /**
+       * The second window, when the plan has one. Absent rather than zero when
+       * it doesn't, so the meter can leave the row out instead of drawing an
+       * empty bar for something that doesn't exist.
+       */
       secondaryUsedPercent?: number;
+      secondaryWindowMins?: number;
       /** Unix seconds when the primary window resets. */
       resetsAt?: number;
       planType?: string;

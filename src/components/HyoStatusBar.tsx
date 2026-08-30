@@ -1,5 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import type { EngineId } from "../agent-transport";
+import type { EngineRateLimits } from "../hooks/useSessionManager";
 import { fetchCodexModels } from "../codex-models";
 import { useUsage, scopedLimit } from "../hooks/useUsage";
 import { useAgents } from "../hooks/useAgents";
@@ -17,12 +18,7 @@ interface HyoStatusBarProps {
   /** Path to the engine's CLI, used to ask it what models it can run. */
   engineCliPath?: string;
   /** Plan consumption as the engine reports it. Codex only. */
-  engineRateLimits?: {
-    primaryUsedPercent?: number;
-    secondaryUsedPercent?: number;
-    resetsAt?: number;
-    planType?: string;
-  } | null;
+  engineRateLimits?: EngineRateLimits | null;
   model: string;
   effort: string;
   permissionMode: string;
@@ -253,6 +249,17 @@ export function HyoStatusBar({
   // over the transport. Showing one engine's plan usage while the other is
   // answering would be worse than showing nothing.
   const onCodex = engine === "codex";
+  const windowLabel = (mins?: number): string => {
+    if (!mins) return "Usage";
+    if (mins % 10080 === 0) return `${mins / 10080}-week window`;
+    if (mins % 1440 === 0) return `${mins / 1440}-day window`;
+    if (mins % 60 === 0) return `${mins / 60}-hour window`;
+    return `${mins}-minute window`;
+  };
+  // Plans without a second window report nothing for it, so the row is left
+  // out rather than drawing an empty bar for a limit that doesn't exist.
+  const hasSecondWindow =
+    !onCodex || engineRateLimits?.secondaryUsedPercent !== undefined;
   const shownSessionPct = onCodex ? engineRateLimits?.primaryUsedPercent ?? 0 : sessionPct;
   const shownWeeklyPct = onCodex ? engineRateLimits?.secondaryUsedPercent ?? 0 : weeklyPct;
   const showPace = !onCodex;
@@ -291,6 +298,7 @@ export function HyoStatusBar({
             />
           )}
         </span>
+        {hasSecondWindow && (<>
         <span className="hyo-usage-bar-label">7D</span>
         <span className="hyo-usage-bar-track-wrap">
           <span className="hyo-usage-bar-track">
@@ -306,7 +314,7 @@ export function HyoStatusBar({
             />
           )}
         </span>
-
+        </>)}
       </div>
 
       {inputTokens > 0 && (
@@ -402,7 +410,7 @@ export function HyoStatusBar({
           <div className="hyo-usage-divider" />
           <div className="hyo-usage-row">
             <span className="hyo-usage-label">
-              {onCodex ? "Current window" : "5hr window"}
+              {onCodex ? windowLabel(engineRateLimits?.primaryWindowMins) : "5hr window"}
             </span>
             <span className="hyo-usage-value">
               {Math.round(shownSessionPct)}% used
@@ -438,10 +446,11 @@ export function HyoStatusBar({
               </span>
             </div>
           )}
+          {hasSecondWindow && (<>
           <div className="hyo-usage-divider" />
           <div className="hyo-usage-row">
             <span className="hyo-usage-label">
-              {onCodex ? "Longer window" : "Weekly (all models)"}
+              {onCodex ? windowLabel(engineRateLimits?.secondaryWindowMins) : "Weekly (all models)"}
             </span>
             <span className="hyo-usage-value">
               {Math.round(shownWeeklyPct)}% used
@@ -461,6 +470,7 @@ export function HyoStatusBar({
               />
             )}
           </div>
+          </>)}
           {!onCodex && usage?.seven_day?.resets_at && (
             <div className="hyo-usage-row small">
               <span className="hyo-usage-label">Resets in</span>
@@ -495,15 +505,25 @@ export function HyoStatusBar({
             </>
           )}
           <div className="hyo-usage-divider" />
-          {stale && (
+          {!onCodex && stale && (
             <div className="hyo-usage-stale-notice">
               ⚠ Waiting for credentials — start a conversation or click Refresh.
             </div>
           )}
-          <button className="hyo-usage-refresh-btn" onClick={refresh}>
-            Refresh · Last updated{" "}
-            {lastUpdated ? formatTimeAgo(lastUpdated) : "never"}
-          </button>
+          {onCodex ? (
+            // Codex pushes these figures during a turn rather than being polled,
+            // so there is nothing to refresh and the timestamp is the last turn.
+            <div className="hyo-usage-refresh-btn" style={{ cursor: "default" }}>
+              {engineRateLimits?.updatedAt
+                ? `Updated ${formatTimeAgo(new Date(engineRateLimits.updatedAt))}`
+                : "Updates when you send a message"}
+            </div>
+          ) : (
+            <button className="hyo-usage-refresh-btn" onClick={refresh}>
+              Refresh · Last updated{" "}
+              {lastUpdated ? formatTimeAgo(lastUpdated) : "never"}
+            </button>
+          )}
         </div>
       )}
 

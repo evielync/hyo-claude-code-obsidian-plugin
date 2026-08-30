@@ -468,7 +468,12 @@ export class CodexTransport implements AgentTransport {
         this.emit({
           type: "rate-limits",
           primaryUsedPercent: r.primary?.usedPercent,
-          secondaryUsedPercent: r.secondary?.usedPercent,
+          primaryWindowMins: r.primary?.windowDurationMins ?? undefined,
+          // Plans without a second window send null here. Passing that through
+          // as undefined keeps the row out of the meter rather than showing a
+          // permanently empty bar.
+          secondaryUsedPercent: r.secondary?.usedPercent ?? undefined,
+          secondaryWindowMins: r.secondary?.windowDurationMins ?? undefined,
           resetsAt: r.primary?.resetsAt ?? undefined,
           planType: r.planType ?? undefined,
         });

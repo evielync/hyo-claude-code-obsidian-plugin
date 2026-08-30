@@ -67,9 +67,12 @@ export interface TabSession {
 
 export interface EngineRateLimits {
   primaryUsedPercent?: number;
+  primaryWindowMins?: number;
   secondaryUsedPercent?: number;
+  secondaryWindowMins?: number;
   resetsAt?: number;
   planType?: string;
+  updatedAt?: number;
 }
 
 interface SessionState {
@@ -536,9 +539,12 @@ export function useSessionManager(options: SessionManagerOptions) {
           case "rate-limits":
             setEngineRateLimits({
               primaryUsedPercent: event.primaryUsedPercent,
+              primaryWindowMins: event.primaryWindowMins,
               secondaryUsedPercent: event.secondaryUsedPercent,
+              secondaryWindowMins: event.secondaryWindowMins,
               resetsAt: event.resetsAt,
               planType: event.planType,
+              updatedAt: Date.now(),
             });
             return;
 
