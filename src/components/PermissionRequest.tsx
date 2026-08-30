@@ -12,10 +12,13 @@ export function PermissionRequest({ request, engine, onRespond }: PermissionRequ
   const { requestId, toolName, input } = request;
   const summary = getPermissionSummary(toolName, input);
 
-  // Claude Code writes a permanent rule into local settings. Codex's strongest
-  // approval for a file change lasts the conversation and nothing longer, so
-  // the button says what it really does rather than promising "always".
-  const persists = engine !== "codex";
+  // Claude Code writes a permanent rule into local settings, so "always allow"
+  // means it. Codex has no equivalent at any scope: acceptForSession covers
+  // only the exact command or file just approved, so a second edit or a second
+  // command asks again — tested against the live app server, three in a row,
+  // each one prompting. A button that behaves identically to "Allow once"
+  // shouldn't be offered, so on Codex there are two answers, not three.
+  const canAlwaysAllow = engine !== "codex";
 
   return (
     <div className="hyo-permission">
@@ -34,17 +37,15 @@ export function PermissionRequest({ request, engine, onRespond }: PermissionRequ
         >
           Allow once
         </button>
-        <button
-          className="hyo-permission-allow-always"
-          onClick={() => onRespond(requestId, "allow_always")}
-          title={
-            persists
-              ? "Allow this from now on"
-              : "Allow for the rest of this conversation"
-          }
-        >
-          {persists ? "Always allow" : "Allow for this chat"}
-        </button>
+        {canAlwaysAllow && (
+          <button
+            className="hyo-permission-allow-always"
+            onClick={() => onRespond(requestId, "allow_always")}
+            title="Allow this from now on"
+          >
+            Always allow
+          </button>
+        )}
       </div>
     </div>
   );
