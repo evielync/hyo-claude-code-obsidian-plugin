@@ -67,6 +67,9 @@ export class CodexTransport implements AgentTransport {
     { rpcId: number; kind: "command" | "fileChange" | "generic" }
   >();
 
+  /** JSON-RPC id of each open question, keyed by the item id the UI uses. */
+  private pendingQuestions = new Map<string, number>();
+
   private options: AgentTransportOptions;
 
   constructor(options: AgentTransportOptions) {
@@ -268,6 +271,21 @@ export class CodexTransport implements AgentTransport {
     this.respond(entry.rpcId, { decision });
   }
 
+  respondToQuestion(requestId: string, answers: Record<string, string>): void {
+    const rpcId = this.pendingQuestions.get(requestId);
+    if (rpcId === undefined) {
+      debug("[hyo] Codex: no pending question for", requestId);
+      return;
+    }
+    this.pendingQuestions.delete(requestId);
+    // Codex takes a list per question, so a single choice is a list of one.
+    const payload: Record<string, { answers: string[] }> = {};
+    for (const [questionId, answer] of Object.entries(answers)) {
+      payload[questionId] = { answers: [answer] };
+    }
+    this.respond(rpcId, { answers: payload });
+  }
+
   interrupt(): void {
     if (!this.threadId) return;
     void this.request("turn/interrupt", {
@@ -368,6 +386,30 @@ export class CodexTransport implements AgentTransport {
           ? { command: params.command ?? item.command ?? "", cwd: params.cwd ?? item.cwd }
           : { path: item.path ?? item.changes?.[0]?.path, changes: item.changes },
         reason: params.reason ?? undefined,
+      });
+      return;
+    }
+
+    if (method === "item/tool/requestUserInput") {
+      // Codex is asking the user something. Answering `{}` here — which the
+      // catch-all below would do — reads to Codex as the user having answered
+      // nothing, so the question never reaches the screen and the turn carries
+      // on regardless.
+      this.pendingQuestions.set(params.itemId, id);
+      this.emit({
+        type: "question-request",
+        requestId: params.itemId,
+        questions: (params.questions ?? []).map((q: any) => ({
+          id: q.id,
+          header: q.header || undefined,
+          question: q.question,
+          options: (q.options ?? []).map((o: any) => ({
+            label: o.label,
+            description: o.description || undefined,
+          })),
+          allowOther: !!q.isOther,
+          isSecret: !!q.isSecret,
+        })),
       });
       return;
     }

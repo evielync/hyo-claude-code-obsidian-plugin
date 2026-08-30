@@ -45,6 +45,23 @@ export type AgentEvent =
     }
   /** The turn finished. */
   | { type: "turn-complete"; usage?: AgentUsage; error?: string }
+  /**
+   * The engine is asking the user something and is blocked until answered.
+   * Same contract as a permission request: nothing proceeds until
+   * `respondToQuestion` is called with this `requestId`.
+   */
+  | {
+      type: "question-request";
+      requestId: string;
+      questions: {
+        id: string;
+        header?: string;
+        question: string;
+        options?: { label: string; description?: string }[];
+        allowOther?: boolean;
+        isSecret?: boolean;
+      }[];
+    }
   /** Plan-window consumption, for the usage meter. */
   | {
       type: "rate-limits";
@@ -115,6 +132,11 @@ export interface AgentTransport {
     toolName?: string,
     updatedInput?: Record<string, unknown>,
   ): void;
+  /**
+   * Answer a pending `question-request`, keyed by question id. Engines that
+   * never ask can leave this unimplemented.
+   */
+  respondToQuestion?(requestId: string, answers: Record<string, string>): void;
   /** Stop the current turn, leaving the conversation alive. */
   interrupt(): void;
   /** Tear the engine down. */

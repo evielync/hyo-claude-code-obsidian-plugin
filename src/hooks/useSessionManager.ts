@@ -479,6 +479,20 @@ export function useSessionManager(options: SessionManagerOptions) {
             return;
           }
 
+          case "question-request":
+            updateTabLastAssistant(tabId, () => ({
+              askQuestion: {
+                id: event.requestId,
+                questions: event.questions.map((q) => ({
+                  question: q.question,
+                  header: q.header,
+                  options: q.options,
+                })),
+                answers: {},
+              },
+            }));
+            return;
+
           case "permission-request":
             updateTabLastAssistant(tabId, (msg) => {
               const existing = msg.permissionRequests || [];
@@ -1346,6 +1360,15 @@ export function useSessionManager(options: SessionManagerOptions) {
   const sendQuestionAnswer = useCallback(
     (questionId: string, answers: Record<string, string>) => {
       const tabId = stateRef.current.activeTabId;
+
+      // Codex has its own answer channel keyed by question id, rather than
+      // Claude's "reply to the tool call with an updated input".
+      const transport = transportsRef.current[tabId];
+      if (options.engine === "codex") {
+        transport?.respondToQuestion?.(questionId, answers);
+        updateTabLastAssistant(tabId, () => ({ askQuestion: null }));
+        return;
+      }
 
       // AskUserQuestion's input schema requires "questions" — updatedInput
       // must satisfy the tool's original input schema, not just carry the
