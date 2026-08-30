@@ -4,6 +4,7 @@ import { StreamingMessage } from "./StreamingMessage";
 import type { Message } from "../hooks/useChatEngine";
 
 interface ChatMessagesProps {
+  engine?: string;
   messages: Message[];
   scrollRef: React.MutableRefObject<{ nearBottom: boolean }>;
   onPermissionResponse: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
@@ -12,6 +13,7 @@ interface ChatMessagesProps {
 }
 
 export function ChatMessages({
+  engine,
   messages,
   scrollRef,
   onPermissionResponse,
@@ -47,6 +49,7 @@ export function ChatMessages({
         if (msg.streaming) {
           return (
             <StreamingMessage
+              engine={engine}
               key={`stream-${i}`}
               message={msg}
               onPermissionResponse={onPermissionResponse}

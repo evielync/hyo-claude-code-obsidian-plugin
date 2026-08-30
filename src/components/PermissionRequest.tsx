@@ -3,12 +3,19 @@ import type { PermissionRequestData } from "../hooks/useChatEngine";
 
 interface PermissionRequestProps {
   request: PermissionRequestData;
+  /** Which engine is answering, so the buttons describe what they actually do. */
+  engine?: string;
   onRespond: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
 }
 
-export function PermissionRequest({ request, onRespond }: PermissionRequestProps) {
+export function PermissionRequest({ request, engine, onRespond }: PermissionRequestProps) {
   const { requestId, toolName, input } = request;
   const summary = getPermissionSummary(toolName, input);
+
+  // Claude Code writes a permanent rule into local settings. Codex's strongest
+  // approval for a file change lasts the conversation and nothing longer, so
+  // the button says what it really does rather than promising "always".
+  const persists = engine !== "codex";
 
   return (
     <div className="hyo-permission">
@@ -30,8 +37,13 @@ export function PermissionRequest({ request, onRespond }: PermissionRequestProps
         <button
           className="hyo-permission-allow-always"
           onClick={() => onRespond(requestId, "allow_always")}
+          title={
+            persists
+              ? "Allow this from now on"
+              : "Allow for the rest of this conversation"
+          }
         >
-          Always allow
+          {persists ? "Always allow" : "Allow for this chat"}
         </button>
       </div>
     </div>

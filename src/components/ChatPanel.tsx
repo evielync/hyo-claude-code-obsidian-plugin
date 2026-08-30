@@ -1036,6 +1036,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           </div>
           {activeMessages.length > 0 ? (
             <ChatMessages
+              engine={plugin.settings.engine || "claude"}
               messages={activeMessages}
               scrollRef={scrollRef}
               onPermissionResponse={sendPermissionResponse}
@@ -1052,6 +1053,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
         </>
       ) : activeMessages.length > 0 ? (
         <ChatMessages
+          engine={plugin.settings.engine || "claude"}
           messages={activeMessages}
           scrollRef={scrollRef}
           onPermissionResponse={sendPermissionResponse}

@@ -9,12 +9,14 @@ import { HIDDEN_TOOLS } from "../hooks/useChatEngine";
 
 interface StreamingMessageProps {
   message: Message;
+  engine?: string;
   onPermissionResponse: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
   onQuestionAnswer: (questionId: string, answers: Record<string, string>) => void;
 }
 
 export function StreamingMessage({
   message,
+  engine,
   onPermissionResponse,
   onQuestionAnswer,
 }: StreamingMessageProps) {
@@ -87,6 +89,7 @@ export function StreamingMessage({
           ?.filter((r) => !r.resolved)
           .map((request) => (
             <PermissionRequest
+              engine={engine}
               key={request.requestId}
               request={request}
               onRespond={onPermissionResponse}
