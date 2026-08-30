@@ -12,9 +12,9 @@ import type {
   AskQuestionData,
   PlanReviewData,
 } from "./useChatEngine";
-import { HIDDEN_TOOLS } from "./useChatEngine";
+import { ALWAYS_HIDDEN_TOOLS } from "./useChatEngine";
 import { listCodexSessions, loadCodexSessionHistory } from "../codex-sessions";
-import { listPastSessions, loadSessionHistory, saveCustomTitle, setTaskMeta as persistTaskMeta, type PastSession, getProjectDir } from "../session-parser";
+import { listPastSessions, loadSessionHistory, saveCustomTitle, setTaskMeta as persistTaskMeta, setTaskMetaMany as persistTaskMetaMany, type PastSession, getProjectDir } from "../session-parser";
 import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
 import { generateConversationTitle } from "../title-generator";
 import { Platform } from "obsidian";
@@ -448,7 +448,7 @@ export function useSessionManager(options: SessionManagerOptions) {
               input: event.input ?? {},
               result: null,
             });
-            if (!HIDDEN_TOOLS.has(event.name)) {
+            if (!ALWAYS_HIDDEN_TOOLS.has(event.name)) {
               ss.orderedBlocks.push({
                 type: "tool",
                 toolId: event.id,
@@ -1160,6 +1160,15 @@ export function useSessionManager(options: SessionManagerOptions) {
     [options.cwd]
   );
 
+  // The same patch across many conversations, in one write. Behind "Close all".
+  const setTaskMetaMany = useCallback(
+    (sessionIds: string[], patch: { pinned?: boolean; closed?: boolean; lastActive?: string }) => {
+      persistTaskMetaMany(options.cwd, sessionIds, patch);
+      setTimeout(() => refreshPastSessions(), 0);
+    },
+    [options.cwd]
+  );
+
   // Move a tab to sit where another tab currently is. Dropping onto the right
   // half of the target lands after it, which is what makes dragging a tab to
   // the end of the bar feel natural.
@@ -1702,6 +1711,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     renameTab,
     renamePastSession,
     setTaskMeta,
+    setTaskMetaMany,
     reorderTab,
     setTabModel,
     setTabEffort,

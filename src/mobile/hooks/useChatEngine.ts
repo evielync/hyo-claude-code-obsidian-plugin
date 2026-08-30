@@ -2,7 +2,9 @@ import { debug } from "../debug";
 import { useState, useCallback, useRef } from "react";
 import { GatewayTransport } from "../gateway-transport";
 
-const HIDDEN_TOOLS = new Set([
+// Tools that have their own surface in the panel, so a raw row for them would
+// be a duplicate. Never recorded as a block in the first place.
+const ALWAYS_HIDDEN_TOOLS = new Set([
   "TodoWrite",
   "TaskOutput",
   "EnterPlanMode",
@@ -10,7 +12,22 @@ const HIDDEN_TOOLS = new Set([
   "AskUserQuestion",
 ]);
 
-export { HIDDEN_TOOLS };
+// What the transcript filters out at render time. Same tools, plus Bash when
+// "Show shell commands" is off. The two are separate because this one changes
+// while a conversation is on screen: blocks are always recorded, so turning
+// shell commands back on brings the earlier ones straight back.
+const HIDDEN_TOOLS = new Set(ALWAYS_HIDDEN_TOOLS);
+
+// Applied from the plugin's settings. Held in a module set rather than passed
+// down as a prop because every message component already reads HIDDEN_TOOLS,
+// and saving settings fires hyo-settings-changed, which re-renders the panel
+// from the top.
+export function setShellCommandsVisible(visible: boolean): void {
+  if (visible) HIDDEN_TOOLS.delete("Bash");
+  else HIDDEN_TOOLS.add("Bash");
+}
+
+export { HIDDEN_TOOLS, ALWAYS_HIDDEN_TOOLS };
 
 export interface Message {
   role: "user" | "assistant" | "system";

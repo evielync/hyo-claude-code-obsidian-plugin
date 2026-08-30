@@ -18,6 +18,10 @@ import { setDebug } from "./debug";
 import { probeCliCapabilities } from "./cli-capabilities";
 import { startGatewayHost, stopGatewayHost, GatewayStatus } from "./gateway-host";
 import { CommandsManager } from "./commands";
+// Desktop and mobile each keep their own hidden-tool set, and which one renders
+// depends on the platform, so the shell-command preference is applied to both.
+import { setShellCommandsVisible as setShellVisibleDesktop } from "./hooks/useChatEngine";
+import { setShellCommandsVisible as setShellVisibleMobile } from "./mobile/hooks/useChatEngine";
 
 export default class HyoPlugin extends Plugin {
   settings: HyoSettings = DEFAULT_SETTINGS;
@@ -279,10 +283,22 @@ export default class HyoPlugin extends Plugin {
         await this.saveData(this.settings);
       }
     }
+
+    this.applyShellCommandVisibility();
+  }
+
+  // Keeps the transcript's hidden-tool set in step with the "Show shell
+  // commands" setting. Called on load and after every save, so a change takes
+  // effect on the panel that hyo-settings-changed re-renders.
+  private applyShellCommandVisibility(): void {
+    const visible = this.settings.showShellCommands !== false;
+    setShellVisibleDesktop(visible);
+    setShellVisibleMobile(visible);
   }
 
   async saveSettings() {
     await this.saveData(this.settings);
+    this.applyShellCommandVisibility();
     dispatchSettingsChanged();
   }
 

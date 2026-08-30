@@ -35,6 +35,10 @@ export interface HyoSettings {
   defaultAgent: string;
   maxOutputTokens: number;
   autoGenerateTitles: boolean;
+  // Whether Bash rows appear in the transcript. Every other tool always shows;
+  // shell commands are the one kind people either want to watch closely or not
+  // see at all. See setShellCommandsVisible in hooks/useChatEngine.
+  showShellCommands: boolean;
   // Mobile: the gateway URL the phone connects to (also what desktop hosts
   // when "enable mobile access" is on), and the permission default sent with
   // every mobile prompt.
@@ -92,6 +96,7 @@ export const DEFAULT_SETTINGS: HyoSettings = {
   defaultAgent: "",
   maxOutputTokens: 64000,
   autoGenerateTitles: true,
+  showShellCommands: true,
   gatewayUrl: "",
   askFirst: true,
   enableMobileAccess: false,
@@ -389,6 +394,22 @@ export class HyoSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.autoGenerateTitles)
           .onChange(async (value) => {
             this.plugin.settings.autoGenerateTitles = value;
+            await this.plugin.saveSettings();
+            this.showSaved();
+          })
+      );
+
+    // Shell command rows in the transcript
+    new Setting(containerEl)
+      .setName("Show shell commands")
+      .setDesc(
+        "Shows the commands your agent runs on your computer as it works. Turn it off for a quieter conversation — you'll still be asked before anything runs, and every other tool still shows."
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.showShellCommands)
+          .onChange(async (value) => {
+            this.plugin.settings.showShellCommands = value;
             await this.plugin.saveSettings();
             this.showSaved();
           })
