@@ -123,7 +123,7 @@ interface SessionMetadata {
   };
 }
 
-function loadMetadata(cwd: string): SessionMetadata {
+export function loadMetadata(cwd: string): SessionMetadata {
   const metaPath = getMetadataPath(cwd);
   try {
     if (fs.existsSync(metaPath)) {

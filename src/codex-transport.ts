@@ -53,7 +53,7 @@ export class CodexTransport implements AgentTransport {
   /**
    * Messages sent before the thread finished starting. Flushed once it has.
    */
-  private queuedMessages: string[] = [];
+  private queuedMessages: unknown[][] = [];
 
   /** Latest token usage the thread reported, attached to the next turn-complete. */
   private lastUsage: AgentUsage | undefined = undefined;
@@ -209,8 +209,11 @@ export class CodexTransport implements AgentTransport {
   }
 
   sendUserMessage(content: string | unknown[]): void {
-    const text =
-      typeof content === "string" ? content : this.flattenContent(content);
+    const input =
+      typeof content === "string"
+        ? [{ type: "text", text: content, text_elements: [] }]
+        : this.toCodexInput(content);
+    const text = input.map((i: any) => i.text ?? "").join("");
 
     // The caller sends the first message on the line after start(), but the
     // handshake (initialize → thread/start) is a few async round trips and the
@@ -219,23 +222,23 @@ export class CodexTransport implements AgentTransport {
     // is — dropping it here is invisible to the user and leaves the chat
     // sitting on "Thinking…" with no turn ever running.
     if (!this.threadId) {
-      this.queuedMessages.push(text);
+      this.queuedMessages.push(input);
       return;
     }
 
-    this.startTurn(text);
+    this.startTurn(input);
   }
 
   private flushQueue(): void {
     const queued = this.queuedMessages.splice(0);
-    for (const text of queued) this.startTurn(text);
+    for (const input of queued) this.startTurn(input);
   }
 
-  private startTurn(text: string): void {
+  private startTurn(input: unknown[]): void {
     if (!this.threadId) return;
     void this.request("turn/start", {
       threadId: this.threadId,
-      input: [{ type: "text", text, text_elements: [] }],
+      input,
       ...(this.resolveEffort(this.options.effort)
         ? { effort: this.resolveEffort(this.options.effort) }
         : {}),
@@ -284,6 +287,14 @@ export class CodexTransport implements AgentTransport {
       payload[questionId] = { answers: [answer] };
     }
     this.respond(rpcId, { answers: payload });
+  }
+
+  compact(): boolean {
+    if (!this.threadId) return false;
+    void this.request("thread/compact/start", { threadId: this.threadId }).catch(
+      (e) => this.options.onError(`Codex could not compact: ${e?.message ?? e}`),
+    );
+    return true;
   }
 
   interrupt(): void {
@@ -457,6 +468,13 @@ export class CodexTransport implements AgentTransport {
             name: "Edit",
             input: { path: item.path, changes: item.changes },
           });
+        } else if (item.type === "plan") {
+          // Codex plans as content: it emits a plan item and keeps working.
+          // There is no plan-approval request, so there is nothing to gate on
+          // and the plan is shown as part of the reply.
+          if (item.text) {
+            this.emit({ type: "text-delta", text: `\n${item.text}\n` });
+          }
         } else if (item.type === "mcpToolCall") {
           this.emit({
             type: "tool-start",
@@ -465,6 +483,22 @@ export class CodexTransport implements AgentTransport {
             input: item.arguments ?? {},
           });
         }
+        return;
+      }
+
+      case "item/commandExecution/outputDelta":
+      case "item/fileChange/outputDelta": {
+        // Codex streams a tool's output as it runs. Without this the chat shows
+        // a tool call and then sits still until it finishes.
+        const chunk =
+          typeof params.delta === "string"
+            ? params.delta
+            : this.decodeChunk(params.chunk ?? params.delta);
+        if (!chunk) return;
+        const item = this.items.get(params.itemId);
+        const existing = (item?.__stream ?? "") + chunk;
+        if (item) item.__stream = existing;
+        this.emit({ type: "tool-result", id: params.itemId, content: existing });
         return;
       }
 
@@ -551,6 +585,25 @@ export class CodexTransport implements AgentTransport {
 
   // -------------------------------------------------------------- helpers
 
+  /** Output deltas arrive as base64 when they may not be valid UTF-8. */
+  private decodeChunk(chunk: unknown): string {
+    if (typeof chunk === "string") {
+      try {
+        return Buffer.from(chunk, "base64").toString("utf-8");
+      } catch {
+        return chunk;
+      }
+    }
+    if (Array.isArray(chunk)) {
+      try {
+        return Buffer.from(chunk as number[]).toString("utf-8");
+      } catch {
+        return "";
+      }
+    }
+    return "";
+  }
+
   private describeTurnError(error: any): string {
     if (!error) return "Turn failed";
     if (typeof error === "string") return error;
@@ -590,11 +643,83 @@ export class CodexTransport implements AgentTransport {
     }
   }
 
-  private flattenContent(content: unknown[]): string {
-    return content
-      .map((b: any) => (typeof b === "string" ? b : b?.text ?? ""))
-      .join("")
-      .trim();
+  /**
+   * Hyo builds attachments as Anthropic content blocks: base64 in an `image` or
+   * `document` block. Codex takes its own `UserInput` list, where an image is a
+   * url or a local path. Flattening to text — which is what happened before —
+   * silently dropped every attachment, with nothing to show the user their file
+   * had not been sent.
+   *
+   * Images go across as data urls so nothing has to be written to disk. Codex
+   * has no document type, so a PDF is named in the text rather than pretended
+   * to have been attached.
+   */
+  private toCodexInput(content: unknown[]): unknown[] {
+    const out: unknown[] = [];
+    const notes: string[] = [];
+    let text = "";
+
+    for (const raw of content) {
+      const b: any = raw;
+      if (typeof b === "string") {
+        text += b;
+      } else if (b?.type === "text") {
+        text += b.text ?? "";
+      } else if (b?.type === "image" && b.source?.data) {
+        out.push({
+          type: "image",
+          url: `data:${b.source.media_type || "image/png"};base64,${b.source.data}`,
+        });
+      } else if (b?.type === "document") {
+        notes.push(`(a ${b.source?.media_type || "document"} attachment was not sent — Codex accepts images only)`);
+      }
+    }
+
+    const combined = [text.trim(), ...notes].filter(Boolean).join("\n\n");
+    return [
+      ...this.asSkillOrText(combined),
+      ...out,
+    ];
+  }
+
+  /**
+   * A message that is only "/skill-name" is Hyo's way of running a skill.
+   * Codex takes a skill as its own input type carrying the name and path, so
+   * sending the text would just be a message with a slash in it.
+   */
+  private asSkillOrText(text: string): unknown[] {
+    const match = text.trim().match(/^\/([a-zA-Z0-9._-]+)\s*([\s\S]*)$/);
+    if (match) {
+      const [, name, rest] = match;
+      const skillPath = this.findSkill(name);
+      if (skillPath) {
+        const parts: unknown[] = [{ type: "skill", name, path: skillPath }];
+        if (rest.trim()) {
+          parts.push({ type: "text", text: rest.trim(), text_elements: [] });
+        }
+        return parts;
+      }
+    }
+    return [{ type: "text", text, text_elements: [] }];
+  }
+
+  private findSkill(name: string): string | null {
+    try {
+      const fs = require("fs");
+      const path = require("path");
+      const os = require("os");
+      const candidates = [
+        path.join(os.homedir(), ".codex", "skills", name),
+        path.join(this.options.cwd, ".codex", "skills", name),
+        path.join(this.options.cwd, "skills", name),
+      ];
+      for (const dir of candidates) {
+        if (fs.existsSync(path.join(dir, "SKILL.md"))) return dir;
+      }
+    } catch {
+      // No filesystem access, or no such skill — fall back to plain text.
+    }
+    return null;
   }
 }
 

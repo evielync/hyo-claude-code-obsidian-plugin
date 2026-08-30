@@ -108,6 +108,11 @@ interface SessionManagerOptions {
 
 // ------- utilities -------
 
+/**
+ * Claude Code writes its plan to `.claude/plan.md` and gates on approving it.
+ * Codex has a planning mode but no approval request to gate on, so it never
+ * calls this — its plans arrive as content in the reply instead.
+ */
 function readPlanFile(cwd: string): string | null {
   try {
     const fs = require("fs");
@@ -1596,6 +1601,11 @@ export function useSessionManager(options: SessionManagerOptions) {
   }, [state.tabs, state.activeTabId, restoreKey]);
 
   const compact = useCallback(() => {
+    // "/compact" is a Claude Code slash command. Sending that text to another
+    // engine is just a message about compacting, so engines with a real call
+    // for it are asked directly.
+    const transport = transportsRef.current[stateRef.current.activeTabId];
+    if (transport?.compact?.()) return;
     sendMessage("/compact", { isCompaction: true });
   }, [sendMessage]);
 

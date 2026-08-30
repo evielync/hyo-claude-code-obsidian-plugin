@@ -137,6 +137,12 @@ export interface AgentTransport {
    * never ask can leave this unimplemented.
    */
   respondToQuestion?(requestId: string, answers: Record<string, string>): void;
+  /**
+   * Compact the conversation so it fits back inside the context window.
+   * Returns false when the engine has no such call and the caller should fall
+   * back to sending its slash command as a message.
+   */
+  compact?(): boolean;
   /** Stop the current turn, leaving the conversation alive. */
   interrupt(): void;
   /** Tear the engine down. */

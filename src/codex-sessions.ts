@@ -1,7 +1,7 @@
 import { debug } from "./debug";
 import { Platform } from "obsidian";
 import type { Message, ToolCallData, OrderedBlock } from "./hooks/useChatEngine";
-import { getCustomTitle, type PastSession } from "./session-parser";
+import { getCustomTitle, loadMetadata, type PastSession } from "./session-parser";
 
 const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
 const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
@@ -181,6 +181,33 @@ function firstUserLine(file: string): string | null {
   return null;
 }
 
+/** The last real message in a conversation, for the task card preview. */
+function lastMessageOf(file: string): { role?: "user" | "assistant" | null; snippet?: string } {
+  try {
+    const lines = fs.readFileSync(file, "utf-8").split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (!line.trim()) continue;
+      let entry: any;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (entry?.type !== "response_item") continue;
+      const p = entry.payload;
+      if (p?.type !== "message") continue;
+      if (p.role !== "user" && p.role !== "assistant") continue;
+      const text = textOf(p.content);
+      if (!text || (p.role === "user" && isSyntheticUserText(text))) continue;
+      return { role: p.role, snippet: text.slice(0, 120) };
+    }
+  } catch {
+    // fall through
+  }
+  return {};
+}
+
 /**
  * Conversations Codex has had in this vault, newest first.
  *
@@ -189,6 +216,9 @@ function firstUserLine(file: string): string | null {
  */
 export function listCodexSessions(cwd: string): PastSession[] {
   const names = loadThreadNames();
+  // Pinned, closed and last-active live in the same per-vault store the Claude
+  // side uses, so the task board behaves the same on either engine.
+  const metadata = loadMetadata(cwd);
   const files = walkRollouts(sessionsRoot());
   const sessions: PastSession[] = [];
 
@@ -215,7 +245,19 @@ export function listCodexSessions(cwd: string): PastSession[] {
       names[head.id] ||
       firstUserLine(file) ||
       "Untitled";
-    sessions.push({ id: head.id, title, date: mtime, size });
+    const meta = metadata[head.id] || {};
+    const last = lastMessageOf(file);
+    sessions.push({
+      id: head.id,
+      title,
+      date: mtime,
+      size,
+      lastRole: last.role,
+      lastSnippet: last.snippet,
+      pinned: !!meta.pinned,
+      closed: !!meta.closed,
+      lastActiveMeta: meta.lastActive,
+    });
   }
 
   sessions.sort((a, b) => b.date.getTime() - a.date.getTime());
