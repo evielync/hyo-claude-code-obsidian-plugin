@@ -692,26 +692,85 @@ function removeDiscovery(): void {
   discoverySlug = null;
 }
 
+// ---- Mobile startup log ------------------------------------------------------
+// Mobile access runs on other people's machines, where the developer console is
+// not somewhere anyone is going to look. Every step of startup is written here
+// regardless of the debug setting, so a failure leaves evidence that can be read
+// back later instead of having to be reproduced.
+const MOBILE_LOG_MAX = 512 * 1024;
+
+export function mobileLogPath(): string {
+  return path.join(os.homedir(), ".hyo", "mobile.log");
+}
+
+function mlog(msg: string): void {
+  debug(`[hyo][gateway] ${msg}`);
+  try {
+    const file = mobileLogPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    try {
+      if (fs.statSync(file).size > MOBILE_LOG_MAX) fs.writeFileSync(file, "");
+    } catch {
+      /* no file yet */
+    }
+    fs.appendFileSync(file, `${new Date().toISOString()} ${msg}\n`);
+  } catch {
+    /* logging must never break startup */
+  }
+}
+
 // Live status, pushed to the plugin's status bar indicator via onStatus.
 let statusCb: ((s: GatewayStatus) => void) | null = null;
 let currentStatus: GatewayStatus = { state: "off", clients: 0 };
 
 function setStatus(patch: Partial<GatewayStatus>): void {
   currentStatus = { ...currentStatus, ...patch };
+  if (patch.state) mlog(`status -> ${patch.state}${patch.detail ? ` (${patch.detail})` : ""}`);
   try {
     statusCb?.(currentStatus);
   } catch {
     /* indicator must never break the host */
   }
 }
-function findTailscaleBin(): string | null {
-  const candidates = [
+
+// Anything that goes wrong during startup ends here. The one rule this whole
+// file now holds to: mobile access never sits in "starting" without a reason
+// attached, because a status that means nothing costs someone their whole day.
+function failStartup(detail: string): void {
+  setStatus({ state: "error", detail });
+  try {
+    new Notice(`Hyo mobile access: ${detail}`, 12000);
+  } catch {
+    /* Notice unavailable */
+  }
+}
+// Where Tailscale puts its CLI on each platform Hyo runs on. Windows ships the
+// CLI inside the same install directory as the GUI; the MSI and the Store build
+// both land under Program Files, and `ProgramFiles` is consulted first so a
+// non-default system drive still resolves.
+function tailscaleCandidates(): string[] {
+  if (process.platform === "win32") {
+    const progFiles = process.env["ProgramFiles"] || "C:\\Program Files";
+    const progFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+    const localAppData = process.env["LOCALAPPDATA"] || "";
+    return [
+      path.join(progFiles, "Tailscale", "tailscale.exe"),
+      path.join(progFilesX86, "Tailscale", "tailscale.exe"),
+      path.join(progFiles, "Tailscale IPN", "tailscale.exe"),
+      localAppData ? path.join(localAppData, "Tailscale", "tailscale.exe") : "",
+    ].filter(Boolean);
+  }
+  return [
     "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
     "/usr/local/bin/tailscale",
     "/opt/homebrew/bin/tailscale",
     "/usr/bin/tailscale",
+    "/usr/local/sbin/tailscale",
   ];
-  for (const c of candidates) {
+}
+
+function findTailscaleBin(): string | null {
+  for (const c of tailscaleCandidates()) {
     try {
       if (fs.existsSync(c)) return c;
     } catch {
@@ -732,21 +791,31 @@ function findTailscaleBin(): string | null {
 // whichever lands second wins — observed as a spurious "serve failed".
 let tsQueue: Promise<void> = Promise.resolve();
 
+// A tailscale call that never returns used to hang the queue for the life of
+// the app, which is what leaves the status bar reading "starting…" forever with
+// nothing to go on. Every call now has a deadline and a hung one is reported as
+// a failure like any other.
+const TS_TIMEOUT_MS = 10_000;
+
 function runTailscale(
   tsBin: string,
   args: string[],
   onDone: (code: number, out: string, err: string) => void,
 ): void {
+  const label = `tailscale ${args.join(" ")}`;
   tsQueue = tsQueue
     .then(
       () =>
         new Promise<void>((release) => {
           const done = (code: number, out: string, err: string) => {
             release();
+            mlog(`${label} -> exit ${code}${err ? ` err=${err.trim().split("\n")[0]}` : ""}`);
             try {
               onDone(code, out, err);
-            } catch {
-              /* callback errors must not stall the queue */
+            } catch (e: any) {
+              // The queue must keep moving, but a throw here also means the
+              // startup chain stopped partway. Say so rather than going quiet.
+              failStartup(`mobile setup failed after '${label}': ${e?.message || String(e)}`);
             }
           };
           let child: ChildProcess;
@@ -765,11 +834,21 @@ function runTailscale(
           let out = "";
           let err = "";
           let settled = false;
+          let timer: ReturnType<typeof setTimeout> | null = null;
           const settle = (code: number, o: string, e: string) => {
             if (settled) return;
             settled = true;
+            if (timer) clearTimeout(timer);
             done(code, o, e);
           };
+          timer = setTimeout(() => {
+            try {
+              child.kill();
+            } catch {
+              /* already gone */
+            }
+            settle(-1, out, err || `timed out after ${TS_TIMEOUT_MS / 1000}s`);
+          }, TS_TIMEOUT_MS);
           child.stdout?.on("data", (d: Buffer) => (out += d.toString()));
           child.stderr?.on("data", (d: Buffer) => (err += d.toString()));
           child.on("error", (e: Error) => settle(-1, out, e.message));
@@ -813,17 +892,15 @@ function announceConnectUrl(tsBin: string, slug: string, onUrl: (url: string) =>
 function setupTailscaleServe(port: number, slug: string, onUrl: (url: string) => void): void {
   const tsBin = findTailscaleBin();
   if (!tsBin) {
-    setStatus({ state: "error", detail: "Tailscale isn't installed" });
-    try {
-      new Notice(
-        "Hyo mobile access: Tailscale isn't installed. Install it and sign in, then turn mobile access off and on again.",
-        12000,
-      );
-    } catch {
-      /* ignore */
-    }
+    // Naming the places that were checked turns "it says I don't have it but I
+    // do" into something the person can actually act on.
+    mlog(`tailscale binary not found; looked in: ${tailscaleCandidates().join(", ")}`);
+    failStartup(
+      `couldn't find Tailscale on this computer. Looked in: ${tailscaleCandidates().join(", ")}. Install Tailscale and sign in, then turn mobile access off and on again.`,
+    );
     return;
   }
+  mlog(`using tailscale binary ${tsBin}`);
   // Two robustness layers before the first add:
   //
   // 1. Stale-mount cleanup. A gateway that dies without teardown (hard quit,
@@ -846,15 +923,10 @@ function setupTailscaleServe(port: number, slug: string, onUrl: (url: string) =>
         setTimeout(() => attemptAdd(1), 3500);
         return;
       }
-      setStatus({ state: "error", detail: "tailscale serve failed — is Tailscale running with HTTPS enabled?" });
-      try {
-        new Notice(
-          `Hyo mobile access: 'tailscale serve' failed${err ? " — " + err.trim().split("\n")[0] : ""}. Check Tailscale is running and HTTPS is enabled.`,
-          12000,
-        );
-      } catch {
-        /* ignore */
-      }
+      const reason = err ? err.trim().split("\n")[0] : `exit code ${code}`;
+      failStartup(
+        `Tailscale couldn't publish the address your phone connects to (${reason}). Check Tailscale is running and signed in, and that HTTPS is enabled for your network.`,
+      );
     });
   };
   cleanStaleMounts(tsBin, () => attemptAdd(0));
@@ -971,22 +1043,32 @@ export function startGatewayHost(config: GatewayHostConfig): void {
   }
 
   void (async () => {
+    try {
+    mlog(`starting mobile access: platform=${process.platform} vault=${resolved.vault}`);
     // Land on a free port before binding — no "8787 is taken" dead end.
     resolved.port = await findFreePort(resolved.port);
 
+  // Electron apps launched from the Dock or Start menu inherit a minimal PATH,
+  // so the usual CLI install locations are prepended. The extra directories are
+  // Unix-shaped; on Windows the inherited PATH already covers npm and winget
+  // installs, and joining with the wrong separator would corrupt the whole
+  // variable, so that platform gets its PATH passed through untouched.
   const env: NodeJS.ProcessEnv = { ...process.env };
   const home = os.homedir();
-  env.PATH = [
-    "/usr/local/bin",
-    "/opt/homebrew/bin",
-    "/opt/homebrew/sbin",
-    `${home}/.npm-global/bin`,
-    "/usr/bin",
-    "/bin",
-    "/usr/sbin",
-    "/sbin",
-    process.env.PATH || "",
-  ].join(":");
+  env.PATH =
+    process.platform === "win32"
+      ? process.env.PATH || ""
+      : [
+          "/usr/local/bin",
+          "/opt/homebrew/bin",
+          "/opt/homebrew/sbin",
+          path.join(home, ".npm-global", "bin"),
+          "/usr/bin",
+          "/bin",
+          "/usr/sbin",
+          "/sbin",
+          process.env.PATH || "",
+        ].join(path.delimiter);
   activeEnv = env;
 
   const server = new WebSocketServer({ host: "127.0.0.1", port: resolved.port });
@@ -1180,7 +1262,130 @@ export function startGatewayHost(config: GatewayHostConfig): void {
       debug(`[hyo][gateway] [${cid}] disconnected — ${working} still working, ${inGrace} in grace, ${detached} detached`);
     });
   });
+    } catch (e: any) {
+      // Everything after the first await used to land here as an unhandled
+      // rejection, leaving the indicator on "starting" with nothing said.
+      failStartup(`mobile access couldn't start: ${e?.message || String(e)}`);
+    }
   })();
+}
+
+// ---- Self-check --------------------------------------------------------------
+// Everything mobile access depends on, checked from inside the plugin and
+// reported in plain words. Nobody should have to open a terminal to find out
+// why their phone can't reach their computer.
+
+export interface MobileCheck {
+  label: string;
+  ok: boolean;
+  detail: string;
+  fix?: string;
+}
+
+function probePort(port: number): Promise<boolean> {
+  const net = require("net");
+  return new Promise((resolve) => {
+    const sock = net.connect({ port, host: "127.0.0.1" });
+    const done = (live: boolean) => {
+      sock.destroy();
+      resolve(live);
+    };
+    sock.once("connect", () => done(true));
+    sock.once("error", () => done(false));
+    sock.setTimeout(1500, () => done(false));
+  });
+}
+
+export async function checkMobileAccess(vaultPath: string, port: number): Promise<MobileCheck[]> {
+  const checks: MobileCheck[] = [];
+  if (Platform.isMobile) return checks;
+
+  const slug = activeSlug || vaultSlug(vaultPath);
+  const livePort = activeConfig?.port ?? port;
+  const run = (bin: string, args: string[]) =>
+    new Promise<{ code: number; out: string; err: string }>((resolve) =>
+      runTailscale(bin, args, (code, out, err) => resolve({ code, out, err })),
+    );
+
+  const tsBin = findTailscaleBin();
+  checks.push({
+    label: "Tailscale is installed",
+    ok: !!tsBin,
+    detail: tsBin ? `Found at ${tsBin}` : `Not found. Looked in: ${tailscaleCandidates().join(", ")}`,
+    fix: tsBin ? undefined : "Install Tailscale from tailscale.com/download, sign in, then run this check again.",
+  });
+  if (!tsBin) return checks;
+
+  const status = await run(tsBin, ["status", "--json"]);
+  let backend = "";
+  let dnsName = "";
+  try {
+    const parsed = JSON.parse(status.out);
+    backend = String(parsed?.BackendState || "");
+    dnsName = String(parsed?.Self?.DNSName || "").replace(/\.$/, "");
+  } catch {
+    /* handled by the check below */
+  }
+  const running = backend === "Running";
+  checks.push({
+    label: "Tailscale is running and signed in",
+    ok: running,
+    detail: running
+      ? `Connected as ${dnsName || "this computer"}`
+      : backend
+        ? `Tailscale says: ${backend}`
+        : status.err.trim().split("\n")[0] || "Tailscale didn't answer",
+    fix: running
+      ? undefined
+      : "Open Tailscale, sign in, and make sure this computer shows as connected. Then run this check again.",
+  });
+
+  const listening = await probePort(livePort);
+  checks.push({
+    label: "Hyo's gateway is listening",
+    ok: listening,
+    detail: listening ? `Running on port ${livePort}` : `Nothing is answering on port ${livePort}`,
+    fix: listening ? undefined : "Turn mobile access off and on again.",
+  });
+
+  const serve = await run(tsBin, ["serve", "status", "--json"]);
+  let mountPort: number | null = null;
+  try {
+    const cfg = JSON.parse(serve.out);
+    for (const host of Object.values<any>(cfg?.Web || {})) {
+      for (const [p, h] of Object.entries<any>(host?.Handlers || {})) {
+        if (p !== `/${slug}`) continue;
+        const m = /^http:\/\/127\.0\.0\.1:(\d+)$/.exec(String(h?.Proxy || ""));
+        if (m) mountPort = parseInt(m[1], 10);
+      }
+    }
+  } catch {
+    /* handled by the check below */
+  }
+  const mounted = mountPort !== null && mountPort === livePort;
+  checks.push({
+    label: "Your phone's address is published",
+    ok: mounted,
+    detail: mounted
+      ? `/${slug} points at port ${mountPort}`
+      : mountPort !== null
+        ? `/${slug} points at port ${mountPort}, but the gateway is on ${livePort}`
+        : `No address is published for this vault (/${slug})`,
+    fix: mounted
+      ? undefined
+      : "Turn mobile access off and on again. If it still fails, check that HTTPS is enabled for your network in the Tailscale admin console.",
+  });
+
+  if (mounted && dnsName) {
+    checks.push({
+      label: "Address your phone connects to",
+      ok: true,
+      detail: `wss://${dnsName}/${slug}`,
+    });
+  }
+
+  mlog(`self-check: ${checks.map((c) => `${c.ok ? "ok" : "FAIL"} ${c.label}`).join(" | ")}`);
+  return checks;
 }
 
 /**

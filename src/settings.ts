@@ -8,6 +8,7 @@ import { MODEL_OPTIONS, EFFORT_OPTIONS, DEFAULT_EFFORT, modelsForEngine, efforts
 import { detectCli } from "./cli-detect";
 import { ENGINE_LABELS, type EngineId } from "./agent-transport";
 import type { Skill } from "./hooks/useSkills";
+import { checkMobileAccess, mobileLogPath } from "./gateway-host";
 
 // A single command: which skill it fires, what its header-menu label reads,
 // and any extra instruction text appended after the skill invocation.
@@ -1025,6 +1026,39 @@ export class HyoSettingTab extends PluginSettingTab {
             })
           );
       }
+
+      // Self-check. When mobile access won't come up, this is the answer —
+      // it names what was checked, what failed and what to do about it, so
+      // nobody has to open a terminal or send a screenshot of a status bar.
+      const checkSetting = new Setting(containerEl)
+        .setName("Check mobile access")
+        .setDesc("Tests everything your phone needs and tells you what's wrong.");
+      const resultsEl = containerEl.createDiv({ cls: "hyo-mobile-check" });
+      checkSetting.addButton((b) =>
+        b.setButtonText("Run check").onClick(async () => {
+          b.setButtonText("Checking…").setDisabled(true);
+          resultsEl.empty();
+          try {
+            const vault = (this.app.vault.adapter as any).basePath as string;
+            const checks = await checkMobileAccess(vault, this.plugin.settings.gatewayPort);
+            for (const c of checks) {
+              const row = resultsEl.createDiv({ cls: "hyo-mobile-check-row" });
+              const head = row.createDiv({ cls: "hyo-mobile-check-head" });
+              head.createSpan({ text: c.ok ? "✓" : "✗", cls: c.ok ? "hyo-check-ok" : "hyo-check-fail" });
+              head.createSpan({ text: c.label });
+              row.createDiv({ text: c.detail, cls: "hyo-mobile-check-detail" });
+              if (c.fix) row.createDiv({ text: c.fix, cls: "hyo-mobile-check-fix" });
+            }
+            if (checks.some((c) => !c.ok)) {
+              const foot = resultsEl.createDiv({ cls: "hyo-mobile-check-detail" });
+              foot.setText(`Full log: ${mobileLogPath()}`);
+            }
+          } catch (e: any) {
+            resultsEl.createDiv({ text: `Check failed: ${e?.message || String(e)}` });
+          }
+          b.setButtonText("Run check").setDisabled(false);
+        })
+      );
 
       // The gateway port isn't shown: it's internal (Tailscale fronts it) and
       // the host auto-picks a free one. gatewayPort stays in settings only as

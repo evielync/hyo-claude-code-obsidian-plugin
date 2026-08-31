@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.8
+
+**The one where mobile access tells you what's wrong**
+
+- **Mobile access works on Windows.** It never has until now — Hyo only knew where to find Tailscale on a Mac, so Windows users were told Tailscale wasn't installed while it sat running in their system tray. It looks in the right places now.
+- **A new "Check mobile access" button.** In Settings → Hyo → Mobile. It tests every part of the connection your phone needs, tells you which one failed and what to do about it, and shows the address your phone should be using. Nothing to type into a terminal.
+- **"Starting…" can't hang forever any more.** If something Hyo depends on stops responding, it gives up after ten seconds and says what happened, instead of leaving the status bar spinning all day with nothing to go on.
+- **Error messages say something useful.** Every failure names its actual cause and the next step, rather than blaming the nearest likely thing.
+- **There's a log when you need one.** Mobile startup writes to `.hyo/mobile.log` in your home folder, so if something does go wrong there's a record of it.
+
 ## 0.5.7
 
 **The one where the install error goes away**
