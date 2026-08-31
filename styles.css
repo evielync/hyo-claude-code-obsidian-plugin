@@ -5169,3 +5169,17 @@ button.hyo-ask-send:disabled {
 
 /* Left-align session panel options (beats Obsidian mobile's centred button default) */
 .hyo-session-sheet .hyo-session-opt { justify-content: flex-start; text-align: left; }
+
+/* Mobile access self-check results (Settings → Hyo → Mobile) */
+.hyo-mobile-check { margin: 4px 0 18px; }
+.hyo-mobile-check-row {
+  padding: 8px 12px; margin-bottom: 6px;
+  border-left: 2px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  border-radius: 0 6px 6px 0;
+}
+.hyo-mobile-check-head { display: flex; align-items: baseline; gap: 8px; font-weight: 500; }
+.hyo-check-ok { color: var(--color-green); font-weight: 700; }
+.hyo-check-fail { color: var(--color-red); font-weight: 700; }
+.hyo-mobile-check-detail { margin-top: 2px; font-size: 12px; color: var(--text-muted); word-break: break-word; }
+.hyo-mobile-check-fix { margin-top: 4px; font-size: 12px; color: var(--text-accent); }
