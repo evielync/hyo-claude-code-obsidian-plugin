@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.9
+
+**The one where Fable 5.1 turns up**
+
+- **Fable 5.1 is in the model picker.** Anthropic's newest top-end model, released this week, ready to select — full 1M context, same as Fable 5 had. It takes Fable 5's spot in the list; if you still want the original, type `claude-fable-5` into the Custom model ID field and it's yours again.
+
 ## 0.5.8
 
 **The one where mobile access tells you what's wrong**
