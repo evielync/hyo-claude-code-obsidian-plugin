@@ -90,7 +90,7 @@ function model(id: string, name: string): ModelOption {
 }
 
 export const MODEL_OPTIONS: ModelOption[] = [
-  model("claude-fable-5", "Fable 5"),
+  model("claude-fable-5-1", "Fable 5.1"),
   model("claude-opus-5", "Opus 5"),
   model("claude-opus-4-8", "Opus 4.8"),
   model("claude-sonnet-5", "Sonnet 5"),
