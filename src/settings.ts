@@ -581,12 +581,19 @@ export class HyoSettingTab extends PluginSettingTab {
         const home = os.homedir();
         const isWindows = process.platform === "win32";
 
-        // Try login shell first (picks up full PATH including nvm, npm-global, etc.)
+        // Ask the shell where Claude is, using the person's own login+interactive
+        // shell so we inherit the exact PATH their terminal has. -i matters: nvm,
+        // fnm and most manual PATH exports live in .zshrc/.bashrc, which a plain
+        // login shell (-l) never reads — that gap made auto-detect come back empty
+        // for people whose `which claude` works fine in a terminal. Their own
+        // $SHELL goes first so fish and other shells are covered too.
+        const userShell = process.env.SHELL;
         const shellCmds = isWindows
           ? ["where claude"]
           : [
-              "bash -lc 'which claude'",
-              "zsh -lc 'which claude'",
+              ...(userShell ? [`${userShell} -lic 'command -v claude'`] : []),
+              "zsh -lic 'command -v claude'",
+              "bash -lic 'command -v claude'",
             ];
 
         // Also probe common install locations directly
@@ -595,16 +602,34 @@ export class HyoSettingTab extends PluginSettingTab {
           : [
               `${home}/.npm-global/bin/claude`,
               "/usr/local/bin/claude",
+              "/opt/homebrew/bin/claude",
               "/usr/bin/claude",
               `${home}/.local/bin/claude`,
+              `${home}/.bun/bin/claude`,
             ];
 
         let detected = "";
 
+        // An interactive shell may print an rc-file banner before the path, so
+        // take the last line that's an absolute path to a file that exists.
+        const pickPath = (out: string): string => {
+          const lines = out.split("\n").map((s) => s.trim());
+          for (let i = lines.length - 1; i >= 0; i--) {
+            const line = lines[i];
+            if (line.startsWith("/")) {
+              try {
+                if (fs.existsSync(line)) return line;
+              } catch {}
+            }
+          }
+          return "";
+        };
+
         for (const cmd of shellCmds) {
           try {
-            const result = execSync(cmd, { encoding: "utf8", timeout: 5000 }).trim();
-            if (result) { detected = result; break; }
+            const result = execSync(cmd, { encoding: "utf8", timeout: 5000 });
+            const path = pickPath(result);
+            if (path) { detected = path; break; }
           } catch {}
         }
 

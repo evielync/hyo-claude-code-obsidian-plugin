@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.10
+
+**The one where Auto-detect finally finds Claude**
+
+- **Auto-detect now finds Claude Code even when it's installed through a version manager.** If you run Claude through nvm or fnm, or you set your own path in `.zshrc` or `.bashrc`, Auto-detect used to come up empty even though `which claude` worked fine in your terminal. It now asks your own shell the same way your terminal does, so it finds Claude wherever you've actually put it.
+
 ## 0.5.9
 
 **The one where Fable 5.1 turns up**
