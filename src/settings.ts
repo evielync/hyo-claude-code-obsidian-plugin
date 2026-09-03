@@ -7,6 +7,7 @@ import type HyoPlugin from "./main";
 import { MODEL_OPTIONS, EFFORT_OPTIONS, DEFAULT_EFFORT } from "./models";
 import type { Skill } from "./hooks/useSkills";
 import { checkMobileAccess, mobileLogPath } from "./gateway-host";
+import { detectClaude, probeClaude, checkAuth, installClaude, signIn } from "./cli-probe";
 
 // A single command: which skill it fires, what its header-menu label reads,
 // and any extra instruction text appended after the skill invocation.
@@ -176,6 +177,7 @@ export class HyoSettingTab extends PluginSettingTab {
           { id: "mobile", label: "Mobile" },
         ]
       : [
+          { id: "setup", label: "Setup" },
           { id: "general", label: "General" },
           { id: "voice", label: "Voice" },
           { id: "mobile", label: "Mobile" },
@@ -210,7 +212,8 @@ export class HyoSettingTab extends PluginSettingTab {
     }
 
     const body = containerEl.createDiv();
-    if (this.activeTab === "voice") this.renderVoice(body);
+    if (this.activeTab === "setup") this.renderSetup(body);
+    else if (this.activeTab === "voice") this.renderVoice(body);
     else if (this.activeTab === "mobile") this.renderMobile(body);
     else if (this.activeTab === "commands") this.renderCommands(body);
     else if (this.activeTab === "advanced") this.renderAdvanced(body);
@@ -542,119 +545,154 @@ export class HyoSettingTab extends PluginSettingTab {
           })
       );
 
-    // CLI path — with a live found/not-found indicator, because a stale path
-    // here used to surface only as a cryptic "exited (code -2)" mid-chat.
-    const cliPathSetting = new Setting(containerEl)
-      .setName("Claude Code CLI path")
-      .setDesc(
-        "Where Claude Code is installed on your machine. Click 'Auto-detect' to find it automatically."
-      );
-    const cliStatusEl = cliPathSetting.descEl.createEl("div", {
+    containerEl.createEl("p", {
+      text: "Claude Code setup — installing, signing in and the CLI path — has moved to the Setup tab.",
+      attr: { style: "margin: 16px 0 0; color: var(--text-muted); font-size: 0.85em;" },
+    });
+  }
+
+  // ---- Setup: get Claude installed, signed in, and connected ------------------
+  // The one place a person goes to get running. Everything here works by
+  // actually running Claude — never by guessing from a file on disk — and does
+  // its work headlessly: no terminal window ever shows, only a browser tab for
+  // approving sign-in.
+  private renderSetup(containerEl: HTMLElement): void {
+    if (Platform.isMobile) {
+      containerEl.createEl("p", {
+        text: "Claude runs on your desktop. Set it up there, then connect this phone from the Mobile tab.",
+        attr: { style: "margin: 0; color: var(--text-muted);" },
+      });
+      return;
+    }
+
+    containerEl.createEl("p", {
+      text: "Hyo runs on Claude Code. This checks it's installed and signed in — and sets it up for you if not.",
+      attr: { style: "margin: 0 0 16px; color: var(--text-muted); font-size: 0.9em;" },
+    });
+
+    const statusSetting = new Setting(containerEl)
+      .setName("Claude Code")
+      .setDesc("Whether Claude is installed, working and signed in on this machine.");
+    const statusEl = statusSetting.descEl.createEl("div", {
       attr: { style: "margin-top: 4px; font-size: 0.95em;" },
     });
-    const updateCliStatus = (p: string) => {
-      let found = false;
-      try {
-        found = !!p && fs.existsSync(p);
-      } catch {
-        found = false;
-      }
-      cliStatusEl.setText(found ? "✓ Found" : "✗ Not found — click Auto-detect");
-      cliStatusEl.style.color = found ? "var(--color-green)" : "var(--color-red)";
+    const setStatus = (kind: "ok" | "warn" | "bad" | "muted", detail: string) => {
+      statusEl.setText(detail);
+      statusEl.style.color =
+        kind === "ok"
+          ? "var(--color-green)"
+          : kind === "warn"
+          ? "var(--color-orange)"
+          : kind === "bad"
+          ? "var(--color-red)"
+          : "var(--text-muted)";
     };
-    updateCliStatus(this.plugin.settings.cliPath);
-    cliPathSetting.addText((text) =>
-      text
-        .setPlaceholder("/usr/local/bin/claude")
-        .setValue(this.plugin.settings.cliPath)
-        .onChange(async (value) => {
-          this.plugin.settings.cliPath = value;
+
+    // Reflect reality on open: run Claude, check sign-in. No file-existence guess.
+    const refreshStatus = () => {
+      const p = this.plugin.settings.cliPath;
+      if (!p) {
+        setStatus("muted", "Not set up yet — click Auto-detect, or Install Claude below.");
+        return;
+      }
+      const probe = probeClaude(p);
+      if (!probe.works) {
+        setStatus("bad", "✗ Claude isn't running from the saved path — Auto-detect or Install below.");
+        return;
+      }
+      const auth = checkAuth(p);
+      if (auth.loggedIn === false) setStatus("warn", `✓ Claude ${probe.version} — but not signed in. Sign in below.`);
+      else if (auth.loggedIn && auth.email)
+        setStatus("ok", `✓ Ready — Claude ${probe.version}, signed in as ${auth.email}.`);
+      else setStatus("ok", `✓ Ready — Claude ${probe.version}.`);
+    };
+    refreshStatus();
+
+    statusSetting.addButton((b) =>
+      b.setButtonText("Auto-detect").onClick(async () => {
+        setStatus("muted", "Looking for Claude…");
+        const result = detectClaude();
+        if (result.path) {
+          this.plugin.settings.cliPath = result.path;
           await this.plugin.saveSettings();
-          updateCliStatus(value);
-          this.showSavedNear(cliPathSetting.nameEl as HTMLElement);
-        })
-    );
-
-    cliPathSetting.addButton((button) =>
-      button.setButtonText("Auto-detect").onClick(async () => {
-        const { execSync } = require("child_process");
-        const home = os.homedir();
-        const isWindows = process.platform === "win32";
-
-        // Ask the shell where Claude is, using the person's own login+interactive
-        // shell so we inherit the exact PATH their terminal has. -i matters: nvm,
-        // fnm and most manual PATH exports live in .zshrc/.bashrc, which a plain
-        // login shell (-l) never reads — that gap made auto-detect come back empty
-        // for people whose `which claude` works fine in a terminal. Their own
-        // $SHELL goes first so fish and other shells are covered too.
-        const userShell = process.env.SHELL;
-        const shellCmds = isWindows
-          ? ["where claude"]
-          : [
-              ...(userShell ? [`${userShell} -lic 'command -v claude'`] : []),
-              "zsh -lic 'command -v claude'",
-              "bash -lic 'command -v claude'",
-            ];
-
-        // Also probe common install locations directly
-        const commonPaths = isWindows
-          ? []
-          : [
-              `${home}/.npm-global/bin/claude`,
-              "/usr/local/bin/claude",
-              "/opt/homebrew/bin/claude",
-              "/usr/bin/claude",
-              `${home}/.local/bin/claude`,
-              `${home}/.bun/bin/claude`,
-            ];
-
-        let detected = "";
-
-        // An interactive shell may print an rc-file banner before the path, so
-        // take the last line that's an absolute path to a file that exists.
-        const pickPath = (out: string): string => {
-          const lines = out.split("\n").map((s) => s.trim());
-          for (let i = lines.length - 1; i >= 0; i--) {
-            const line = lines[i];
-            if (line.startsWith("/")) {
-              try {
-                if (fs.existsSync(line)) return line;
-              } catch {}
-            }
-          }
-          return "";
-        };
-
-        for (const cmd of shellCmds) {
-          try {
-            const result = execSync(cmd, { encoding: "utf8", timeout: 5000 });
-            const path = pickPath(result);
-            if (path) { detected = path; break; }
-          } catch {}
         }
-
-        if (!detected) {
-          for (const p of commonPaths) {
-            try {
-              if (fs.existsSync(p)) { detected = p; break; }
-            } catch {}
-          }
-        }
-
-        if (detected) {
-          this.plugin.settings.cliPath = detected;
-          await this.plugin.saveSettings();
-          this.display();
-          new Notice(`✓ Found Claude at ${detected}`);
+        if (result.state === "ready") {
+          const others = result.candidates.filter((c) => c.works).length - 1;
+          new Notice(
+            `✓ Using Claude ${result.version}` +
+              (others > 0 ? ` (${others} other working install${others > 1 ? "s" : ""} found)` : "")
+          );
+        } else if (result.state === "signed-out") {
+          new Notice("Found Claude, but you're not signed in. Click 'Sign in to Claude'.");
         } else {
-          new Notice("Could not find Claude CLI. Check the install guide or set the path manually.");
+          new Notice("Couldn't find Claude. Click 'Install Claude' to set it up.");
         }
+        this.display();
       })
     );
 
+    // Install — headless. No terminal; friendly progress in a notice.
+    new Setting(containerEl)
+      .setName("Install Claude Code")
+      .setDesc("Not installed yet? Hyo installs it for you in the background.")
+      .addButton((b) =>
+        b.setButtonText("Install Claude").onClick(async () => {
+          b.setDisabled(true);
+          const notice = new Notice("Installing Claude…", 0);
+          const r = await installClaude((msg) => notice.setMessage(msg));
+          notice.hide();
+          b.setDisabled(false);
+          if (r.ok) {
+            const found = detectClaude();
+            if (found.path) {
+              this.plugin.settings.cliPath = found.path;
+              await this.plugin.saveSettings();
+            }
+            new Notice("✓ Claude installed. Now sign in.");
+          } else {
+            new Notice(`Install didn't finish: ${r.error}`);
+          }
+          this.display();
+        })
+      );
+
+    // Sign in — headless launch, browser for approval only.
+    new Setting(containerEl)
+      .setName("Sign in to Claude")
+      .setDesc("Opens your browser to approve. No terminal, nothing to copy.")
+      .addButton((b) =>
+        b.setButtonText("Sign in to Claude").onClick(async () => {
+          const p = this.plugin.settings.cliPath;
+          if (!p) {
+            new Notice("Install or auto-detect Claude first.");
+            return;
+          }
+          b.setDisabled(true);
+          const notice = new Notice("Starting sign-in…", 0);
+          const r = await signIn(p, (msg) => notice.setMessage(msg));
+          notice.hide();
+          b.setDisabled(false);
+          new Notice(r.ok ? "✓ Signed in." : `Sign-in didn't finish: ${r.error}`);
+          this.display();
+        })
+      );
+
+    // The saved path, for the rare case someone needs to point at a specific one.
+    const cliPathSetting = new Setting(containerEl)
+      .setName("Claude Code path")
+      .setDesc("Set automatically by Auto-detect. Only change this if you know you need a specific install.")
+      .addText((text) =>
+        text
+          .setPlaceholder("/usr/local/bin/claude")
+          .setValue(this.plugin.settings.cliPath)
+          .onChange(async (value) => {
+            this.plugin.settings.cliPath = value;
+            await this.plugin.saveSettings();
+            this.showSavedNear(cliPathSetting.nameEl as HTMLElement);
+          })
+      );
     cliPathSetting.addButton((button) =>
-      button.setButtonText("Browse...").onClick(async () => {
-        // @ts-ignore
+      button.setButtonText("Browse…").onClick(async () => {
         // @ts-ignore
         const { dialog } = require("electron").remote;
         const result = await dialog.showOpenDialog({
@@ -668,7 +706,6 @@ export class HyoSettingTab extends PluginSettingTab {
         }
       })
     );
-
   }
 
   // ---- Commands: note-header buttons ------------------------------------------

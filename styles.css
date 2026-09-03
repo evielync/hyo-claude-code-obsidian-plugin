@@ -184,6 +184,17 @@
   opacity: 0.9;
 }
 
+.hyo-setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.hyo-setup-actions .hyo-copy-prompt-button {
+  margin: 0;
+}
+
 .hyo-onboarding-divider {
   display: flex;
   align-items: center;

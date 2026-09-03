@@ -3,8 +3,13 @@ import type { App } from "obsidian";
 import type HyoPlugin from "../main";
 import { ChatPanel } from "./ChatPanel";
 import { useSessionManager } from "../hooks/useSessionManager";
-import { checkCliExists } from "../claude-transport";
 import { DEFAULT_EFFORT } from "../models";
+import {
+  detectClaude,
+  installClaude,
+  signIn,
+  type ClaudeDetection,
+} from "../cli-probe";
 
 interface HyoAppProps {
   app: App;
@@ -12,8 +17,13 @@ interface HyoAppProps {
 }
 
 export function HyoApp({ app, plugin }: HyoAppProps) {
-  const [cliFound, setCliFound] = useState<boolean | null>(null);
+  // null = still checking. We run Claude to find out, rather than trusting a
+  // file to exist, so this reflects whether Claude actually works.
+  const [detection, setDetection] = useState<ClaudeDetection | null>(null);
   const [settingsVersion, setSettingsVersion] = useState(0);
+  // Setup progress shown in the first-run screen while install / sign-in run.
+  const [setupMsg, setSetupMsg] = useState<string | null>(null);
+  const [setupBusy, setSetupBusy] = useState(false);
   const vaultPath = (app.vault.adapter as any).basePath as string;
 
   useEffect(() => {
@@ -22,9 +32,56 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
     return () => window.removeEventListener("hyo-settings-changed", handler);
   }, []);
 
+  const runDetection = React.useCallback(() => {
+    setDetection(null);
+    // Defer so the "Checking…" state paints before the probe blocks the thread.
+    setTimeout(async () => {
+      const result = detectClaude();
+      // If a working Claude turned up at a path we're not using, adopt it — so
+      // the chat (and sign-in) run the one we just proved works.
+      if (result.path && result.path !== plugin.settings.cliPath) {
+        plugin.settings.cliPath = result.path;
+        await plugin.saveSettings();
+      }
+      setDetection(result);
+    }, 0);
+  }, [plugin]);
+
   useEffect(() => {
-    setCliFound(checkCliExists(plugin.settings.cliPath));
-  }, [plugin.settings.cliPath, settingsVersion]);
+    runDetection();
+  }, [runDetection, settingsVersion]);
+
+  // Install Claude in the background — no terminal, just progress text.
+  const doInstall = React.useCallback(async () => {
+    setSetupBusy(true);
+    setSetupMsg("Installing Claude…");
+    const r = await installClaude((m) => setSetupMsg(m));
+    setSetupBusy(false);
+    if (r.ok) {
+      setSetupMsg("Installed. Now sign in.");
+      runDetection();
+    } else {
+      setSetupMsg(`Install didn't finish: ${r.error}`);
+    }
+  }, [runDetection]);
+
+  // Sign in in the background — a browser tab opens to approve, nothing else.
+  const doSignIn = React.useCallback(async () => {
+    if (!plugin.settings.cliPath) {
+      setSetupMsg("Install Claude first.");
+      return;
+    }
+    setSetupBusy(true);
+    setSetupMsg("Starting sign-in…");
+    const r = await signIn(plugin.settings.cliPath, (m) => setSetupMsg(m));
+    setSetupBusy(false);
+    if (r.ok) {
+      setSetupMsg("Signed in. Checking…");
+      runDetection();
+    } else {
+      setSetupMsg(`Sign-in didn't finish: ${r.error}`);
+    }
+  }, [plugin, runDetection]);
 
   // Use custom working directory if set, otherwise use vault path
   const workingDirectory = plugin.settings.workingDirectory
@@ -46,52 +103,72 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
     settingsVersion,
   });
 
-  if (cliFound === null) {
+  if (detection === null) {
     return (
       <div className="hyo-app">
-        <div className="hyo-loading">Loading...</div>
+        <div className="hyo-loading">Checking for Claude…</div>
       </div>
     );
   }
 
-  if (!cliFound) {
-    const platform = process.platform;
-    const isMac = platform === "darwin";
-    const isWindows = platform === "win32";
+  if (detection.state !== "ready") {
+    const isWindows = process.platform === "win32";
+    // Claude is on the machine but not signed in, vs nothing installed at all —
+    // the two need different first moves.
+    const signedOut = detection.state === "signed-out";
 
+    // Only used in the tucked-away "do it yourself" fallback.
     const installCommand = isWindows
       ? "irm https://claude.ai/install.ps1 | iex"
       : "curl -fsSL https://claude.ai/install.sh | bash";
 
-    const terminalName = isWindows ? "PowerShell" : "Terminal";
-    const openInstructions = isMac
-      ? "Press Cmd+Space, type 'Terminal', and press Enter"
-      : isWindows
-      ? "Press the Windows key, type 'PowerShell', and press Enter"
-      : "Open your terminal application";
-
-    const pasteInstructions = isWindows
-      ? "Right-click in the PowerShell window to paste"
-      : "Press Cmd+V to paste";
-
-    const claudeDesktopPrompt = `I need you to install Claude Code on my machine. Here's what to do:
-
-1. Check if it's already installed by running: ${isWindows ? "where claude" : "which claude"}
-2. If not found, install it by running: ${installCommand}
-3. After install, verify it works by running: ${isWindows ? "where claude" : "which claude"}
-4. Then run: claude
-   My browser will open to log in — that's expected. Once I've logged in, tell me to come back to Obsidian and reopen the Hyo panel.
-
-Be friendly and walk me through each step. I might not be technical.`;
-
     return (
       <div className="hyo-app">
         <div className="hyo-onboarding">
-          <h3>Welcome to Hyo</h3>
+          <h3>
+            {signedOut ? "You're almost there — just sign in" : "Let's get Claude set up"}
+          </h3>
           <p className="hyo-onboarding-intro">
-            Hyo needs Claude Code installed to work. This is a one-time setup
-            that takes about 2 minutes.
+            {signedOut
+              ? "Claude is installed and working on your machine. It just needs you to sign in to your Anthropic account."
+              : "Hyo runs on Claude Code. It's a one-time setup, and Hyo does it for you — no terminal, nothing to copy."}
           </p>
+
+          <div className="hyo-onboarding-option-quick">
+            <strong>{signedOut ? "Sign in" : "Set it up for you"}</strong>
+            <p className="hyo-step-instruction">
+              {signedOut
+                ? "This opens your browser to approve. Once you're signed in, Hyo starts on its own."
+                : "Install Claude, then sign in when your browser opens. Hyo handles the rest."}
+            </p>
+            <div className="hyo-setup-actions">
+              {!signedOut && (
+                <button
+                  className="hyo-copy-prompt-button"
+                  onClick={doInstall}
+                  disabled={setupBusy}
+                >
+                  Install Claude
+                </button>
+              )}
+              <button
+                className="hyo-copy-prompt-button"
+                onClick={doSignIn}
+                disabled={setupBusy}
+              >
+                Sign in to Claude
+              </button>
+              <button
+                className="hyo-copy-prompt-button"
+                onClick={() => runDetection()}
+                disabled={setupBusy}
+              >
+                Re-check
+              </button>
+            </div>
+            {setupMsg && <p className="hyo-step-note">{setupMsg}</p>}
+          </div>
+
           <p className="hyo-onboarding-intro">
             <a href="https://www.loom.com/share/9fecabcdda3c4e83bae142d67838c2fa" target="_blank" rel="noopener">
               Watch the install guide →
@@ -102,120 +179,32 @@ Be friendly and walk me through each step. I might not be technical.`;
             </a>
           </p>
 
-          <div className="hyo-onboarding-option-quick">
-            <strong>Quickest way: Let Claude do it</strong>
-            <p className="hyo-step-instruction">
-              Open the Claude desktop app, switch to the Code tab, and paste
-              this prompt. Claude will handle the installation for you.
-            </p>
-            <button
-              className="hyo-copy-prompt-button"
-              onClick={(e) => {
-                navigator.clipboard.writeText(claudeDesktopPrompt);
-                const btn = e.currentTarget;
-                btn.textContent = "Copied!";
-                setTimeout(() => {
-                  btn.textContent = "Copy install prompt";
-                }, 2000);
-              }}
-            >
-              Copy install prompt
-            </button>
-            <p className="hyo-step-note">
-              Once Claude Code is installed, close and reopen this panel.
-            </p>
-          </div>
-
-          <div className="hyo-onboarding-divider">
-            <span>or install manually</span>
-          </div>
-
-          <div className="hyo-onboarding-steps">
-            <div className="hyo-onboarding-step">
-              <strong>Step 1: Open {terminalName}</strong>
-              <p className="hyo-step-instruction">{openInstructions}</p>
-              <p className="hyo-step-note">
-                Don't worry — you won't need to use {terminalName} after this
-                initial setup.
+          <details className="hyo-onboarding-troubleshooting">
+            <summary>Prefer to do it yourself, or having trouble?</summary>
+            <div className="hyo-troubleshooting-content">
+              <p>
+                You'll need a Claude account (Pro, Max, Team or Enterprise) — the
+                same login you use at{" "}
+                <a href="https://claude.ai" target="_blank" rel="noopener">
+                  claude.ai
+                </a>
+                .
               </p>
-            </div>
-
-            <div className="hyo-onboarding-step">
-              <strong>Step 2: Install Claude Code</strong>
-              <p className="hyo-step-instruction">
-                Copy this command by clicking the code box:
+              <p>
+                To install Claude yourself, run this in your terminal, then click
+                Re-check:
               </p>
               <code
                 className="hyo-install-command"
                 onClick={(e) => {
                   navigator.clipboard.writeText(installCommand);
                   e.currentTarget.classList.add("copied");
-                  setTimeout(
-                    () => e.currentTarget.classList.remove("copied"),
-                    2000
-                  );
+                  setTimeout(() => e.currentTarget.classList.remove("copied"), 2000);
                 }}
                 title="Click to copy"
               >
                 {installCommand}
               </code>
-              <p className="hyo-step-instruction">
-                {pasteInstructions}, then press Enter.
-              </p>
-              <p className="hyo-step-note">
-                You'll see text appear — this is normal. The installation takes
-                about 30 seconds.
-              </p>
-            </div>
-
-            <div className="hyo-onboarding-step">
-              <strong>Step 3: Start Claude Code</strong>
-              <p className="hyo-step-instruction">
-                When the installation finishes, type <code>claude</code> and
-                press Enter.
-              </p>
-              <p className="hyo-step-note">
-                Your browser will open asking you to log in with your Anthropic
-                account (the same one you use for Claude.ai).
-              </p>
-            </div>
-
-            <div className="hyo-onboarding-step">
-              <strong>Step 4: Reload Hyo</strong>
-              <p className="hyo-step-instruction">
-                Close and reopen this panel using the Hyo icon in the sidebar.
-              </p>
-            </div>
-          </div>
-
-          <details className="hyo-onboarding-troubleshooting">
-            <summary>Troubleshooting</summary>
-            <div className="hyo-troubleshooting-content">
-              <p>
-                <strong>Command not found after installation?</strong>
-              </p>
-              <p>
-                Close {terminalName} completely, then open it again. The{" "}
-                <code>claude</code> command will be available in the new window.
-              </p>
-              <p>
-                <strong>Claude installed in a different location?</strong>
-              </p>
-              <p>
-                Go to Settings → Hyo Plugin and update the CLI path to where
-                Claude Code is installed on your machine.
-              </p>
-              <p>
-                <strong>Need a Claude account?</strong>
-              </p>
-              <p>
-                Claude Code requires a Pro, Max, Team, or Enterprise account.
-                Sign up at{" "}
-                <a href="https://claude.ai" target="_blank" rel="noopener">
-                  claude.ai
-                </a>
-                .
-              </p>
             </div>
           </details>
         </div>

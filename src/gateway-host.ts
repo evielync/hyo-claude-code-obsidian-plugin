@@ -1062,6 +1062,7 @@ export function startGatewayHost(config: GatewayHostConfig): void {
           "/usr/local/bin",
           "/opt/homebrew/bin",
           "/opt/homebrew/sbin",
+          path.join(home, ".local", "bin"),
           path.join(home, ".npm-global", "bin"),
           "/usr/bin",
           "/bin",

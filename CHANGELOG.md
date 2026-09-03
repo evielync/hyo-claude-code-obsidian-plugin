@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.11
+
+**The one where Hyo sets Claude up for you**
+
+- **A new Setup tab that gets you running without ever touching a terminal.** Install Claude Code and sign in to your account straight from inside Hyo. Signing in opens a browser tab to approve — that's the only thing you do by hand. No commands to copy, no terminal window.
+- **Hyo now checks Claude by actually running it, not by spotting a file.** The old check could show a green tick for a Claude that was broken or not signed in, then fail the moment you sent a message. Now "ready" means Hyo ran Claude, got its version, and confirmed you're signed in.
+- **The first-run screen knows what you actually need.** It tells apart "Claude isn't installed" from "Claude's installed, you just need to sign in", and gives you the one button that fixes it.
+- **Auto-detect finds every Claude on your machine and picks one that works** — including installs from nvm, fnm or a path you set yourself, and it sorts out which one to use when you have more than one.
+
 ## 0.5.10
 
 **The one where Auto-detect finally finds Claude**
