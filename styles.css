@@ -2617,6 +2617,54 @@ button.hyo-ask-send:disabled {
 
 .hyo-ts-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--background-primary-alt); }
 
+/* Search bar */
+.hyo-ts-search {
+  display: flex; align-items: center; gap: 6px;
+  padding: 9px 12px 0; background: var(--background-primary-alt);
+}
+.hyo-ts-search-field {
+  flex: 1; display: flex; align-items: center; gap: 6px; min-width: 0;
+  background: var(--background-primary); border: 1px solid var(--background-modifier-border);
+  border-radius: 8px; padding: 0 8px; height: 30px;
+}
+.hyo-ts-search-field:focus-within { border-color: var(--interactive-accent); }
+.hyo-ts-search-field svg { flex: none; color: var(--text-faint); }
+/* Obsidian styles every text input (background, border, radius, focus glow);
+   the field wrapper draws the one box, so the input itself draws nothing. */
+.hyo-ts-search .hyo-ts-search-field input.hyo-ts-search-input,
+.hyo-ts-search .hyo-ts-search-field input.hyo-ts-search-input:focus,
+.hyo-ts-search .hyo-ts-search-field input.hyo-ts-search-input:active,
+.hyo-ts-search .hyo-ts-search-field input.hyo-ts-search-input:focus-visible {
+  flex: 1; min-width: 0; height: 100%; padding: 0; margin: 0;
+  background: transparent; border: none; border-radius: 0; box-shadow: none; outline: none;
+  font-size: 12.5px; color: var(--text-normal);
+}
+.hyo-ts-search .hyo-ts-search-input::placeholder { color: var(--text-faint); }
+.hyo-ts-search .hyo-ts-search-clear {
+  flex: none; display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; padding: 0; border: none; border-radius: 50%;
+  background: transparent; color: var(--text-faint); cursor: pointer; box-shadow: none;
+}
+.hyo-ts-search .hyo-ts-search-clear:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+/* Full text is Obsidian's own switch (.checkbox-container), label beside it. */
+.hyo-ts-search .hyo-ts-search-mode {
+  flex: none; display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+  font-size: 11.5px; font-weight: 500; white-space: nowrap; color: var(--text-muted);
+  user-select: none;
+}
+.hyo-ts-search .hyo-ts-search-mode-on { color: var(--text-normal); }
+.hyo-ts-search .hyo-ts-search-mode .checkbox-container { margin: 0; }
+.hyo-ts-search .hyo-ts-refresh {
+  flex: none; display: flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; padding: 0; border-radius: 8px; cursor: pointer;
+  background: transparent; border: 1px solid var(--background-modifier-border);
+  color: var(--text-muted); box-shadow: none;
+}
+.hyo-ts-search .hyo-ts-refresh:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+.hyo-ts-search .hyo-ts-refresh-busy svg { animation: hyo-ts-spin .7s linear infinite; }
+@keyframes hyo-ts-spin { to { transform: rotate(360deg); } }
+.hyo-ts-searching { padding: 6px 12px 0; font-size: 11px; color: var(--text-faint); }
+
 /* Filters */
 .hyo-ts-filters {
   display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;
@@ -5088,6 +5136,48 @@ button.hyo-ask-send:disabled {
   font-size: 8.5px; font-weight: 700; line-height: 13px; text-align: center;
 }
 .is-mobile .hyo-ts-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--background-primary-alt); }
+
+/* Search bar */
+.is-mobile .hyo-ts-search {
+  display: flex; align-items: center; gap: 6px;
+  padding: 9px 12px 0; background: var(--background-primary-alt);
+}
+.is-mobile .hyo-ts-search-field {
+  flex: 1; display: flex; align-items: center; gap: 6px; min-width: 0;
+  background: var(--background-primary); border: 1px solid var(--background-modifier-border);
+  border-radius: 8px; padding: 0 8px; height: 34px;
+}
+.is-mobile .hyo-ts-search-field:focus-within { border-color: var(--interactive-accent); }
+.is-mobile .hyo-ts-search-field svg { flex: none; color: var(--text-faint); }
+.is-mobile .hyo-ts-search .hyo-ts-search-field input.hyo-ts-search-input,
+.is-mobile .hyo-ts-search .hyo-ts-search-field input.hyo-ts-search-input:focus,
+.is-mobile .hyo-ts-search .hyo-ts-search-field input.hyo-ts-search-input:active,
+.is-mobile .hyo-ts-search .hyo-ts-search-field input.hyo-ts-search-input:focus-visible {
+  flex: 1; min-width: 0; height: 100%; padding: 0; margin: 0;
+  background: transparent; border: none; border-radius: 0; box-shadow: none; outline: none;
+  font-size: 16px; color: var(--text-normal);
+}
+.is-mobile .hyo-ts-search .hyo-ts-search-input::placeholder { color: var(--text-faint); }
+.is-mobile .hyo-ts-search .hyo-ts-search-clear {
+  flex: none; display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0; border: none; border-radius: 50%;
+  background: transparent; color: var(--text-faint); cursor: pointer; box-shadow: none;
+}
+.is-mobile .hyo-ts-search .hyo-ts-search-mode {
+  flex: none; display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+  font-size: 12px; font-weight: 500; white-space: nowrap; color: var(--text-muted);
+  user-select: none;
+}
+.is-mobile .hyo-ts-search .hyo-ts-search-mode-on { color: var(--text-normal); }
+.is-mobile .hyo-ts-search .hyo-ts-search-mode .checkbox-container { margin: 0; }
+.is-mobile .hyo-ts-search .hyo-ts-refresh {
+  flex: none; display: flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; padding: 0; border-radius: 8px; cursor: pointer;
+  background: transparent; border: 1px solid var(--background-modifier-border);
+  color: var(--text-muted); box-shadow: none;
+}
+.is-mobile .hyo-ts-search .hyo-ts-refresh-busy svg { animation: hyo-ts-spin .7s linear infinite; }
+.is-mobile .hyo-ts-searching { padding: 6px 12px 0; font-size: 11px; color: var(--text-faint); }
 .is-mobile /* Filters */
 .hyo-ts-filters {
   display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;

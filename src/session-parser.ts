@@ -288,6 +288,87 @@ function extractLastMessage(filePath: string): {
   return { role: null, snippet: "" };
 }
 
+// Full-text search across past sessions. Reads each session file and looks for
+// the query inside user and assistant text blocks (tool calls, tool results and
+// system reminders are skipped — nobody remembers a conversation by its grep
+// output). Returns a session id → matched line map, so the task list can show
+// where the hit was instead of the last message. Bounded per file so a giant
+// session can't stall the UI.
+const SEARCH_MAX_BYTES = 8 * 1024 * 1024;
+
+export function searchSessionText(
+  cwd: string,
+  sessionIds: string[],
+  query: string
+): Record<string, string> {
+  const needle = query.trim().toLowerCase();
+  const hits: Record<string, string> = {};
+  if (!needle) return hits;
+  const dirs = getCandidateProjectDirs(cwd);
+  for (const id of sessionIds) {
+    for (const dir of dirs) {
+      const full = path.join(dir, `${id}.jsonl`);
+      let match: string | null = null;
+      try {
+        if (!fs.existsSync(full)) continue;
+        match = findInSessionFile(full, needle);
+      } catch {
+        continue;
+      }
+      if (match) hits[id] = match;
+      break; // same file under every candidate dir — one read is enough
+    }
+  }
+  return hits;
+}
+
+function findInSessionFile(full: string, needle: string): string | null {
+  const st = fs.statSync(full);
+  const len = Math.min(st.size, SEARCH_MAX_BYTES);
+  const fd = fs.openSync(full, "r");
+  const buf = Buffer.alloc(len);
+  try {
+    fs.readSync(fd, buf, 0, len, 0);
+  } finally {
+    fs.closeSync(fd);
+  }
+  for (const line of buf.toString("utf8").split("\n")) {
+    if (!line.trim() || !line.toLowerCase().includes(needle)) continue;
+    let o: any;
+    try {
+      o = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (o?.type !== "user" && o?.type !== "assistant") continue;
+    const text = messageText(o.message?.content);
+    const flat = text.replace(/[#*`>_]/g, "").replace(/\s+/g, " ");
+    const at = flat.toLowerCase().indexOf(needle);
+    if (at === -1) continue;
+    const start = Math.max(0, at - 40);
+    const end = Math.min(flat.length, start + 100);
+    return (start > 0 ? "…" : "") + flat.slice(start, end).trim() + (end < flat.length ? "…" : "");
+  }
+  return null;
+}
+
+// Plain text of a message: string content as-is, block content joined from its
+// text blocks only.
+function messageText(content: any): string {
+  const raw =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content
+            .filter((c: any) => c?.type === "text" && typeof c.text === "string")
+            .map((c: any) => c.text)
+            .join("\n")
+        : "";
+  return raw
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
+    .replace(/<file\s+name="[^"]+">[\s\S]*?<\/file>/g, "");
+}
+
 function snip(text: string): string {
   const line = text
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")

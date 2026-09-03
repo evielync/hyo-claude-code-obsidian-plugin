@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import type { TabSession } from "../hooks/useSessionManager";
 import type { PastSession } from "../session-parser";
 import type { TaskMeta } from "../../settings";
@@ -8,6 +8,7 @@ import {
   type BoardTask,
   type TaskState,
 } from "../task-state";
+import { GatewayClient, type ConnectionStatus } from "../gateway-client";
 
 interface TaskScreenProps {
   tabs: TabSession[];
@@ -17,7 +18,55 @@ interface TaskScreenProps {
   onCloseTask: (task: BoardTask) => void;
   onTogglePin: (task: BoardTask) => void;
   onRenameTask: (task: BoardTask, title: string) => void;
+  // Full-text search: session id → the matched line. Debounced by the screen.
+  onSearchText?: (query: string) => Promise<Record<string, string>>;
+  // Re-ask the gateway for the session list. Sessions started on the desktop
+  // only appear on the phone once the list is fetched again.
+  onRefresh?: () => void;
+  // Search and refresh both go through the gateway, so the bar only shows
+  // while it's connected.
+  gatewayUrl?: string;
 }
+
+function useGatewayStatus(gatewayUrl: string | undefined): ConnectionStatus {
+  const [status, setStatus] = useState<ConnectionStatus>("disconnected");
+  useEffect(() => {
+    if (!gatewayUrl) {
+      setStatus("disconnected");
+      return;
+    }
+    const client = GatewayClient.get(gatewayUrl);
+    setStatus(client.getStatus());
+    return client.onStatusChange(setStatus);
+  }, [gatewayUrl]);
+  return status;
+}
+
+// A search matches on the title and the peek instantly; with full text on, a
+// hit inside the conversation also counts and its line replaces the peek.
+function matchesQuery(
+  task: BoardTask,
+  needle: string,
+  textHits: Record<string, string>
+): boolean {
+  if (!needle) return true;
+  if (task.title.toLowerCase().includes(needle)) return true;
+  if (task.peek.toLowerCase().includes(needle)) return true;
+  return !!(task.cliSessionId && textHits[task.cliSessionId]);
+}
+
+const SearchIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <circle cx="7" cy="7" r="4.5" />
+    <path d="M10.5 10.5L14 14" />
+  </svg>
+);
+const RefreshIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />
+    <path d="M13.5 2.5v3h-3" />
+  </svg>
+);
 
 const PILL_LABEL: Partial<Record<TaskState, string>> = {
   working: "Working",
@@ -174,14 +223,74 @@ export function TaskScreen({
   onCloseTask,
   onTogglePin,
   onRenameTask,
+  onSearchText,
+  onRefresh,
+  gatewayUrl,
 }: TaskScreenProps) {
   const [filter, setFilter] = useState<TaskState | "all">("all");
   const [visible, setVisible] = useState(PAGE);
+  const [query, setQuery] = useState("");
+  const [fullText, setFullText] = useState(false);
+  const [textHits, setTextHits] = useState<Record<string, string>>({});
+  const [searching, setSearching] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const showSearch = useGatewayStatus(gatewayUrl) === "connected";
+  const needle = query.trim().toLowerCase();
 
-  const all = buildTaskList(tabs, pastSessions, tasks);
+  // Full-text search runs after typing pauses, and a stale answer never lands
+  // over a newer query.
+  useEffect(() => {
+    if (!fullText || !needle || !onSearchText) {
+      setTextHits({});
+      setSearching(false);
+      return;
+    }
+    let live = true;
+    setSearching(true);
+    const t = setTimeout(() => {
+      onSearchText(query)
+        .then((hits) => {
+          if (!live) return;
+          setTextHits(hits || {});
+          setSearching(false);
+        })
+        .catch((e) => {
+          console.error("[hyo] history search failed:", e);
+          if (!live) return;
+          setTextHits({});
+          setSearching(false);
+        });
+    }, 300);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [query, needle, fullText, onSearchText]);
+
+  // The list fetch has no completion signal, so the spinner runs for a beat —
+  // long enough to show the tap landed.
+  const handleRefresh = () => {
+    if (!onRefresh) return;
+    setRefreshing(true);
+    onRefresh();
+    setTimeout(() => setRefreshing(false), 800);
+  };
+
+  const allTasks = buildTaskList(tabs, pastSessions, tasks);
+  // While searching, a hit's matched line stands in for the peek so you can
+  // see why it matched. Searching also reaches closed conversations.
+  const all = needle
+    ? allTasks
+        .filter((t) => matchesQuery(t, needle, textHits))
+        .map((t) => {
+          const hit = t.cliSessionId ? textHits[t.cliSessionId] : "";
+          return hit && !t.title.toLowerCase().includes(needle) ? { ...t, peek: hit } : t;
+        })
+    : allTasks;
   const count = (s: TaskState) => all.filter((t) => t.state === s).length;
-  // "All" means current — closed conversations only show under the Closed filter.
-  const current = all.filter((t) => t.state !== "closed");
+  // "All" means current — closed conversations only show under the Closed
+  // filter, unless a search is on, when everything that matches is shown.
+  const current = needle ? all : all.filter((t) => t.state !== "closed");
 
   // Always show every filter, even at zero — a stable, predictable bar.
   const FILTERS: { key: TaskState; label: string }[] = [
@@ -203,6 +312,57 @@ export function TaskScreen({
 
   return (
     <div className="hyo-ts-screen">
+      {showSearch && (
+        <div className="hyo-ts-search">
+          <label className="hyo-ts-search-field">
+            <SearchIcon />
+            <input
+              className="hyo-ts-search-input"
+              type="text"
+              placeholder={fullText ? "Search conversations…" : "Search titles…"}
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setVisible(PAGE);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setQuery("");
+              }}
+            />
+            {query && (
+              <button
+                className="hyo-ts-search-clear"
+                title="Clear"
+                onClick={() => setQuery("")}
+              >
+                ×
+              </button>
+            )}
+          </label>
+          {onSearchText && (
+            <span
+              className={`hyo-ts-search-mode${fullText ? " hyo-ts-search-mode-on" : ""}`}
+              title={fullText ? "Searching inside conversations" : "Titles only — switch on to search inside conversations"}
+              onClick={() => setFullText((v) => !v)}
+            >
+              <span>Full text</span>
+              <div className={`checkbox-container${fullText ? " is-enabled" : ""}`}>
+                <input type="checkbox" checked={fullText} readOnly tabIndex={-1} />
+              </div>
+            </span>
+          )}
+          {onRefresh && (
+            <button
+              className={`hyo-ts-refresh${refreshing ? " hyo-ts-refresh-busy" : ""}`}
+              title="Refresh — pick up conversations started on the desktop"
+              onClick={handleRefresh}
+            >
+              <RefreshIcon />
+            </button>
+          )}
+        </div>
+      )}
+      {searching && <div className="hyo-ts-searching">Searching inside conversations…</div>}
       <div className="hyo-ts-filters">
         <button
           className={`hyo-ts-filter${filter === "all" ? " hyo-ts-filter-on" : ""}`}
@@ -232,7 +392,15 @@ export function TaskScreen({
       </div>
       <div className="hyo-ts-list">
         {filtered.length === 0 ? (
-          <div className="hyo-ts-empty">Nothing here.</div>
+          <div className="hyo-ts-empty">
+            {needle
+              ? fullText
+                ? searching
+                  ? "Searching…"
+                  : "No conversations mention that."
+                : "No titles match. Try Full text to search inside conversations."
+              : "Nothing here."}
+          </div>
         ) : (
           groups.map((group) => (
             <div key={group.label} className="hyo-ts-group-block">

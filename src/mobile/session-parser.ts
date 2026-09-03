@@ -54,6 +54,17 @@ export async function listPastSessions(gatewayUrl: string): Promise<PastSession[
   }
 }
 
+// Full-text search, run on the gateway. Resolves to {} on failure so the
+// history screen shows no extra hits rather than breaking.
+export async function searchPastSessions(gatewayUrl: string, query: string): Promise<Record<string, string>> {
+  try {
+    return await GatewayClient.get(gatewayUrl).searchSessions(query);
+  } catch (e) {
+    console.error("[hyo] Failed to search past sessions:", e);
+    return {};
+  }
+}
+
 export async function saveCustomTitle(gatewayUrl: string, sessionId: string, title: string): Promise<void> {
   try {
     await GatewayClient.get(gatewayUrl).rename(sessionId, title);

@@ -4,6 +4,7 @@ import { Notice } from "obsidian";
 import { ChatMessages } from "./ChatMessages";
 import { ChatTabs } from "./ChatTabs";
 import { TaskScreen } from "./TaskScreen";
+import { searchPastSessions } from "../session-parser";
 import type { BoardTask } from "../task-state";
 import type { TaskMeta } from "../../settings";
 import type { useSessionManager } from "../hooks/useSessionManager";
@@ -307,6 +308,12 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
   // replacing the standalone Ask First toggle in the input bar. On a phone
   // there's no room for separate pickers, so they live behind one chip.
   const agents = useAgents(plugin.settings.gatewayUrl);
+
+  // Full-text search for the history screen — the gateway reads the files.
+  const searchPastText = useCallback(
+    (query: string) => searchPastSessions(plugin.settings.gatewayUrl, query),
+    [plugin.settings.gatewayUrl]
+  );
   const [sessionPanelOpen, setSessionPanelOpen] = useState(false);
   const currentAgent = plugin.settings.defaultAgent || agents[0]?.name || "default";
   const currentModel = plugin.settings.model || "claude-sonnet-5";
@@ -769,6 +776,9 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           onCloseTask={handleCloseTask}
           onTogglePin={handleTogglePin}
           onRenameTask={handleRenameTask}
+          onSearchText={searchPastText}
+          onRefresh={refreshPastSessions}
+          gatewayUrl={plugin.settings.gatewayUrl}
         />
         <ChatTabs
           tabs={tabs}

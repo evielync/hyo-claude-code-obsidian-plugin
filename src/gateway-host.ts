@@ -368,6 +368,69 @@ function listSessions(cwd: string) {
   return rows.slice(0, 150);
 }
 
+// Full-text search for the phone's history screen. Same rules as desktop's
+// searchSessionText: user/assistant text only, first hit per session, a short
+// window around the match. The phone never sees the files, so this runs here.
+const SEARCH_MAX_BYTES = 8 * 1024 * 1024;
+
+function searchSessions(cwd: string, query: string): Record<string, string> {
+  const needle = String(query || "").trim().toLowerCase();
+  const hits: Record<string, string> = {};
+  if (!needle) return hits;
+  const dir = getProjectDir(cwd);
+  if (!fs.existsSync(dir)) return hits;
+  for (const f of fs.readdirSync(dir)) {
+    if (!f.endsWith(".jsonl")) continue;
+    const full = path.join(dir, f);
+    try {
+      const st = fs.statSync(full);
+      if (st.size < 500) continue;
+      const len = Math.min(st.size, SEARCH_MAX_BYTES);
+      const fd = fs.openSync(full, "r");
+      const buf = Buffer.alloc(len);
+      try {
+        fs.readSync(fd, buf, 0, len, 0);
+      } finally {
+        fs.closeSync(fd);
+      }
+      for (const line of buf.toString("utf8").split("\n")) {
+        if (!line.trim() || !line.toLowerCase().includes(needle)) continue;
+        let o: any;
+        try {
+          o = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (o?.type !== "user" && o?.type !== "assistant") continue;
+        const c = o.message?.content;
+        const text = (
+          typeof c === "string"
+            ? c
+            : Array.isArray(c)
+              ? c
+                  .filter((x: any) => x?.type === "text" && typeof x.text === "string")
+                  .map((x: any) => x.text)
+                  .join("\n")
+              : ""
+        )
+          .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
+          .replace(/<file\s+name="[^"]+">[\s\S]*?<\/file>/g, "");
+        const flat = text.replace(/[#*`>_]/g, "").replace(/\s+/g, " ");
+        const at = flat.toLowerCase().indexOf(needle);
+        if (at === -1) continue;
+        const start = Math.max(0, at - 40);
+        const end = Math.min(flat.length, start + 100);
+        hits[f.replace(/\.jsonl$/, "")] =
+          (start > 0 ? "…" : "") + flat.slice(start, end).trim() + (end < flat.length ? "…" : "");
+        break;
+      }
+    } catch {
+      // unreadable file — skip it
+    }
+  }
+  return hits;
+}
+
 function getHistoryLines(cwd: string, sessionId: string) {
   const dir = getProjectDir(cwd);
   const full = path.join(dir, `${sessionId}.jsonl`);
@@ -1129,6 +1192,9 @@ export function startGatewayHost(config: GatewayHostConfig): void {
             break;
           case "get_history":
             send({ type: "history", sessionId: m.sessionId, lines: getHistoryLines(cfg.vault, m.sessionId) });
+            break;
+          case "search_sessions":
+            send({ type: "search_results", query: m.query, hits: searchSessions(cfg.vault, m.query) });
             break;
           case "rename":
             saveCustomTitle(cfg.vault, m.sessionId, m.title);

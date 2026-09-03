@@ -4,6 +4,7 @@ import { Notice } from "obsidian";
 import { ChatMessages } from "./ChatMessages";
 import { ChatTabs } from "./ChatTabs";
 import { TaskScreen } from "./TaskScreen";
+import { searchSessionText } from "../session-parser";
 import type { BoardTask } from "../task-state";
 import type { TaskMeta } from "../settings";
 import { HyoStatusBar } from "./HyoStatusBar";
@@ -428,6 +429,18 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
 
   // Slash command state (checks both .claude/skills and skills/)
   const skills = useSkills(workingDirectory);
+
+  // Full-text search for the history screen — reads the session files off
+  // disk, scoped to the sessions already in the list.
+  const searchPastText = useCallback(
+    async (query: string) =>
+      searchSessionText(
+        workingDirectory,
+        pastSessions.map((s) => s.id),
+        query
+      ),
+    [workingDirectory, pastSessions]
+  );
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashFilter, setSlashFilter] = useState("");
   const [slashSelectedIdx, setSlashSelectedIdx] = useState(0);
@@ -960,6 +973,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           onCloseTask={handleCloseTask}
           onTogglePin={handleTogglePin}
           onRenameTask={handleRenameTask}
+          onSearchText={searchPastText}
         />
         {showReleaseNotes && (
           <ReleaseNotes onClose={() => setShowReleaseNotes(false)} />

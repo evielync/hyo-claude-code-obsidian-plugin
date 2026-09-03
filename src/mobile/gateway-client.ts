@@ -56,6 +56,7 @@ export class GatewayClient {
 
   private sessionsQueue: PendingRPC<any[]>[] = [];
   private agentsQueue: PendingRPC<any[]>[] = [];
+  private searchQueue: PendingRPC<Record<string, string>>[] = [];
   private historyPending = new Map<string, PendingRPC<any[]>>();
   private renamePending = new Map<string, PendingRPC<string>>();
   private titlePending = new Map<string, PendingRPC<string | null>>();
@@ -206,6 +207,11 @@ export class GatewayClient {
       p.reject(new Error("Gateway connection closed"));
     }
     this.agentsQueue = [];
+    for (const p of this.searchQueue) {
+      clearTimeout(p.timer);
+      p.reject(new Error("Gateway connection closed"));
+    }
+    this.searchQueue = [];
     for (const map of [this.historyPending, this.renamePending, this.titlePending]) {
       for (const p of map.values()) {
         clearTimeout(p.timer);
@@ -250,6 +256,14 @@ export class GatewayClient {
         if (pending) {
           clearTimeout(pending.timer);
           pending.resolve(msg.agents || []);
+        }
+        return;
+      }
+      case "search_results": {
+        const pending = this.searchQueue.shift();
+        if (pending) {
+          clearTimeout(pending.timer);
+          pending.resolve(msg.hits || {});
         }
         return;
       }
@@ -359,6 +373,20 @@ export class GatewayClient {
       }, RPC_TIMEOUT_MS);
       this.sessionsQueue.push({ resolve, reject, timer });
       this.send({ type: "list_sessions" });
+    });
+  }
+
+  // Full-text search over past sessions. The gateway reads the files; the
+  // phone gets back session id → matched line.
+  searchSessions(query: string): Promise<Record<string, string>> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const idx = this.searchQueue.findIndex((p) => p.resolve === resolve);
+        if (idx >= 0) this.searchQueue.splice(idx, 1);
+        reject(new Error("search_sessions timed out"));
+      }, RPC_TIMEOUT_MS);
+      this.searchQueue.push({ resolve, reject, timer });
+      this.send({ type: "search_sessions", query });
     });
   }
 

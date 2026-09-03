@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.12
+
+**The one where you can find that conversation again**
+
+- **Search your history.** There's a search bar at the top of the History screen now. Start typing and the list narrows to the conversations whose title matches, closed ones included, so the chat from three weeks ago is a few letters away instead of a scroll.
+- **Search inside conversations, not just titles.** Tap **Full text** next to the search bar and Hyo looks through what was actually said in every conversation. Each match shows you the line it found, so you can see why it turned up before you open it.
+- **A refresh button on the phone.** Started a conversation on your desktop and can't see it on your phone yet? Tap the refresh button next to the search bar and it pulls the latest list from your Mac. On desktop the list reads straight from disk, so it's always current and doesn't need one.
+
 ## 0.5.11
 
 **The one where Hyo sets Claude up for you**
