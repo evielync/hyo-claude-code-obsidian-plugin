@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.13
+
+**The one where the refresh button works the other way too**
+
+- **Desktop's History screen has a refresh button now.** Turns out it could go stale in the exact same way the phone could — it only re-reads your conversations from disk when Hyo starts up or you close the History screen, so a chat you started on your phone wouldn't show up on your Mac until you closed History and opened it again. Same button that landed on mobile in 0.5.12, now next to desktop's search bar too.
+
 ## 0.5.12
 
 **The one where you can find that conversation again**

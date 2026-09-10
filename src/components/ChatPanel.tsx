@@ -974,6 +974,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           onTogglePin={handleTogglePin}
           onRenameTask={handleRenameTask}
           onSearchText={searchPastText}
+          onRefresh={refreshPastSessions}
         />
         {showReleaseNotes && (
           <ReleaseNotes onClose={() => setShowReleaseNotes(false)} />

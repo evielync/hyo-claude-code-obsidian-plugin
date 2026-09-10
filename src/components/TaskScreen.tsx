@@ -19,6 +19,10 @@ interface TaskScreenProps {
   onRenameTask: (task: BoardTask, title: string) => void;
   // Full-text search: session id → the matched line. Debounced by the screen.
   onSearchText?: (query: string) => Promise<Record<string, string>>;
+  // Re-read past sessions from disk. Desktop reads on mount and when the
+  // screen closes, but a conversation started elsewhere (mobile, another
+  // window) while this screen is open won't appear until this runs.
+  onRefresh?: () => void;
 }
 
 // A search matches on the title and the peek instantly; with full text on, a
@@ -203,6 +207,7 @@ export function TaskScreen({
   onTogglePin,
   onRenameTask,
   onSearchText,
+  onRefresh,
 }: TaskScreenProps) {
   const [filter, setFilter] = useState<TaskState | "all">("all");
   const [visible, setVisible] = useState(PAGE);
@@ -210,8 +215,18 @@ export function TaskScreen({
   const [fullText, setFullText] = useState(false);
   const [textHits, setTextHits] = useState<Record<string, string>>({});
   const [searching, setSearching] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const showSearch = true;
   const needle = query.trim().toLowerCase();
+
+  // The list fetch has no completion signal, so the spinner runs for a beat —
+  // long enough to show the tap landed. Matches the mobile refresh button.
+  const handleRefresh = () => {
+    if (!onRefresh) return;
+    setRefreshing(true);
+    onRefresh();
+    setTimeout(() => setRefreshing(false), 800);
+  };
 
   // Full-text search runs after typing pauses, and a stale answer never lands
   // over a newer query.
@@ -317,6 +332,15 @@ export function TaskScreen({
                 <input type="checkbox" checked={fullText} readOnly tabIndex={-1} />
               </div>
             </span>
+          )}
+          {onRefresh && (
+            <button
+              className={`hyo-ts-refresh${refreshing ? " hyo-ts-refresh-busy" : ""}`}
+              title="Refresh — pick up conversations started elsewhere"
+              onClick={handleRefresh}
+            >
+              <RefreshIcon />
+            </button>
           )}
         </div>
       )}
