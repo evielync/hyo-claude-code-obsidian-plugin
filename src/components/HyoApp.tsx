@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import type { App } from "obsidian";
 import type HyoPlugin from "../main";
 import { ChatPanel } from "./ChatPanel";
@@ -26,11 +26,13 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
   const [setupBusy, setSetupBusy] = useState(false);
   const vaultPath = (app.vault.adapter as any).basePath as string;
 
-  useEffect(() => {
-    const handler = () => setSettingsVersion((v) => v + 1);
-    window.addEventListener("hyo-settings-changed", handler);
-    return () => window.removeEventListener("hyo-settings-changed", handler);
-  }, []);
+  // Detection only depends on which Claude binary we run (cliPath). Re-running
+  // it blanks the screen (detection → null) and tears the ChatPanel down, so it
+  // must fire only when cliPath actually changes — never on a model, effort or
+  // permission-mode change, which would wipe the in-progress composer draft and
+  // attachments. We still bump settingsVersion so HyoApp re-renders and passes
+  // fresh settings down, but that keeps the panel mounted.
+  const lastCliPathRef = useRef(plugin.settings.cliPath);
 
   const runDetection = React.useCallback(() => {
     setDetection(null);
@@ -41,6 +43,7 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
       // the chat (and sign-in) run the one we just proved works.
       if (result.path && result.path !== plugin.settings.cliPath) {
         plugin.settings.cliPath = result.path;
+        lastCliPathRef.current = result.path;
         await plugin.saveSettings();
       }
       setDetection(result);
@@ -48,8 +51,20 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
   }, [plugin]);
 
   useEffect(() => {
+    const handler = () => {
+      setSettingsVersion((v) => v + 1);
+      if (plugin.settings.cliPath !== lastCliPathRef.current) {
+        lastCliPathRef.current = plugin.settings.cliPath;
+        runDetection();
+      }
+    };
+    window.addEventListener("hyo-settings-changed", handler);
+    return () => window.removeEventListener("hyo-settings-changed", handler);
+  }, [plugin, runDetection]);
+
+  useEffect(() => {
     runDetection();
-  }, [runDetection, settingsVersion]);
+  }, [runDetection]);
 
   // Install Claude in the background — no terminal, just progress text.
   const doInstall = React.useCallback(async () => {
