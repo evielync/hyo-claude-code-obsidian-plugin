@@ -16,8 +16,9 @@ import { VoiceView, type BlobState, type VoicePermission } from "./VoiceView";
 import type { AskQuestionData } from "../hooks/useChatEngine";
 import type { useSessionManager } from "../hooks/useSessionManager";
 import { useVoiceMode } from "../hooks/useVoiceMode";
-import { parseVoiceResponse, lastSentenceBoundary } from "../voice/voice-persona";
+import { parseVoiceResponse, lastSentenceBoundary, HANDOFF_NOTE } from "../voice/voice-persona";
 import { ensureVoiceAssets } from "../voice/voice-assets";
+import { describeToolForVoice } from "../voice/gpt-live";
 import { useSkills, type Skill } from "../hooks/useSkills";
 import { withBundledSkills } from "../bundled-skills";
 import type HyoPlugin from "../main";
@@ -137,6 +138,8 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     openPastSession,
     refreshPastSessions,
     scrollRef,
+    appendVoiceTurn,
+    flushVoiceTurns,
   } = sessionManager;
 
   // ---- Task mode (the History screen) ----
@@ -250,11 +253,53 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
   );
 
   // Voice mode
-  const hasVoiceApiKey = !!plugin.settings.elevenLabsApiKey;
+  const voiceEngine = plugin.settings.voiceEngine || "elevenlabs";
+  const hasVoiceApiKey =
+    voiceEngine === "gpt-live"
+      ? !!plugin.settings.openAiApiKey
+      : !!plugin.settings.elevenLabsApiKey;
   // Stable so the hands-free loop's callbacks don't churn every render.
+  // Anything said on a live call that Claude hasn't seen yet: the voice turns
+  // sitting after the last message that went to Claude. Whatever goes to
+  // Claude next (a hand-off or a typed message) carries them, so it can pick
+  // up the thread; after that they're behind a Claude message and count as seen.
+  const activeMessagesRef = useRef(activeMessages);
+  activeMessagesRef.current = activeMessages;
+  const unseenVoiceBlock = useCallback((): string => {
+    const msgs = activeMessagesRef.current;
+    const lines: string[] = [];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (!m.voice) break;
+      lines.unshift(`${m.role === "user" ? "User" : "You (voice)"}: ${m.content}`);
+    }
+    if (!lines.length) return "";
+    return `[Said on a voice call just now — your voice model handled these turns; you haven't seen them yet]\n${lines.join("\n")}\n[End of voice call excerpt]`;
+  }, []);
+  const sendToClaude = useCallback(
+    (content: string | any[], meta?: { displayText?: string; attachedFileNames?: string[]; handoff?: boolean }) => {
+      const prefix = unseenVoiceBlock();
+      if (!prefix) return sendMessage(content, meta);
+      if (typeof content === "string") {
+        return sendMessage(`${prefix}\n\n${content}`, { ...meta, displayText: meta?.displayText ?? content });
+      }
+      return sendMessage([{ type: "text", text: prefix }, ...content], meta);
+    },
+    [sendMessage, unseenVoiceBlock]
+  );
+
+  // A hand-off from the live call. The spoken turn is already in the thread as
+  // a voice message, so the Claude message shows as a short pointer, and the
+  // reply that follows shows only its work (the voice speaks the words).
+  // displayText is the spoken request itself so titles and search see what
+  // was asked; the thread draws hand-offs as the "↗ Handed to Claude" pointer.
   const handleTranscript = useCallback(
-    (text: string) => sendMessage(text),
-    [sendMessage]
+    (text: string) =>
+      sendToClaude(`${text}\n\n${HANDOFF_NOTE}`, {
+        displayText: text,
+        handoff: true,
+      }),
+    [sendToClaude]
   );
   // Base URL for the bundled Silero/ORT model assets, served from the plugin
   // folder via Obsidian's resource-path scheme (strip the cache token, keep a
@@ -268,7 +313,23 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
       return "";
     }
   }, [plugin.manifest.dir, app.vault.adapter]);
+  // What a GPT-Live call starts out knowing: the personality paragraph from
+  // settings and the open conversation. Read through a ref at call start so
+  // the hook's identity doesn't churn every render.
+  const liveCtxRef = useRef({
+    agent: activeAgent || plugin.settings.defaultAgent || "",
+    personality: plugin.settings.voicePersonality,
+    messages: activeMessages,
+  });
+  liveCtxRef.current = {
+    agent: activeAgent || plugin.settings.defaultAgent || "",
+    personality: plugin.settings.voicePersonality,
+    messages: activeMessages,
+  };
+  const getLiveContext = useCallback(() => liveCtxRef.current, []);
+
   const voiceMode = useVoiceMode({
+    engine: voiceEngine,
     apiKey: plugin.settings.elevenLabsApiKey,
     voiceId: plugin.settings.voiceId,
     playbackSpeed: plugin.settings.voicePlaybackSpeed,
@@ -280,6 +341,11 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
       () => ensureVoiceAssets(app, plugin.manifest.dir || ""),
       [app, plugin.manifest.dir]
     ),
+    openAiApiKey: plugin.settings.openAiApiKey,
+    gptLiveVoice: plugin.settings.gptLiveVoice,
+    getLiveContext,
+    onVoiceTurn: appendVoiceTurn,
+    debugLog: !!plugin.settings.voiceDebugLog,
   });
 
   // Voice view UI state: whether the transcript is flipped open, and which
@@ -373,17 +439,31 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
         spokenSoFarRef.current = "";
       }
 
-      // Index of the assistant message currently being spoken.
+      // Index of the assistant message currently being spoken. Voice turns are
+      // what the call already said — never fed back to be spoken again.
       let idx = -1;
       for (let i = activeMessages.length - 1; i >= 0; i--) {
         const m = activeMessages[i];
-        if (m.role === "assistant" && !m.isCompaction) {
+        if (m.role === "assistant" && !m.isCompaction && !m.voice) {
           idx = i;
           break;
         }
       }
 
-      if (idx !== -1) {
+      if (idx !== -1 && voiceMode.isLive) {
+        // Live call: the voice gets Claude's whole reply once, when it's done,
+        // followed by a "that's complete" note. Sentence-by-sentence pieces
+        // left it believing the hand-off was still running whenever the user
+        // talked over the first one.
+        if (finishedGenerating && speakTurnRef.current !== idx) {
+          speakTurnRef.current = idx;
+          const parsed = parseVoiceResponse(activeMessages[idx].content || "");
+          const spoken = parsed.spoken.trim();
+          voiceMode.finishHandoff(
+            spoken || (parsed.screens.length ? "It's on screen now." : "Done.")
+          );
+        }
+      } else if (idx !== -1) {
         if (speakTurnRef.current !== idx) {
           speakTurnRef.current = idx;
           spokenSoFarRef.current = "";
@@ -420,6 +500,8 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     enqueueSpeech,
     stopAudio,
     plugin.settings.voiceAutoSpeak,
+    voiceMode.isLive,
+    voiceMode.finishHandoff,
   ]);
 
   // Stop audio when switching or closing tabs
@@ -816,11 +898,11 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
       for (const pdf of pdfFiles) {
         blocks.push({ type: "document", source: { type: "base64", media_type: pdf.mediaType, data: pdf.data } });
       }
-      sendMessage(blocks as any, meta);
+      sendToClaude(blocks as any, meta);
     } else {
-      sendMessage(messageText, meta);
+      sendToClaude(messageText, meta);
     }
-  }, [inputValues, activeTabId, attachedFiles, sendMessage, attachmentsDir]);
+  }, [inputValues, activeTabId, attachedFiles, sendToClaude, attachmentsDir]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -889,9 +971,49 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
   let lastAssistantIdx = -1;
   for (let i = activeMessages.length - 1; i >= 0; i--) {
     const m = activeMessages[i];
-    if (m.role === "assistant" && !m.isCompaction) {
+    if (m.role === "assistant" && !m.isCompaction && !m.voice) {
       lastAssistantIdx = i;
       break;
+    }
+  }
+
+  // Live call: each new tool call while Claude works becomes a silent
+  // progress note to the voice (docs: "send an update when a step finishes
+  // or a delay matters"), in plain words.
+  const seenToolsRef = useRef<{ idx: number; count: number }>({ idx: -1, count: 0 });
+  const { notifyProgress } = voiceMode;
+  useEffect(() => {
+    if (!voiceMode.isLive || !activeGenerating) return;
+    let idx = -1;
+    for (let i = activeMessages.length - 1; i >= 0; i--) {
+      const m = activeMessages[i];
+      if (m.role === "assistant" && !m.isCompaction && !m.voice) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx === -1) return;
+    const tcs = activeMessages[idx].toolCalls || [];
+    const seen = seenToolsRef.current.idx === idx ? seenToolsRef.current.count : 0;
+    if (tcs.length > seen) {
+      const t = tcs[tcs.length - 1];
+      notifyProgress(describeToolForVoice(t.name, t.input));
+    }
+    seenToolsRef.current = { idx, count: tcs.length };
+  }, [activeMessages, activeGenerating, voiceMode.isLive, notifyProgress]);
+
+  // Live call: the one line under the Blob. Only while Claude has a hand-off,
+  // and it says whether a sub-agent is on it.
+  let vvWorking = "";
+  if (voiceMode.isLive && activeGenerating) {
+    vvWorking = "Working on it";
+    const tcs = lastAssistantIdx >= 0 ? activeMessages[lastAssistantIdx].toolCalls || [] : [];
+    const agentCall = [...tcs].reverse().find(
+      (t) => (t.name === "Agent" || t.name === "Task") && t.result === null
+    );
+    if (agentCall) {
+      const desc = String(agentCall.input?.description || "").trim();
+      vvWorking = desc ? `Sub-agent running: ${desc}` : "Sub-agent running";
     }
   }
   const lastScreens =
@@ -938,12 +1060,20 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
   // Chime when a NEW permission ask OR question appears in voice mode — she may
   // not be looking at the screen.
   const attentionId = vvPermission?.requestId ?? vvQuestion?.id ?? null;
+  const attentionText = vvPermission
+    ? `A permission ask is on the user's screen: ${vvPermission.description} Tell them to allow or deny it on screen.`
+    : vvQuestion
+    ? "The agent is asking the user a multiple-choice question on screen. Tell them to answer it there."
+    : "";
+  const { notifyAttention } = voiceMode;
   useEffect(() => {
     if (attentionId && attentionId !== prevPermIdRef.current && inVoiceView) {
       playPermissionChime();
+      // On a live call the voice can say it, too — she may not be looking.
+      if (attentionText) notifyAttention(attentionText);
     }
     prevPermIdRef.current = attentionId;
-  }, [attentionId, inVoiceView]);
+  }, [attentionId, inVoiceView, attentionText, notifyAttention]);
 
   // The History screen is a full-panel view you scroll, reached from the clock
   // button. Side-panel width rules out split view, so opening a task drops back
@@ -982,6 +1112,17 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
       </div>
     );
   }
+
+  // A GPT-Live call is one immersive surface: the voice view carries its own
+  // controls, and the chat footer and status bar step out of the way.
+  const immersiveCall = inVoiceView && voiceMode.isLive && !showTranscript;
+  const endVoice = () => {
+    voiceMode.stopConversation();
+    // The last spoken turns land in state on the next tick; save them then.
+    setTimeout(flushVoiceTurns, 50);
+    setShowTranscript(false);
+    toggleVoiceMode();
+  };
 
   return (
     <div
@@ -1024,6 +1165,22 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           state={blobState}
           stateLabel={vvStateLabel}
           doingLabel={vvDoingLabel}
+          live={
+            voiceMode.isLive
+              ? {
+                  side: voiceMode.liveSide,
+                  level: voiceMode.liveLevel,
+                  // Loading from the first frame of the view until the voice
+                  // has spoken; nothing in between counts as "on".
+                  on: voiceMode.liveStatus === "live",
+                  working: voiceMode.liveStatus !== "live" ? "Connecting…" : vvWorking,
+                  muted: voiceMode.micMuted,
+                  onToggleMute: voiceMode.toggleMute,
+                  onToggleTranscript: () => setShowTranscript(true),
+                  onEnd: endVoice,
+                }
+              : undefined
+          }
           screens={vvScreens}
           onDismissScreens={() => setDismissedScreenIdx(lastAssistantIdx)}
           hasHiddenScreens={screensDismissed}
@@ -1095,7 +1252,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
         </div>
       )}
 
-      <div className="hyo-input-area">
+      {!immersiveCall && <div className="hyo-input-area">
         {/* Slash command menu — floats above input */}
         {slashMenuOpen && slashItems.length > 0 && (
           <div className="hyo-slash-menu" ref={slashMenuRef}>
@@ -1125,17 +1282,14 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
             currentSpeed={voiceMode.currentSpeed}
             onRecordClick={voiceMode.toggleMute}
             micMuted={voiceMode.micMuted}
+            live={voiceMode.isLive}
             onStop={voiceMode.stopAudio}
             onTogglePause={voiceMode.togglePause}
             onReplay={voiceMode.replay}
             onCycleSpeed={voiceMode.cycleSpeed}
             showingTranscript={showTranscript}
             onToggleTranscript={() => setShowTranscript((v) => !v)}
-            onEnd={() => {
-              voiceMode.stopConversation();
-              setShowTranscript(false);
-              toggleVoiceMode();
-            }}
+            onEnd={endVoice}
           />
         ) : (
           <>
@@ -1249,9 +1403,9 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
             </div>
           </>
         )}
-      </div>
+      </div>}
 
-      <HyoStatusBar
+      {!immersiveCall && <HyoStatusBar
         model={activeModel}
         effort={activeEffort}
         permissionMode={activePermissionMode}
@@ -1268,7 +1422,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
         onAgentChange={setTabAgent}
         onVoiceModeToggle={toggleVoiceMode}
         onCompact={compact}
-      />
+      />}
     </div>
   );
 }

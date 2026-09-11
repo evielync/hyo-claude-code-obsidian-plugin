@@ -2476,6 +2476,134 @@ button.hyo-ask-send:disabled {
   100% { width: 214px; height: 214px; opacity: 0; }
 }
 
+/* --- live call (GPT-Live): two colours, sized by the real audio level --- */
+.hyo-blob.live .hyo-blob-core {
+  width: 96px;
+  height: 96px;
+  background: #b9c1cd;
+  animation-duration: 6s;
+  transform: scale(calc(1 + var(--hyo-level, 0) * 0.45));
+  transition: background 0.35s, transform 0.09s ease-out;
+}
+.hyo-blob.live .hyo-blob-glow {
+  background: #b9c1cd;
+  opacity: calc(0.18 + var(--hyo-level, 0) * 0.4);
+  transition: background 0.35s, opacity 0.12s;
+}
+.hyo-blob.live.side-user .hyo-blob-core { background: #3b6ef5; animation-duration: 4s; }
+.hyo-blob.live.side-user .hyo-blob-glow { background: #3b6ef5; }
+.hyo-blob.live.side-agent .hyo-blob-core { background: #e0932f; animation-duration: 2.4s; }
+.hyo-blob.live.side-agent .hyo-blob-glow { background: #e0932f; }
+.hyo-blob.live.connecting .hyo-blob-core { background: #7b5ce6; animation-duration: 1.6s; }
+.hyo-blob.live.connecting .hyo-blob-glow { background: #7b5ce6; opacity: 0.4; }
+/* Connected and quiet: pale blue, so "on" never looks like "off". */
+.hyo-blob.live.on.side-none .hyo-blob-core { background: #a9bdf5; }
+.hyo-blob.live.on.side-none .hyo-blob-glow { background: #a9bdf5; opacity: 0.3; }
+.hyo-vv-working { font-size: 15px; font-weight: 500; color: var(--text-muted); margin-top: 10px; min-height: 1.2em; text-align: center; }
+
+/* A hand-off pointer and Claude's work on it (prose hidden — the voice said it). */
+.hyo-message-user.hyo-handoff .hyo-message-content { font-size: 12px; color: var(--text-faint); background: transparent; padding: 2px 0; }
+.hyo-message-assistant.hyo-handoff-reply .hyo-spoken-note { font-size: 11px; color: var(--text-faint); letter-spacing: 0.04em; text-transform: uppercase; margin: 2px 0 6px; }
+
+/* --- live call surface (GPT-Live): one immersive panel, top to bottom. The
+   theme's own background, with the Aurora colours glowing softly out from
+   behind the orb; the orb carries the colour. Stronger on dark themes, where
+   it reads quieter. The call's controls sit inside the surface, so none of
+   the chat chrome (input row, status bar) shows during a call. --- */
+.hyo-voiceview.live {
+  background:
+    radial-gradient(ellipse 62% 50% at 50% 44%, rgba(124, 58, 237, 0.13), transparent 70%),
+    radial-gradient(ellipse 46% 40% at 20% 22%, rgba(22, 196, 127, 0.1), transparent 70%),
+    radial-gradient(ellipse 46% 40% at 80% 78%, rgba(255, 2, 96, 0.09), transparent 70%),
+    var(--background-primary);
+}
+.theme-dark .hyo-voiceview.live {
+  background:
+    radial-gradient(ellipse 62% 50% at 50% 44%, rgba(124, 58, 237, 0.26), transparent 70%),
+    radial-gradient(ellipse 46% 40% at 20% 22%, rgba(22, 196, 127, 0.16), transparent 70%),
+    radial-gradient(ellipse 46% 40% at 80% 78%, rgba(255, 2, 96, 0.15), transparent 70%),
+    var(--background-primary);
+}
+.hyo-voiceview.live .hyo-vv-topbar button.hyo-vv-newbtn {
+  background: color-mix(in srgb, var(--text-normal) 5%, transparent);
+  border-color: color-mix(in srgb, var(--text-normal) 9%, transparent);
+  border-radius: 999px;
+  box-shadow: none;
+}
+.hyo-voiceview.live .hyo-vv-working {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-faint);
+}
+.hyo-orb-wrap { display: flex; align-items: center; justify-content: center; transition: opacity 0.3s; }
+.hyo-orb-wrap.dim { opacity: 0.35; }
+
+/* The call's controls: transcript, mute, end. Transcript and mute are bare
+   icons with a thin stroke; end is the one solid button, in the theme's ink. */
+.hyo-voiceview.live .hyo-vv-controls.hyo-vv-livebar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  padding: 14px 16px 30px;
+  border: 0;
+  background: transparent;
+  position: relative;
+  z-index: 1;
+}
+.hyo-voiceview.live .hyo-vv-livebar button.hyo-vv-ctrl-btn {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  box-shadow: none;
+  transition: background 0.15s, color 0.15s;
+}
+.hyo-voiceview.live .hyo-vv-livebar button.hyo-vv-ctrl-btn svg {
+  width: 22px;
+  height: 22px;
+  stroke-width: 1.5;
+}
+.hyo-voiceview.live .hyo-vv-livebar button.hyo-vv-ctrl-btn:hover {
+  background: color-mix(in srgb, var(--text-normal) 7%, transparent);
+  color: var(--text-normal);
+}
+.hyo-voiceview.live .hyo-vv-livebar button.hyo-vv-ctrl-mute.muted {
+  background: color-mix(in srgb, #ff0260 10%, transparent);
+  color: #ff0260;
+}
+.hyo-voiceview.live .hyo-vv-livebar button.hyo-vv-ctrl-mute.muted svg { stroke-width: 1.8; }
+.hyo-voiceview.live .hyo-vv-livebar button.hyo-vv-ctrl-end {
+  background: var(--text-normal);
+  color: var(--background-primary);
+}
+.hyo-voiceview.live .hyo-vv-livebar button.hyo-vv-ctrl-end:hover {
+  background: color-mix(in srgb, var(--text-normal) 82%, var(--background-primary));
+  color: var(--background-primary);
+}
+
+/* Spoken turns from a live call, shown in the thread but never sent to Claude. */
+.hyo-voice-turn { position: relative; }
+.hyo-voice-turn::before {
+  content: "voice";
+  position: absolute;
+  top: 2px;
+  right: 8px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  pointer-events: none;
+}
+
 /* --- status text --- */
 .hyo-vv-status { text-align: center; }
 .hyo-vv-state { font-size: 17px; font-weight: 600; color: var(--text-muted); }
@@ -3747,6 +3875,15 @@ button.hyo-ask-send:disabled {
 .is-mobile .hyo-voicemode-toggle.active {
   color: var(--text-on-accent);
   background: var(--interactive-accent);
+}
+/* While a dictation is recording or transcribing, the toggle is dimmed and
+   inert, so a stray tap can't switch modes and lose the take. */
+.is-mobile .hyo-voicemode-toggle.dictating,
+.is-mobile .hyo-voicemode-toggle:disabled {
+  opacity: 0.3;
+  pointer-events: none;
+  background: transparent;
+  color: var(--text-muted);
 }
 .is-mobile .hyo-mic-btn:hover {
   color: var(--text-normal);

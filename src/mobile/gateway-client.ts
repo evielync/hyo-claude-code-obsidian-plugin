@@ -57,6 +57,10 @@ export class GatewayClient {
   private sessionsQueue: PendingRPC<any[]>[] = [];
   private agentsQueue: PendingRPC<any[]>[] = [];
   private searchQueue: PendingRPC<Record<string, string>>[] = [];
+  // Live voice: the desktop signs the phone's WebRTC offer and tells it which
+  // engine/voice is set. Keyed by requestId.
+  private liveSdpPending = new Map<string, PendingRPC<{ sdp: string }>>();
+  private liveConfigPending = new Map<string, PendingRPC<{ engine: string; voice: string }>>();
   private historyPending = new Map<string, PendingRPC<any[]>>();
   private renamePending = new Map<string, PendingRPC<string>>();
   private titlePending = new Map<string, PendingRPC<string | null>>();
@@ -279,6 +283,26 @@ export class GatewayClient {
       case "task_meta_set":
         // Fire-and-forget ack; the list refresh that follows picks up the state.
         return;
+      case "live_sdp_answer":
+      case "live_sdp_error": {
+        const pending = this.liveSdpPending.get(msg.requestId);
+        if (pending) {
+          this.liveSdpPending.delete(msg.requestId);
+          clearTimeout(pending.timer);
+          if (msg.type === "live_sdp_answer") pending.resolve({ sdp: msg.sdp });
+          else pending.reject(new Error(msg.message || "The desktop couldn't start the call"));
+        }
+        return;
+      }
+      case "live_config": {
+        const pending = this.liveConfigPending.get(msg.requestId);
+        if (pending) {
+          this.liveConfigPending.delete(msg.requestId);
+          clearTimeout(pending.timer);
+          pending.resolve({ engine: msg.engine || "elevenlabs", voice: msg.voice || "marin" });
+        }
+        return;
+      }
       case "renamed": {
         const pending = this.renamePending.get(msg.sessionId);
         if (pending) {
@@ -363,6 +387,40 @@ export class GatewayClient {
   }
 
   // ---- promise-based RPCs ----
+
+  /** Which voice engine and voice the desktop has set; the phone follows it. */
+  liveConfig(): Promise<{ engine: string; voice: string }> {
+    const requestId = `lc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.liveConfigPending.delete(requestId);
+        reject(new Error("live_config timed out"));
+      }, RPC_TIMEOUT_MS);
+      this.liveConfigPending.set(requestId, { resolve, reject, timer });
+      this.send({ type: "live_config", requestId });
+    });
+  }
+
+  /**
+   * Ask the desktop to sign a WebRTC offer with OpenAI and return the answer.
+   * The desktop builds the session (its key, voice, personality, the tab's
+   * agent identity) so nothing secret lives on the phone.
+   */
+  liveSdp(
+    sdp: string,
+    agent: string,
+    history: Array<{ role: "user" | "assistant"; text: string }>
+  ): Promise<{ sdp: string }> {
+    const requestId = `ls_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.liveSdpPending.delete(requestId);
+        reject(new Error("The desktop didn't answer the call request in time"));
+      }, 20000);
+      this.liveSdpPending.set(requestId, { resolve, reject, timer });
+      this.send({ type: "live_sdp", requestId, sdp, agent, history });
+    });
+  }
 
   listSessions(): Promise<any[]> {
     return new Promise((resolve, reject) => {

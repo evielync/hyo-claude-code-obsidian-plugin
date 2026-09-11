@@ -64,6 +64,9 @@ export function ChatMessages({
           );
         }
 
+        // Claude's reply to a live-call hand-off: the voice spoke the words,
+        // so show only the work.
+        const hideProse = msg.role === "assistant" && !!messages[i - 1]?.handoff;
         return (
           <ChatMessage
             key={`msg-${i}`}
@@ -71,6 +74,7 @@ export function ChatMessages({
             onRecover={onRecover}
             onPermissionResponse={onPermissionResponse}
             onQuestionAnswer={onQuestionAnswer}
+            hideProse={hideProse}
           />
         );
       })}

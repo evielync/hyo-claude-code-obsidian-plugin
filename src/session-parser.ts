@@ -111,6 +111,17 @@ function getMetadataPath(cwd: string): string {
   return path.join(getProjectDir(cwd), "session-metadata.json");
 }
 
+// A spoken turn from a GPT-Live call. These never reach Claude's session file
+// (the voice handles small talk itself), so Hyo keeps them here and threads
+// them back into the conversation on load. `after` = how many messages the
+// Claude session had when this was said, which is where it slots in.
+export interface VoiceTurn {
+  side: "user" | "agent";
+  text: string;
+  at: string; // ISO
+  after: number;
+}
+
 interface SessionMetadata {
   [sessionId: string]: {
     customTitle?: string;
@@ -120,7 +131,20 @@ interface SessionMetadata {
     pinned?: boolean;
     closed?: boolean;
     lastActive?: string; // ISO
+    voiceTurns?: VoiceTurn[];
   };
+}
+
+export function appendVoiceTurns(cwd: string, sessionId: string, turns: VoiceTurn[]): void {
+  if (!turns.length) return;
+  const metadata = loadMetadata(cwd);
+  if (!metadata[sessionId]) metadata[sessionId] = {};
+  metadata[sessionId].voiceTurns = [...(metadata[sessionId].voiceTurns || []), ...turns];
+  saveMetadata(cwd, metadata);
+}
+
+export function getVoiceTurns(cwd: string, sessionId: string): VoiceTurn[] {
+  return loadMetadata(cwd)[sessionId]?.voiceTurns || [];
 }
 
 function loadMetadata(cwd: string): SessionMetadata {
@@ -562,6 +586,17 @@ export function loadSessionHistory(cwd: string, sessionId: string): HistoryMessa
   return messages;
 }
 
+/**
+ * A live-call hand-off prompt wraps the spoken request in a block of earlier
+ * voice turns and a trailing note for Claude. Titles and previews want the
+ * request itself.
+ */
+function stripVoiceCallWrapping(text: string): string {
+  return text
+    .replace(/^\s*\[Said on a voice call[\s\S]*?\[End of voice call excerpt\]\s*/, "")
+    .replace(/\s*\(Asked on a live voice call\.[^)]*\)\s*$/, "");
+}
+
 function extractTitle(filePath: string): string | null {
   try {
     const fd = fs.openSync(filePath, "r");
@@ -591,10 +626,11 @@ function extractTitle(filePath: string): string | null {
             // Extract text blocks
             for (const c of content) {
               if (c.type === "text" && c.text) {
-                rawText = c.text
-                  .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
-                  .replace(/<ide_[^>]*>[\s\S]*?<\/ide_[^>]*>/g, "")
-                  .trim();
+                rawText = stripVoiceCallWrapping(
+                  c.text
+                    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
+                    .replace(/<ide_[^>]*>[\s\S]*?<\/ide_[^>]*>/g, "")
+                ).trim();
               }
               // Extract file names from document blocks (Claude Code desktop)
               if (c.type === "document" && c.title) {
@@ -638,7 +674,7 @@ function extractTitle(filePath: string): string | null {
               return fileNames[0].slice(0, 60);
             }
           } else if (typeof content === "string") {
-            return content.slice(0, 60).replace(/\n/g, " ").trim();
+            return stripVoiceCallWrapping(content).slice(0, 60).replace(/\n/g, " ").trim();
           }
         }
       } catch {

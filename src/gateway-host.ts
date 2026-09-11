@@ -33,6 +33,7 @@
 import { Platform, Notice } from "obsidian";
 import { debug } from "./debug";
 import { getProjectDir, saveCustomTitle, setTaskMeta } from "./session-parser";
+import { buildLiveInstructions, readAgentIdentity } from "./voice/gpt-live";
 import type * as FsType from "fs";
 import type * as PathType from "path";
 import type * as OsType from "os";
@@ -55,12 +56,23 @@ const WebSocketServer: typeof WsServer = Platform.isMobile
   ? (undefined as any)
   : require("ws").WebSocketServer;
 
+export interface LiveVoiceConfig {
+  engine: string;
+  openAiApiKey: string;
+  voice: string;
+  personality: string;
+}
+
 export interface GatewayHostConfig {
   port?: number;
   vault: string;
   cliPath: string;
   defaultAgent: string;
   defaultModel: string;
+  // Read at call time so a settings change on the desktop applies to the
+  // phone's next call. The phone never holds the OpenAI key: the desktop
+  // signs each WebRTC call on its behalf (docs: "keep the key on the server").
+  getLiveVoice?: () => LiveVoiceConfig;
   // Called with the phone-facing wss:// URL once tailscale serve is up, so the
   // host can write it into the vault's synced settings — the phone then picks
   // it up automatically and needs nothing pasted.
@@ -1085,6 +1097,9 @@ export function startGatewayHost(config: GatewayHostConfig): void {
   const resolved: Required<GatewayHostConfig> = {
     port: config.port ?? 8787,
     vault: config.vault,
+    getLiveVoice:
+      config.getLiveVoice ??
+      (() => ({ engine: "elevenlabs", openAiApiKey: "", voice: "marin", personality: "" })),
     cliPath: config.cliPath,
     defaultAgent: config.defaultAgent,
     defaultModel: config.defaultModel,
@@ -1284,6 +1299,63 @@ export function startGatewayHost(config: GatewayHostConfig): void {
           case "generate_title": {
             const title = await generateTitle(cfg.cliPath, env, m.userMessage, m.assistantMessage);
             send({ type: "title", requestId: m.requestId, title });
+            break;
+          }
+          case "live_config": {
+            const lv = cfg.getLiveVoice?.();
+            send({ type: "live_config", requestId: m.requestId, engine: lv?.engine || "elevenlabs", voice: lv?.voice || "marin" });
+            break;
+          }
+          case "live_sdp": {
+            // The phone's WebRTC offer → OpenAI's answer, signed here with the
+            // desktop's key. The session (personality, the tab's agent identity,
+            // history from the phone) is built here too, so the phone holds
+            // nothing secret and follows the desktop's voice settings.
+            const lv = cfg.getLiveVoice?.();
+            if (!lv || lv.engine !== "gpt-live" || !lv.openAiApiKey) {
+              send({
+                type: "live_sdp_error",
+                requestId: m.requestId,
+                message: "Set the desktop's voice engine to GPT-Live and add an OpenAI key in Hyo settings there.",
+              });
+              break;
+            }
+            const agent = typeof m.agent === "string" && m.agent ? m.agent : cfg.defaultAgent;
+            const history = Array.isArray(m.history) ? m.history.slice(-60) : [];
+            const session = {
+              model: "gpt-live-1",
+              delegation: { type: "client" },
+              instructions: buildLiveInstructions(lv.personality, readAgentIdentity(agent)),
+              input: history
+                .filter((h: any) => h && (h.role === "user" || h.role === "assistant") && typeof h.text === "string" && h.text)
+                .map((h: any) => ({
+                  type: "message",
+                  role: h.role,
+                  content: [{ type: h.role === "user" ? "input_text" : "output_text", text: String(h.text).slice(0, 4000) }],
+                })),
+              audio: { output: { voice: lv.voice || "marin" } },
+            };
+            void (async () => {
+              try {
+                const res = await fetch("https://api.openai.com/v1/live/sessions", {
+                  method: "POST",
+                  headers: { Authorization: `Bearer ${lv.openAiApiKey}`, "Content-Type": "application/json" },
+                  body: JSON.stringify({ session, transport: { type: "webrtc", sdp: m.sdp } }),
+                });
+                const data: any = await res.json().catch(() => ({}));
+                if (!res.ok || !data?.transport?.sdp) {
+                  send({
+                    type: "live_sdp_error",
+                    requestId: m.requestId,
+                    message: data?.error?.message || `OpenAI refused the call (${res.status})`,
+                  });
+                  return;
+                }
+                send({ type: "live_sdp_answer", requestId: m.requestId, sdp: data.transport.sdp, sessionId: data?.session?.id });
+              } catch (e: any) {
+                send({ type: "live_sdp_error", requestId: m.requestId, message: e?.message || "Couldn't reach OpenAI" });
+              }
+            })();
             break;
           }
           case "ping":

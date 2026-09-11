@@ -25,6 +25,17 @@ export interface Message {
   planReview?: PlanReviewData | null;
   isCompaction?: boolean;
   attachments?: { type: string; name: string; preview?: string }[];
+  // Said on a GPT-Live call and handled by the voice itself — shown in the
+  // thread, never part of Claude's session. See VoiceTurn in session-parser.
+  voice?: boolean;
+  // Voice turns are written to session-metadata once the tab has a session id;
+  // until then they wait here flagged unsaved.
+  voiceUnsaved?: boolean;
+  voiceAt?: string; // ISO, when it was said
+  // A user message the voice handed to Claude during a live call. The reply
+  // that follows was spoken by the voice (its own voice turn sits after it),
+  // so the thread shows that reply's tool calls and screens, not its prose.
+  handoff?: boolean;
 }
 
 export interface ToolCallData {
@@ -122,7 +133,7 @@ export function useChatEngine(options: ChatEngineOptions) {
       setMessages((prev) => {
         const msgs = [...prev];
         for (let i = msgs.length - 1; i >= 0; i--) {
-          if (msgs[i].role === "assistant") {
+          if (msgs[i].role === "assistant" && !msgs[i].voice) {
             msgs[i] = { ...msgs[i], ...updater(msgs[i]) };
             break;
           }

@@ -235,8 +235,9 @@ export function useSessionManager(options: SessionManagerOptions) {
         tabs: prev.tabs.map((tab) => {
           if (tab.id !== tabId) return tab;
           const msgs = [...tab.messages];
+          // Claude's message, never a spoken turn from a live call.
           for (let i = msgs.length - 1; i >= 0; i--) {
-            if (msgs[i].role === "assistant") {
+            if (msgs[i].role === "assistant" && !msgs[i].voice) {
               msgs[i] = { ...msgs[i], ...updater(msgs[i]) };
               break;
             }
@@ -776,8 +777,33 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   // ------- messaging -------
 
+  // A spoken turn from a GPT-Live call, into the thread as a `voice` message.
+  // In-memory on the phone for now; the desktop keeps the persisted record.
+  const appendVoiceTurn = useCallback((side: "user" | "agent", text: string) => {
+    const tabId = stateRef.current.activeTabId;
+    const msg: Message = {
+      role: side === "user" ? "user" : "assistant",
+      content: text,
+      streaming: false,
+      voice: true,
+      voiceAt: new Date().toISOString(),
+    };
+    setState((prev) => ({
+      ...prev,
+      tabs: prev.tabs.map((tab) => {
+        if (tab.id !== tabId) return tab;
+        const title =
+          tab.messages.length === 0 && tab.title === "New conversation" && side === "user"
+            ? text.slice(0, 40) + (text.length > 40 ? "..." : "")
+            : tab.title;
+        return { ...tab, title, messages: [...tab.messages, msg] };
+      }),
+    }));
+    scrollRef.current.nearBottom = true;
+  }, []);
+
   const sendMessage = useCallback(
-    (content: string | any[], meta?: { displayText?: string; attachedFileNames?: string[]; isCompaction?: boolean }) => {
+    (content: string | any[], meta?: { displayText?: string; attachedFileNames?: string[]; isCompaction?: boolean; handoff?: boolean }) => {
       const tabId = stateRef.current.activeTabId;
 
       // For display, use the typed text; for arrays (image messages) use displayText or placeholder
@@ -791,6 +817,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         displayText: meta?.displayText,
         attachments: meta?.attachedFileNames?.map((name) => ({ type: "file", name })),
         isCompaction: meta?.isCompaction,
+        handoff: meta?.handoff,
       };
       const assistantMsg: Message = {
         role: "assistant",
@@ -1202,6 +1229,7 @@ export function useSessionManager(options: SessionManagerOptions) {
   const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
 
   return {
+    appendVoiceTurn,
     tabs: state.tabs,
     activeTabId: state.activeTabId,
     activeMessages: activeTab?.messages || [],

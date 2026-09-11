@@ -25,6 +25,13 @@ export interface Message {
   planReview?: PlanReviewData | null;
   isCompaction?: boolean;
   attachments?: { type: string; name: string; preview?: string }[];
+  // Said on a GPT-Live call and handled by the voice itself — shown in the
+  // thread, never part of Claude's session.
+  voice?: boolean;
+  voiceUnsaved?: boolean;
+  voiceAt?: string;
+  // A user message the voice handed to Claude during a live call.
+  handoff?: boolean;
 }
 
 export interface ToolCallData {

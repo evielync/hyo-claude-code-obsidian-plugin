@@ -8,6 +8,7 @@ import { MODEL_OPTIONS, EFFORT_OPTIONS, DEFAULT_EFFORT } from "./models";
 import type { Skill } from "./hooks/useSkills";
 import { checkMobileAccess, mobileLogPath } from "./gateway-host";
 import { detectClaude, probeClaude, checkAuth, installClaude, signIn } from "./cli-probe";
+import { DEFAULT_VOICE_PERSONALITY } from "./voice/gpt-live";
 
 // A single command: which skill it fires, what its header-menu label reads,
 // and any extra instruction text appended after the skill invocation.
@@ -16,6 +17,15 @@ export interface HyoCommand {
   label: string;
   extra?: string;
 }
+
+export type VoiceEngine = "elevenlabs" | "gpt-live";
+
+// OpenAI's built-in voices for GPT-Live-1 (from the SDK's BuiltInVoice type).
+export const GPT_LIVE_VOICES = [
+  "marin", "cedar", "alloy", "ash", "ballad", "beacon", "bossa", "cinder",
+  "coral", "delta", "echo", "gleam", "meridian", "quartz", "ripple", "sage",
+  "shimmer", "stone", "tempo", "verse", "vesper", "willow",
+];
 
 export interface HyoSettings {
   cliPath: string;
@@ -42,11 +52,23 @@ export interface HyoSettings {
   // changed in a version they never had.
   lastSeenVersion: string;
   // Voice
+  // Which engine runs the conversation. "elevenlabs" is the turn-based loop
+  // (Silero + Smart Turn + ElevenLabs STT/TTS); "gpt-live" is OpenAI's
+  // full-duplex GPT-Live-1 voice model that hands real work to Claude.
+  voiceEngine: VoiceEngine;
   elevenLabsApiKey: string;
   voiceId: string;
   voiceName: string;
   voicePlaybackSpeed: number;
   voiceAutoSpeak: boolean;
+  openAiApiKey: string;
+  gptLiveVoice: string;
+  // Who the voice is and how it talks — the only part of the voice's prompt
+  // the user writes. Hyo adds the fixed policies underneath.
+  voicePersonality: string;
+  // Diagnostics for live calls (no UI; set in data.json): event log to
+  // ~/Dropbox/chad/hyo-live.log and stored sessions at OpenAI.
+  voiceDebugLog: boolean;
   // Task mode — per-conversation metadata, keyed by cliSessionId. Everything
   // else about a task (its state) is derived live; only these few things need
   // to persist across reloads. See hyo-task-mode-build-spec.
@@ -85,11 +107,16 @@ export const DEFAULT_SETTINGS: HyoSettings = {
   gatewayPort: 8787,
   lastSeenVersion: "",
   // Voice
+  voiceEngine: "elevenlabs",
   elevenLabsApiKey: "",
   voiceId: "",
   voiceName: "",
   voicePlaybackSpeed: 1.25,
   voiceAutoSpeak: true,
+  openAiApiKey: "",
+  gptLiveVoice: "marin",
+  voicePersonality: "",
+  voiceDebugLog: false,
   tasks: {},
   commands: {},
   commandsMigrated: false,
@@ -375,12 +402,109 @@ export class HyoSettingTab extends PluginSettingTab {
     }
   }
 
-  // ---- Voice: ElevenLabs voice mode ------------------------------------------
+  // ---- Voice ----------------------------------------------------------------
   private renderVoice(containerEl: HTMLElement): void {
+    const engine = this.plugin.settings.voiceEngine || "elevenlabs";
+
     containerEl.createEl("p", {
-      text: "Connect ElevenLabs to enable voice mode — speak to Claude and hear responses read aloud.",
+      text:
+        engine === "gpt-live"
+          ? "GPT-Live is a real back-and-forth call. The voice talks with you and hands anything that needs your files or real work to Claude, then tells you what came back. Paste an OpenAI API key and pick a voice."
+          : "Connect ElevenLabs to enable voice mode — speak to Claude and hear responses read aloud.",
       attr: { style: "margin: 0 0 16px; color: var(--text-muted); font-size: 0.9em;" },
     });
+
+    new Setting(containerEl)
+      .setName("Voice engine")
+      .setDesc("GPT-Live: a live call with OpenAI's voice model (full duplex, interrupt any time). ElevenLabs: take turns — you speak, it transcribes, Claude answers, it reads the reply.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("gpt-live", "GPT-Live (OpenAI)")
+          .addOption("elevenlabs", "ElevenLabs")
+          .setValue(engine)
+          .onChange(async (value) => {
+            this.plugin.settings.voiceEngine = value as VoiceEngine;
+            await this.plugin.saveSettings();
+            dispatchSettingsChanged();
+            this.display();
+          })
+      );
+
+    if (engine === "gpt-live") {
+      const openAiSetting = new Setting(containerEl)
+        .setName("OpenAI API key")
+        .setDesc("From platform.openai.com → API keys. Calls are billed to this key at OpenAI's per-minute rate. On the phone, this same key also transcribes dictation, so you don't need ElevenLabs as well.")
+        .addText((text) => {
+          text.inputEl.type = "password";
+          text.inputEl.style.width = "240px";
+          return text
+            .setPlaceholder("sk-...")
+            .setValue(this.plugin.settings.openAiApiKey)
+            .onChange(async (value) => {
+              this.plugin.settings.openAiApiKey = value.trim();
+              await this.plugin.saveSettings();
+              this.showSavedNear(openAiSetting.nameEl as HTMLElement);
+              dispatchSettingsChanged();
+            });
+        });
+
+      const liveVoiceSetting = new Setting(containerEl)
+        .setName("Voice")
+        .setDesc("One of OpenAI's built-in voices. Takes effect on the next call. Play sample says one line in the chosen voice (about two seconds of call time).")
+        .addDropdown((dropdown) => {
+          for (const v of GPT_LIVE_VOICES) {
+            dropdown.addOption(v, v.charAt(0).toUpperCase() + v.slice(1));
+          }
+          dropdown
+            .setValue(this.plugin.settings.gptLiveVoice || "marin")
+            .onChange(async (value) => {
+              this.plugin.settings.gptLiveVoice = value;
+              await this.plugin.saveSettings();
+              this.showSavedNear(liveVoiceSetting.nameEl as HTMLElement);
+              dispatchSettingsChanged();
+            });
+        })
+        .addButton((btn) => {
+          btn.setButtonText("Play sample").onClick(async () => {
+            const key = this.plugin.settings.openAiApiKey;
+            if (!key) {
+              new Notice("Add your OpenAI API key first.");
+              return;
+            }
+            btn.setDisabled(true).setButtonText("Playing…");
+            try {
+              const { playVoiceSample } = await import("./voice/gpt-live");
+              await playVoiceSample(key, this.plugin.settings.gptLiveVoice || "marin");
+            } catch (e) {
+              new Notice(`Couldn't play the sample — ${e instanceof Error ? e.message : "error"}`);
+            } finally {
+              btn.setDisabled(false).setButtonText("Play sample");
+            }
+          });
+        });
+
+      const personalitySetting = new Setting(containerEl)
+        .setName("Personality")
+        .setDesc("How the voice talks and who it's talking to: its character, your name, anything it should always know about you. A few sentences. Its name comes from the tab's agent file; with no agent it's simply your agent. Everything about your files and work still comes from Claude.")
+        .addTextArea((text) => {
+          text.inputEl.rows = 5;
+          text.inputEl.style.width = "100%";
+          text.inputEl.style.fontFamily = "inherit";
+          return text
+            .setPlaceholder(DEFAULT_VOICE_PERSONALITY)
+            .setValue(this.plugin.settings.voicePersonality || "")
+            .onChange(async (value) => {
+              this.plugin.settings.voicePersonality = value;
+              await this.plugin.saveSettings();
+              this.showSavedNear(personalitySetting.nameEl as HTMLElement);
+              dispatchSettingsChanged();
+            });
+        });
+      personalitySetting.settingEl.style.flexDirection = "column";
+      personalitySetting.settingEl.style.alignItems = "stretch";
+      (personalitySetting.controlEl as HTMLElement).style.marginTop = "8px";
+      return;
+    }
 
     const apiKeySetting = new Setting(containerEl)
       .setName("ElevenLabs API key")

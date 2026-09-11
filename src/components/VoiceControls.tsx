@@ -16,6 +16,8 @@ interface VoiceControlsProps {
   onEnd?: () => void;
   /** When defined, the mic button is a hands-free mute toggle, not push-to-talk. */
   micMuted?: boolean;
+  /** GPT-Live call: the voice model owns playback, so stop/pause/replay/speed don't apply. */
+  live?: boolean;
 }
 
 export function VoiceControls({
@@ -32,6 +34,7 @@ export function VoiceControls({
   onToggleTranscript,
   onEnd,
   micMuted,
+  live,
 }: VoiceControlsProps) {
   const handsFree = micMuted !== undefined;
   const statusLabel =
@@ -109,7 +112,7 @@ export function VoiceControls({
 
       {!handsFree && <span className="hyo-voice-status-label">{statusLabel}</span>}
 
-      <div className="hyo-voice-playback">
+      {!live && <div className="hyo-voice-playback">
         {voiceState === "speaking" && (
           <>
             <button
@@ -190,7 +193,7 @@ export function VoiceControls({
         >
           {currentSpeed}×
         </button>
-      </div>
+      </div>}
 
       {onEnd && (
         <div

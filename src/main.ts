@@ -158,6 +158,13 @@ export default class HyoPlugin extends Plugin {
         cliPath: this.settings.cliPath,
         defaultAgent: this.settings.defaultAgent,
         defaultModel: this.settings.model,
+        // The phone's live calls are signed here with the desktop's settings.
+        getLiveVoice: () => ({
+          engine: this.settings.voiceEngine || "elevenlabs",
+          openAiApiKey: this.settings.openAiApiKey || "",
+          voice: this.settings.gptLiveVoice || "marin",
+          personality: this.settings.voicePersonality || "",
+        }),
         // Write the Mac's own tailnet address into the vault's settings. It
         // syncs to the phone, which then connects automatically — nothing to
         // paste on the phone.

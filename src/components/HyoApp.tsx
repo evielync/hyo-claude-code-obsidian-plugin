@@ -116,6 +116,7 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
     maxOutputTokens: plugin.settings.maxOutputTokens,
     autoGenerateTitles: plugin.settings.autoGenerateTitles,
     settingsVersion,
+    voiceEngine: plugin.settings.voiceEngine,
   });
 
   if (detection === null) {

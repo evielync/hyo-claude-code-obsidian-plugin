@@ -1,6 +1,7 @@
 import React from "react";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { AskQuestion } from "./AskQuestion";
+import { VoiceOrb } from "../../components/VoiceOrb";
 import type { AskQuestionData } from "../hooks/useChatEngine";
 
 export type BlobState = "idle" | "listening" | "thinking" | "speaking";
@@ -36,6 +37,19 @@ interface VoiceViewProps {
   talkDisabled: boolean;
   onToggleTranscript: () => void;
   onEndVoice: () => void;
+  /**
+   * GPT-Live call: full duplex, so the Blob isn't a talk button and there are
+   * no state words. Blue while you talk, amber while the agent talks, sized by
+   * the live audio level; `working` is the only text.
+   */
+  live?: {
+    side: "user" | "agent" | null;
+    level: number;
+    on: boolean;
+    working: string;
+    muted: boolean;
+    onToggleMute: () => void;
+  };
 }
 
 /**
@@ -63,31 +77,54 @@ export function VoiceView({
   talkDisabled,
   onToggleTranscript,
   onEndVoice,
+  live,
 }: VoiceViewProps) {
-  const showRing = state === "listening" || state === "speaking";
+  const showRing = !live && (state === "listening" || state === "speaking");
   const dimmed = !!permission || !!question;
+  const blobClass = live
+    ? `hyo-blob live ${live.side ? `side-${live.side}` : "side-none"}${live.on ? " on" : " connecting"}`
+    : `hyo-blob ${state}${talkDisabled ? " busy" : ""}`;
+  const blobStyle = live
+    ? ({ "--hyo-level": live.level.toFixed(3) } as React.CSSProperties)
+    : { touchAction: "none" as const, cursor: talkDisabled ? "default" : "pointer" };
   return (
-    <div className="hyo-voiceview">
+    <div className={`hyo-voiceview${live ? " live" : ""}`}>
       <div className="hyo-vv-stage">
-        <div
-          className={`hyo-blob ${state}${dimmed ? " dim" : ""}${
-            talkDisabled ? " busy" : ""
-          }`}
-          role="button"
-          aria-label="Hold to talk, or tap to start and stop"
-          style={{ touchAction: "none", cursor: talkDisabled ? "default" : "pointer" }}
-          onPointerDown={talkDisabled ? undefined : onTalkPointerDown}
-          onPointerUp={talkDisabled ? undefined : onTalkPointerUp}
-          onPointerCancel={talkDisabled ? undefined : onTalkPointerUp}
-        >
-          <div className="hyo-blob-glow" />
-          {showRing && <div className="hyo-blob-ring" />}
-          <div className="hyo-blob-core" />
-        </div>
-        <div className={`hyo-vv-status ${state}`}>
-          <div className="hyo-vv-state">{stateLabel}</div>
-          <div className="hyo-vv-doing">{doingLabel}</div>
-        </div>
+        {live ? (
+          <div className={`hyo-orb-wrap${dimmed ? " dim" : ""}`}>
+            <VoiceOrb
+              side={live.side}
+              level={live.level}
+              working={!live.side && !!live.working && live.on}
+              connecting={!live.on}
+              size={200}
+            />
+          </div>
+        ) : (
+          <div
+            className={`${blobClass}${dimmed ? " dim" : ""}`}
+            role="button"
+            aria-label="Hold to talk, or tap to start and stop"
+            style={blobStyle}
+            onPointerDown={talkDisabled ? undefined : onTalkPointerDown}
+            onPointerUp={talkDisabled ? undefined : onTalkPointerUp}
+            onPointerCancel={talkDisabled ? undefined : onTalkPointerUp}
+          >
+            <div className="hyo-blob-glow" />
+            {showRing && <div className="hyo-blob-ring" />}
+            <div className="hyo-blob-core" />
+          </div>
+        )}
+        {live ? (
+          <div className="hyo-vv-status live">
+            <div className="hyo-vv-working">{live.working}</div>
+          </div>
+        ) : (
+          <div className={`hyo-vv-status ${state}`}>
+            <div className="hyo-vv-state">{stateLabel}</div>
+            <div className="hyo-vv-doing">{doingLabel}</div>
+          </div>
+        )}
         {hasHiddenScreens && (
           <button className="hyo-vv-showlast" onClick={onShowScreens}>
             ⤢ Show last on screen
@@ -152,7 +189,7 @@ export function VoiceView({
         </div>
       )}
 
-      <div className="hyo-vv-controls">
+      <div className={`hyo-vv-controls${live ? " hyo-vv-livebar" : ""}`}>
         <button
           className="hyo-vv-ctrl-btn"
           title="Show transcript"
@@ -165,17 +202,35 @@ export function VoiceView({
             <line x1="4" y1="17" x2="14" y2="17" />
           </svg>
         </button>
-        <button
-          className="hyo-vv-ctrl-btn"
-          title="New conversation"
-          aria-label="New conversation"
-          onClick={onNewConversation}
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19" />
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-        </button>
+        {live && (
+          <button
+            className={`hyo-vv-ctrl-btn hyo-vv-ctrl-mute${live.muted ? " muted" : ""}`}
+            title={live.muted ? "Unmute" : "Mute"}
+            aria-label={live.muted ? "Unmute" : "Mute"}
+            onClick={live.onToggleMute}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="23" />
+              <line x1="8" y1="23" x2="16" y2="23" />
+              {live.muted && <line x1="3" y1="3" x2="21" y2="21" strokeWidth="2.4" />}
+            </svg>
+          </button>
+        )}
+        {!live && (
+          <button
+            className="hyo-vv-ctrl-btn"
+            title="New conversation"
+            aria-label="New conversation"
+            onClick={onNewConversation}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
+        )}
         <button
           className="hyo-vv-ctrl-btn hyo-vv-ctrl-end"
           title="End voice"

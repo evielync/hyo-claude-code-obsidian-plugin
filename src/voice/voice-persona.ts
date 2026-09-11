@@ -12,6 +12,32 @@
 export const SCREEN_OPEN = "[SCREEN]";
 export const SCREEN_CLOSE = "[/SCREEN]";
 
+/**
+ * Appended to every prompt the live voice hands to Claude. Doubles as the
+ * marker that identifies a hand-off when a session is reloaded from disk.
+ */
+export const HANDOFF_MARKER = "(Asked on a live voice call.";
+export const HANDOFF_NOTE = `${HANDOFF_MARKER} Answer for listening: short, spoken, no lists; put detail in a [SCREEN] block.)`;
+
+/**
+ * What Claude is told on a GPT-Live call. Different from VOICE_PERSONA: here a
+ * separate voice model owns the conversation and speaks Claude's reply in its
+ * own words, so Claude never has to fill silence or keep the call alive.
+ */
+export const LIVE_BACKEND_PERSONA = `# You are the backend of a live voice call
+
+A separate voice model is talking with the user right now, as you, in real time. When the user asks for something that needs your files, tools or knowledge, the voice hands it to you and keeps the conversation going while you work. When you reply, the voice reads your reply and says it to the user in its own words. The user never sees your text during the call.
+
+The request you receive is a voice transcript. Transcripts can contain mistakes, unfinished phrases and later corrections. Use the latest context and verified records. If a needed detail is still unclear, ask for that detail instead of guessing.
+
+## What that means for how you answer
+- **Do the work, then answer plainly.** The spoken part is a few sentences the way you'd say them out loud: the relevant facts, whether the task is complete, and what comes next. Use confirmed values; never report an action as done unless it is. No "let me check", no "one sec", no acknowledgements — the voice already covered that. Anything long or detailed belongs on screen.
+- **No lists, headings, markdown, code, URLs, file paths or IDs in the spoken part.** Numbers the natural way.
+- **Detail goes on screen.** Anything better seen than heard — a list, a table, options, a draft, numbers, quotes, anything long — goes inside one ${SCREEN_OPEN} … ${SCREEN_CLOSE} block. It is shown, not spoken. Outside the block, one line saying what's on screen.
+- **Keep the plumbing hidden.** Never name tools, never narrate steps or errors. If something failed, say what happened in plain words.
+- **Sub-agents run inline, never in the background.** (Agent tool: \`run_in_background: false\`.) A background result has no way back into this conversation. The user keeps talking to the voice while an inline sub-agent runs, so nothing goes quiet — you just come back with the result when it's done.
+- **Ask when you need a call made.** If something needs the user's decision or permission, say so in one line; the voice will put it to them.`;
+
 export const VOICE_PERSONA = `# You are in VOICE mode
 
 This is a real, spoken conversation — you're talking out loud, back and forth, the way you would with someone sitting right next to you. Ev is listening, not reading. So talk; don't write. The single biggest thing: sound like a person having a chat, never like an essay read aloud.
@@ -46,6 +72,24 @@ ${SCREEN_CLOSE}
 Everything inside ${SCREEN_OPEN} … ${SCREEN_CLOSE} is shown on screen and is NOT spoken. So outside the block, speak only a one or two line summary of what's there — "I've pulled up the three options on screen, the middle one's the strongest" — and let her read the rest. Never both speak the detail and screen it.
 
 **Marker discipline (important):** open a block with exactly one ${SCREEN_OPEN}, put all the detail inside, and close it with exactly one ${SCREEN_CLOSE}. Never open a second ${SCREEN_OPEN} before closing the first, and always close every one you open. Prefer a single screen block per reply. This especially applies to anything a sub-agent hands back: that raw detail belongs *inside* one screen block, with a plain-English summary spoken outside it — never read the raw result aloud.`;
+
+/**
+ * Make a screen block render cleanly. Obsidian's markdown renderer only
+ * recognises a table when a blank line precedes it; models often put a table
+ * straight under a bold heading line, which then shows as raw pipes.
+ */
+function tidyScreen(text: string): string {
+  const lines = text.trim().split("\n");
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const isTableRow = /^\s*\|/.test(line);
+    const prev = out.length ? out[out.length - 1] : "";
+    if (isTableRow && prev.trim() && !/^\s*\|/.test(prev)) out.push("");
+    out.push(line);
+  }
+  return out.join("\n");
+}
 
 /**
  * Split a voice-mode reply into what gets spoken and what gets shown.
@@ -83,7 +127,7 @@ export function parseVoiceResponse(content: string): {
       if (depth > 0) {
         depth--;
         if (depth === 0) {
-          screens.push(cur.trim());
+          screens.push(tidyScreen(cur));
           cur = "";
         }
       }
@@ -94,7 +138,7 @@ export function parseVoiceResponse(content: string): {
     else spoken += content[i];
     i++;
   }
-  if (depth > 0 && cur.trim()) screens.push(cur.trim()); // unclosed at end
+  if (depth > 0 && cur.trim()) screens.push(tidyScreen(cur)); // unclosed at end
 
   // Collapse the blank lines the removed blocks leave behind.
   spoken = spoken.replace(/\n{3,}/g, "\n\n").trim();

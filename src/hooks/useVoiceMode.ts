@@ -7,12 +7,24 @@ import {
   speechToText,
 } from "../voice/elevenlabs-api";
 import { loadSmartTurn, turnEndProbability } from "../voice/smart-turn";
+import {
+  GptLiveSession,
+  buildLiveInstructions,
+  buildLiveHistory,
+  readAgentIdentity,
+  liveLog,
+  type GptLiveHistoryItem,
+} from "../voice/gpt-live";
+import type { VoiceEngine } from "../settings";
+import type { Message } from "./useChatEngine";
 
 export type VoiceState = "idle" | "listening" | "thinking" | "speaking";
 
 const VOICE_SPEEDS = [1.0, 1.25, 1.5, 2.0];
 
 interface UseVoiceModeOptions {
+  /** Which engine runs the call. Everything ElevenLabs-specific below is ignored on gpt-live. */
+  engine: VoiceEngine;
   apiKey: string;
   voiceId: string;
   playbackSpeed: number;
@@ -23,9 +35,19 @@ interface UseVoiceModeOptions {
   vadAssetBase: string;
   /** Ensures the model assets exist locally (downloads on first use). */
   ensureAssets: () => Promise<void>;
+  // GPT-Live
+  openAiApiKey: string;
+  gptLiveVoice: string;
+  /** What the voice starts the call knowing: the tab's agent, the personality paragraph, the open conversation. */
+  getLiveContext: () => { agent: string; personality: string; messages: Message[] };
+  /** A finished spoken turn on the call, for the thread. */
+  onVoiceTurn: (side: "user" | "agent", text: string) => void;
+  /** Sandbox diagnostics: log every live event to a file. */
+  debugLog?: boolean;
 }
 
 export function useVoiceMode({
+  engine,
   apiKey,
   voiceId,
   playbackSpeed,
@@ -34,7 +56,27 @@ export function useVoiceMode({
   onTranscript,
   vadAssetBase,
   ensureAssets,
+  openAiApiKey,
+  gptLiveVoice,
+  getLiveContext,
+  onVoiceTurn,
+  debugLog,
 }: UseVoiceModeOptions) {
+  const isLive = engine === "gpt-live";
+  // GPT-Live session + the hand-offs Claude is answering, oldest first.
+  // Claude answers one at a time, so a finished reply belongs to the oldest;
+  // if a newer one is already waiting, that reply is out of date for the voice.
+  const liveRef = useRef<GptLiveSession | null>(null);
+  const liveDelegationRef = useRef<string | null>(null);
+  const handoffQueueRef = useRef<string[]>([]);
+  const nudgeTimerRef = useRef<number | null>(null);
+  // Who's talking and how loud — drives the Blob on a live call.
+  const [liveSide, setLiveSide] = useState<"user" | "agent" | null>(null);
+  const [liveLevel, setLiveLevel] = useState(0);
+  const liveLevelRef = useRef<{ user: number; agent: number }>({ user: 0, agent: 0 });
+  // Where the call is up to, for the line under the Blob: connecting → the
+  // session is up (greeting on its way) → the voice has spoken.
+  const [liveStatus, setLiveStatus] = useState<"off" | "connecting" | "connected" | "live">("off");
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [isPaused, setIsPaused] = useState(false);
   const [hasLastAudio, setHasLastAudio] = useState(false);
@@ -70,6 +112,7 @@ export function useVoiceMode({
   const convActiveRef = useRef(false);
   const mutedRef = useRef(false);
   const busyRef = useRef(false); // Chad is generating (set from ChatPanel)
+  const busyEndedAtRef = useRef(0); // when the last generation finished
   const suspendedPrevRef = useRef(false);
   const hfRecorderRef = useRef<MediaRecorder | null>(null);
   const hfChunksRef = useRef<Blob[]>([]);
@@ -289,7 +332,14 @@ export function useVoiceMode({
   const enqueueSpeech = useCallback(
     (text: string) => {
       const t = (text || "").trim();
-      if (!t || !apiKey) return;
+      if (!t) return;
+      // GPT-Live: Claude's reply goes to the voice as commentary; it speaks it
+      // in its own words, tied to the hand-off it asked for.
+      if (isLive) {
+        liveRef.current?.appendCommentary(t, liveDelegationRef.current);
+        return;
+      }
+      if (!apiKey) return;
       if (!voiceId) {
         if (!noVoiceWarnedRef.current) {
           noVoiceWarnedRef.current = true;
@@ -303,12 +353,14 @@ export function useVoiceMode({
       speechQueueRef.current.push(t);
       void runQueue();
     },
-    [apiKey, voiceId, runQueue]
+    [apiKey, voiceId, runQueue, isLive]
   );
 
   // --- Audio controls ---
 
   const stopAudio = useCallback(() => {
+    // On a live call the voice model owns playback; nothing queued here to stop.
+    if (isLive) return;
     stopSpeechRef.current = true;
     speechQueueRef.current = [];
     prefetchRef.current = null;
@@ -322,6 +374,166 @@ export function useVoiceMode({
     runnerRef.current = false;
     setVoiceState("idle");
     setIsPaused(false);
+  }, [isLive]);
+
+  // --- GPT-Live call ---
+  // The voice model runs the whole conversation. We only (1) hand its
+  // delegations to Claude, (2) feed Claude's reply back as commentary, and
+  // (3) mirror its state onto the Blob.
+
+  const startLive = useCallback(async () => {
+    if (liveRef.current) return;
+    if (!openAiApiKey) {
+      new Notice("Hyo voice: add your OpenAI API key in Settings → Hyo → Voice to start a call.", 6000);
+      return;
+    }
+    const { agent, personality, messages } = getLiveContext();
+    handoffQueueRef.current = [];
+    const makeSession = (transport: "webrtc" | "ws") => new GptLiveSession({
+      transport,
+      debugLog,
+      greet: true,
+      apiKey: openAiApiKey,
+      voice: gptLiveVoice,
+      instructions: buildLiveInstructions(personality, readAgentIdentity(agent)),
+      history: buildLiveHistory(messages),
+      onState: (s) => {
+        setVoiceState(
+          s === "connecting" ? "thinking" : s === "closed" ? "idle" : s
+        );
+        if (s === "connecting") setLiveStatus("connecting");
+        else if (s === "closed") setLiveStatus("off");
+        else setLiveStatus((prev) => (prev === "live" ? "live" : "connected"));
+      },
+      // Every spoken turn goes in the thread, both sides — it's what was
+      // actually heard. Claude's written reply to a hand-off shows only its
+      // tool calls and screens, so nothing appears twice.
+      onTurn: (side, text) => onVoiceTurn(side, text),
+      onLevel: (side, level) => {
+        const lv = liveLevelRef.current;
+        lv[side] = level;
+        // Whoever is louder owns the Blob; below a floor nobody does.
+        const top = lv.user >= lv.agent ? "user" : "agent";
+        const val = Math.max(lv.user, lv.agent);
+        setLiveLevel(val);
+        setLiveSide(val > 0.05 ? top : null);
+      },
+      // The voice's first words (the greeting): the call is live, the
+      // "Connecting…" line goes.
+      onFirstSpeech: () => setLiveStatus("live"),
+      onDelegation: (id, text) => {
+        liveDelegationRef.current = id;
+        debug("[hyo-voice] live delegation", id, JSON.stringify(text));
+        const s = liveRef.current;
+        if (!text) {
+          s?.appendThinking("No request text was heard for this hand-off; ask the user to say it again.", id);
+          return;
+        }
+        handoffQueueRef.current.push(id);
+        onTranscript(text);
+        // Docs: silent progress notes while the backend works, a spoken one
+        // only when the delay starts to matter.
+        s?.appendThinking("The backend agent has started on this. No result yet.", id);
+        if (nudgeTimerRef.current) clearTimeout(nudgeTimerRef.current);
+        nudgeTimerRef.current = window.setTimeout(() => {
+          nudgeTimerRef.current = null;
+          if (handoffQueueRef.current.includes(id)) {
+            liveRef.current?.appendCommentary("Still working on it; it's taking a little longer than usual.", id);
+          }
+        }, 25000);
+      },
+      onError: (msg) => {
+        console.error("[hyo-voice] GPT-Live:", msg);
+        new Notice(`Hyo voice: ${msg}`, 7000);
+      },
+    });
+    convActiveRef.current = true;
+    setConversationActive(true);
+    mutedRef.current = false;
+    setMicMuted(false);
+    // WebRTC first (proper echo cancellation); if the peer connection can't be
+    // set up here, fall back to the WebSocket path rather than no call at all.
+    let session = makeSession("webrtc");
+    liveRef.current = session;
+    try {
+      await session.start();
+    } catch (err) {
+      console.warn("[hyo-voice] WebRTC call failed, trying WebSocket:", err);
+      liveLog(`!! webrtc failed: ${err instanceof Error ? err.message : String(err)}`);
+      session.stop();
+      session = makeSession("ws");
+      liveRef.current = session;
+      try {
+        await session.start();
+      } catch (err2) {
+        console.error("[hyo-voice] GPT-Live start failed:", err2);
+        new Notice(
+          `Hyo voice: couldn't start the call — ${err2 instanceof Error ? err2.message : "error"}`,
+          8000
+        );
+        session.stop();
+        liveRef.current = null;
+        convActiveRef.current = false;
+        setConversationActive(false);
+        setVoiceState("idle");
+      }
+    }
+  }, [openAiApiKey, gptLiveVoice, getLiveContext, onTranscript, onVoiceTurn, debugLog]);
+
+  const stopLive = useCallback(() => {
+    liveRef.current?.stop();
+    liveRef.current = null;
+    liveDelegationRef.current = null;
+    handoffQueueRef.current = [];
+    if (nudgeTimerRef.current) {
+      clearTimeout(nudgeTimerRef.current);
+      nudgeTimerRef.current = null;
+    }
+    convActiveRef.current = false;
+    setConversationActive(false);
+    setVoiceState("idle");
+    setLiveSide(null);
+    setLiveLevel(0);
+    setLiveStatus("off");
+  }, []);
+
+  /** Tell the voice something happened on screen (permission ask, question). */
+  const notifyAttention = useCallback((text: string) => {
+    liveRef.current?.appendThinking(text, liveDelegationRef.current);
+  }, []);
+
+  /**
+   * Claude has finished a hand-off. Give the voice the whole spoken reply in
+   * one go, then a note that it's complete — the API has no "delegation done"
+   * signal, so without this the voice can go on thinking work is still running.
+   */
+  const finishHandoff = useCallback((spoken: string) => {
+    const s = liveRef.current;
+    if (!s) return;
+    // The finished reply answers the oldest hand-off still open.
+    const id = handoffQueueRef.current.shift() ?? liveDelegationRef.current;
+    if (nudgeTimerRef.current) {
+      clearTimeout(nudgeTimerRef.current);
+      nudgeTimerRef.current = null;
+    }
+    if (handoffQueueRef.current.length > 0) {
+      // A newer request is already waiting: this result is out of date for
+      // the voice (docs: "discard an outdated result"). Keep it as silent
+      // context — it's still in the thread — and let the newer one speak.
+      s.appendThinking(`Earlier result, now superseded: ${spoken}`, id);
+      return;
+    }
+    // Commentary only — Claude's words, in one piece. A trailing "that's
+    // complete" thinking note was tried and made things worse: the voice
+    // answered the note instead of saying the result.
+    s.appendCommentary(spoken, id);
+    liveDelegationRef.current = null;
+  }, []);
+
+  /** Silent progress note while Claude works: "the agent is checking the calendar". */
+  const notifyProgress = useCallback((doing: string) => {
+    const id = handoffQueueRef.current[0] ?? liveDelegationRef.current;
+    liveRef.current?.appendThinking(`The backend agent is ${doing}. No result yet.`, id);
   }, []);
 
   // --- Hands-free conversation loop (neural VAD) ---
@@ -333,6 +545,10 @@ export function useVoiceMode({
 
   const startConversation = useCallback(async () => {
     if (convActiveRef.current) return;
+    if (isLive) {
+      await startLive();
+      return;
+    }
     if (!vadAssetBase) {
       new Notice("Hyo voice: voice-model assets path missing — can't start.", 6000);
       return;
@@ -539,9 +755,13 @@ export function useVoiceMode({
         9000
       );
     }
-  }, [vadAssetBase, apiKey, onTranscript, ensureAssets]);
+  }, [vadAssetBase, apiKey, onTranscript, ensureAssets, isLive, startLive]);
 
   const stopConversation = useCallback(() => {
+    if (liveRef.current) {
+      stopLive();
+      return;
+    }
     convActiveRef.current = false;
     setConversationActive(false);
     if (vadTimerRef.current) {
@@ -564,11 +784,15 @@ export function useVoiceMode({
     stopAudio();
     suspendedPrevRef.current = false;
     setVoiceState("idle");
-  }, [stopAudio]);
+  }, [stopAudio, stopLive]);
 
   const toggleMute = useCallback(() => {
     mutedRef.current = !mutedRef.current;
     setMicMuted(mutedRef.current);
+    if (liveRef.current) {
+      liveRef.current.setMuted(mutedRef.current);
+      return;
+    }
     const v = vadRef.current;
     if (mutedRef.current) {
       // Pause: stop listening and cancel any pending auto-send, but KEEP the
@@ -591,6 +815,7 @@ export function useVoiceMode({
 
   // Called from ChatPanel so the loop knows to stay muted while Chad works.
   const setBusy = useCallback((b: boolean) => {
+    if (busyRef.current && !b) busyEndedAtRef.current = performance.now();
     busyRef.current = b;
   }, []);
 
@@ -648,5 +873,13 @@ export function useVoiceMode({
     stopConversation,
     toggleMute,
     setBusy,
+    notifyAttention,
+    finishHandoff,
+    notifyProgress,
+    // live call
+    isLive,
+    liveSide,
+    liveLevel,
+    liveStatus,
   };
 }

@@ -13,11 +13,25 @@ interface ChatMessageProps {
   onRecover?: () => void;
   onPermissionResponse?: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
   onQuestionAnswer?: (questionId: string, answers: Record<string, string>) => void;
+  /** Claude's reply to a live-call hand-off: the voice spoke it, so show only the work. */
+  hideProse?: boolean;
 }
 
-export function ChatMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer }: ChatMessageProps) {
+export function ChatMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, hideProse }: ChatMessageProps) {
   if (message.isCompaction) {
     return <CompactionMessage message={message} />;
+  }
+  // Spoken on a live call: same bubbles, with a small "voice" mark.
+  if (message.voice) {
+    return (
+      <div className="hyo-voice-turn">
+        {message.role === "user" ? (
+          <UserMessage message={message} />
+        ) : (
+          <AssistantMessage message={message} />
+        )}
+      </div>
+    );
   }
   if (message.role === "user") {
     return <UserMessage message={message} />;
@@ -29,6 +43,7 @@ export function ChatMessage({ message, onRecover, onPermissionResponse, onQuesti
         onRecover={onRecover}
         onPermissionResponse={onPermissionResponse}
         onQuestionAnswer={onQuestionAnswer}
+        hideProse={hideProse}
       />
     );
   }
@@ -53,10 +68,12 @@ function UserMessage({ message }: { message: Message }) {
   // displayText holds exactly what the user typed; attachments holds file names.
   // Fall back to raw content for messages sent before this change.
   const fileChips = (message.attachments || []).filter((a) => a.type === "file");
-  const displayText = message.displayText ?? message.content;
+  // A live-call hand-off shows as a pointer; the spoken request sits just
+  // above it as a voice turn.
+  const displayText = message.handoff ? "↗ Handed to Claude" : message.displayText ?? message.content;
 
   return (
-    <div className="hyo-message hyo-message-user">
+    <div className={`hyo-message hyo-message-user${message.handoff ? " hyo-handoff" : ""}`}>
       <div className="hyo-message-content">
         {fileChips.length > 0 && (
           <div className="hyo-message-file-chips">
@@ -129,11 +146,12 @@ function isThinkingBlockErrorContent(text: string): boolean {
   return THINKING_BLOCK_ERROR_RE.test(text);
 }
 
-function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer }: {
+function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, hideProse }: {
   message: Message;
   onRecover?: () => void;
   onPermissionResponse?: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
   onQuestionAnswer?: (questionId: string, answers: Record<string, string>) => void;
+  hideProse?: boolean;
 }) {
   const blocks = message.orderedBlocks || [];
   const toolCalls = message.toolCalls || [];
@@ -166,11 +184,15 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
       .join("\n\n");
   }, [blocks, message.content]);
 
+  const wrapClass = `hyo-message hyo-message-assistant${hideProse ? " hyo-handoff-reply" : ""}`;
+  const spokenNote = hideProse ? <div className="hyo-spoken-note">Spoken on the call</div> : null;
+
   if (blocks.length === 0 && message.content) {
     return (
-      <div className="hyo-message hyo-message-assistant">
+      <div className={wrapClass}>
         <div className="hyo-message-content">
-          <MarkdownBlock content={transformScreenBlocks(message.content)} />
+          {spokenNote}
+          {!hideProse && <MarkdownBlock content={transformScreenBlocks(message.content)} />}
         </div>
         {showRecover && onRecover && <RecoverBanner onRecover={onRecover} />}
         {!message.streaming && (
@@ -183,8 +205,9 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
   }
 
   return (
-    <div className="hyo-message hyo-message-assistant">
+    <div className={wrapClass}>
       <div className="hyo-message-content">
+        {spokenNote}
         {blocks.map((block, i) => {
           if (block.type === "thinking") {
             return (
@@ -195,7 +218,7 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
             );
           }
           if (block.type === "text") {
-            if (block.isSkillOutput || skillTurnIndices.has(block.turnIndex)) return null;
+            if (hideProse || block.isSkillOutput || skillTurnIndices.has(block.turnIndex)) return null;
             return <MarkdownBlock key={i} content={transformScreenBlocks(block.content || "")} />;
           }
           if (block.type === "tool") {

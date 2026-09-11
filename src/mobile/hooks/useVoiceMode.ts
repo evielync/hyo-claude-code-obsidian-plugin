@@ -6,6 +6,8 @@ import {
   speechToText,
   STT_TIMEOUT_ERROR,
 } from "../voice/elevenlabs-api";
+import { openAiSpeechToText } from "../voice/openai-stt";
+import { GptLiveSession, type GptLiveHistoryItem } from "../../voice/gpt-live";
 
 export type VoiceState = "idle" | "listening" | "thinking" | "speaking" | "error";
 
@@ -13,22 +15,171 @@ const VOICE_SPEEDS = [1.0, 1.25, 1.5, 2.0];
 
 interface UseVoiceModeOptions {
   apiKey: string;
+  /**
+   * Who transcribes a dictation. Follows the voice engine, so one key covers
+   * everything: OpenAI when the engine is GPT-Live, ElevenLabs otherwise.
+   */
+  stt: { provider: "elevenlabs" | "openai"; apiKey: string };
   voiceId: string;
   playbackSpeed: number;
   isVoiceMode: boolean;
   autoSpeak: boolean;
   onTranscript: (text: string) => void;
+  /**
+   * GPT-Live call over WebRTC. The desktop gateway signs the offer and builds
+   * the session (its key, voice, personality, the tab's agent), so the phone
+   * only supplies the offer, the tab's agent name and the conversation so far.
+   */
+  live?: {
+    enabled: boolean;
+    exchangeSdp: (offerSdp: string, agent: string, history: GptLiveHistoryItem[]) => Promise<{ sdp: string }>;
+    getContext: () => { agent: string; history: GptLiveHistoryItem[] };
+    onVoiceTurn: (side: "user" | "agent", text: string) => void;
+  };
 }
 
 export function useVoiceMode({
   apiKey,
+  stt,
   voiceId,
   playbackSpeed,
   isVoiceMode,
   autoSpeak: autoSpeakEnabled,
   onTranscript,
+  live,
 }: UseVoiceModeOptions) {
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  // ---- GPT-Live call (full duplex) ----
+  const isLive = !!live?.enabled;
+  const liveRef = useRef<GptLiveSession | null>(null);
+  const liveDelegationRef = useRef<string | null>(null);
+  const handoffQueueRef = useRef<string[]>([]);
+  const nudgeTimerRef = useRef<number | null>(null);
+  const [liveSide, setLiveSide] = useState<"user" | "agent" | null>(null);
+  const [liveLevel, setLiveLevel] = useState(0);
+  const liveLevelRef = useRef<{ user: number; agent: number }>({ user: 0, agent: 0 });
+  const [liveStatus, setLiveStatus] = useState<"off" | "connecting" | "connected" | "live">("off");
+  const liveOptsRef = useRef(live);
+  liveOptsRef.current = live;
+
+  const stopLive = useCallback(() => {
+    liveRef.current?.stop();
+    liveRef.current = null;
+    liveDelegationRef.current = null;
+    handoffQueueRef.current = [];
+    if (nudgeTimerRef.current) {
+      clearTimeout(nudgeTimerRef.current);
+      nudgeTimerRef.current = null;
+    }
+    setVoiceState("idle");
+    setLiveSide(null);
+    setLiveLevel(0);
+    setLiveStatus("off");
+  }, []);
+
+  const startLive = useCallback(async () => {
+    const opts = liveOptsRef.current;
+    if (!opts?.enabled || liveRef.current) return;
+    const { agent, history } = opts.getContext();
+    handoffQueueRef.current = [];
+    setLiveStatus("connecting");
+    const session = new GptLiveSession({
+      transport: "webrtc",
+      greet: true,
+      apiKey: "", // the desktop signs; the phone never holds the key
+      voice: "",
+      instructions: "",
+      history,
+      exchangeSdp: (offerSdp) => opts.exchangeSdp(offerSdp, agent, history),
+      onState: (s) => {
+        setVoiceState(s === "connecting" ? "thinking" : s === "closed" ? "idle" : s);
+        if (s === "connecting") setLiveStatus("connecting");
+        else if (s === "closed") setLiveStatus("off");
+        else setLiveStatus((prev) => (prev === "live" ? "live" : "connected"));
+      },
+      onFirstSpeech: () => setLiveStatus("live"),
+      onTurn: (side, text) => liveOptsRef.current?.onVoiceTurn(side, text),
+      onLevel: (side, level) => {
+        const lv = liveLevelRef.current;
+        lv[side] = level;
+        const top = lv.user >= lv.agent ? "user" : "agent";
+        const val = Math.max(lv.user, lv.agent);
+        setLiveLevel(val);
+        setLiveSide(val > 0.05 ? top : null);
+      },
+      onDelegation: (id, text) => {
+        liveDelegationRef.current = id;
+        const s = liveRef.current;
+        if (!text) {
+          s?.appendThinking("No request text was heard for this hand-off; ask the user to say it again.", id);
+          return;
+        }
+        handoffQueueRef.current.push(id);
+        onTranscriptRef.current(text);
+        s?.appendThinking("The backend agent has started on this. No result yet.", id);
+        if (nudgeTimerRef.current) clearTimeout(nudgeTimerRef.current);
+        nudgeTimerRef.current = window.setTimeout(() => {
+          nudgeTimerRef.current = null;
+          if (handoffQueueRef.current.includes(id)) {
+            liveRef.current?.appendCommentary("Still working on it; it's taking a little longer than usual.", id);
+          }
+        }, 25000);
+      },
+      onError: (msg) => {
+        console.error("[hyo-voice] GPT-Live:", msg);
+        new Notice(`Hyo voice: ${msg}`, 7000);
+      },
+    });
+    liveRef.current = session;
+    try {
+      await session.start();
+    } catch (err) {
+      console.error("[hyo-voice] GPT-Live start failed:", err);
+      new Notice(`Hyo voice: couldn't start the call — ${err instanceof Error ? err.message : "error"}`, 8000);
+      session.stop();
+      liveRef.current = null;
+      setLiveStatus("off");
+      setVoiceState("idle");
+    }
+  }, []);
+
+  /** Claude finished a hand-off: the whole spoken reply, in one piece. */
+  const finishHandoff = useCallback((spoken: string) => {
+    const s = liveRef.current;
+    if (!s) return;
+    const id = handoffQueueRef.current.shift() ?? liveDelegationRef.current;
+    if (nudgeTimerRef.current) {
+      clearTimeout(nudgeTimerRef.current);
+      nudgeTimerRef.current = null;
+    }
+    if (handoffQueueRef.current.length > 0) {
+      s.appendThinking(`Earlier result, now superseded: ${spoken}`, id);
+      return;
+    }
+    s.appendCommentary(spoken, id);
+    liveDelegationRef.current = null;
+  }, []);
+
+  /** Silent progress note while Claude works. */
+  const notifyProgress = useCallback((doing: string) => {
+    const id = handoffQueueRef.current[0] ?? liveDelegationRef.current;
+    liveRef.current?.appendThinking(`The backend agent is ${doing}. No result yet.`, id);
+  }, []);
+
+  /** Something on screen needs the user (permission ask, question). */
+  const notifyAttention = useCallback((text: string) => {
+    liveRef.current?.appendThinking(text, liveDelegationRef.current);
+  }, []);
+
+  const toggleLiveMute = useCallback(() => {
+    const s = liveRef.current;
+    if (!s) return;
+    liveMutedRef.current = !liveMutedRef.current;
+    s.setMuted(liveMutedRef.current);
+    setLiveMuted(liveMutedRef.current);
+  }, []);
+  const liveMutedRef = useRef(false);
+  const [liveMuted, setLiveMuted] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [isPaused, setIsPaused] = useState(false);
   const [hasLastAudio, setHasLastAudio] = useState(false);
@@ -85,6 +236,8 @@ export function useVoiceMode({
   onTranscriptRef.current = onTranscript;
   const apiKeyRef = useRef(apiKey);
   apiKeyRef.current = apiKey;
+  const sttRef = useRef(stt);
+  sttRef.current = stt;
 
   // --- Recording ---
 
@@ -190,7 +343,11 @@ export function useVoiceMode({
       // through — ElevenLabs needs to know the actual container format,
       // not an assumed one (see the note in startRecording above).
       const arrayBuffer = await blob.arrayBuffer();
-      const transcript = await speechToText(apiKeyRef.current, arrayBuffer, mimeType);
+      const { provider, apiKey: sttKey } = sttRef.current;
+      const transcript =
+        provider === "openai"
+          ? await openAiSpeechToText(sttKey, arrayBuffer, mimeType)
+          : await speechToText(sttKey, arrayBuffer, mimeType);
 
       if (transcript) {
         onTranscriptRef.current(transcript);
@@ -370,5 +527,17 @@ export function useVoiceMode({
     cycleSpeed,
     speakResponse,
     autoSpeak,
+    // GPT-Live call
+    isLive,
+    startLive,
+    stopLive,
+    finishHandoff,
+    notifyProgress,
+    notifyAttention,
+    toggleLiveMute,
+    liveMuted,
+    liveSide,
+    liveLevel,
+    liveStatus,
   };
 }

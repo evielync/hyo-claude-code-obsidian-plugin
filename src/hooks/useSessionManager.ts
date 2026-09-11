@@ -1,7 +1,7 @@
 import { debug } from "../debug";
 import { useState, useCallback, useRef, useEffect } from "react";
 import { ClaudeTransport, normalizeModelId } from "../claude-transport";
-import { VOICE_PERSONA } from "../voice/voice-persona";
+import { VOICE_PERSONA, LIVE_BACKEND_PERSONA, HANDOFF_MARKER } from "../voice/voice-persona";
 import type {
   Message,
   ToolCallData,
@@ -9,7 +9,7 @@ import type {
   AskQuestionData,
   PlanReviewData,
 } from "./useChatEngine";
-import { listPastSessions, loadSessionHistory, saveCustomTitle, setTaskMeta as persistTaskMeta, type PastSession, getProjectDir } from "../session-parser";
+import { listPastSessions, loadSessionHistory, saveCustomTitle, setTaskMeta as persistTaskMeta, type PastSession, getProjectDir, appendVoiceTurns, getVoiceTurns, type VoiceTurn } from "../session-parser";
 import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
 import { generateConversationTitle } from "../title-generator";
 import { Platform } from "obsidian";
@@ -22,6 +22,16 @@ export type { PastSession };
 // A bare greeting opener ("hi chad", "hey", "good morning") carries no topic —
 // used to skip it when picking what to title a conversation from, so voice
 // chats started with a hello don't end up titled off the hello (or untitled).
+/** The spoken request inside a hand-off prompt: after any voice-call excerpt, before the note. */
+function handoffRequestText(content: string): string {
+  let t = content;
+  const i = t.indexOf("[End of voice call excerpt]");
+  if (i >= 0) t = t.slice(i + "[End of voice call excerpt]".length);
+  const j = t.indexOf(HANDOFF_MARKER);
+  if (j >= 0) t = t.slice(0, j);
+  return t.trim();
+}
+
 function isTrivialOpener(text: string): boolean {
   const s = text.trim().toLowerCase().replace(/[.!,?'"]/g, "");
   if (!s) return true;
@@ -75,6 +85,8 @@ interface SessionManagerOptions {
   maxOutputTokens?: number;
   settingsVersion?: number;
   autoGenerateTitles?: boolean;
+  // Which voice engine is on — picks the persona Claude gets in voice mode.
+  voiceEngine?: string;
 }
 
 // ------- utilities -------
@@ -255,8 +267,10 @@ export function useSessionManager(options: SessionManagerOptions) {
         tabs: prev.tabs.map((tab) => {
           if (tab.id !== tabId) return tab;
           const msgs = [...tab.messages];
+          // Claude's message, never a spoken turn from a live call — those
+          // can land after the streaming placeholder while Claude works.
           for (let i = msgs.length - 1; i >= 0; i--) {
-            if (msgs[i].role === "assistant") {
+            if (msgs[i].role === "assistant" && !msgs[i].voice) {
               msgs[i] = { ...msgs[i], ...updater(msgs[i]) };
               break;
             }
@@ -498,7 +512,7 @@ export function useSessionManager(options: SessionManagerOptions) {
                 userIdx >= 0
                   ? msgs
                       .slice(userIdx + 1)
-                      .find((m) => m.role === "assistant" && !m.isCompaction)
+                      .find((m) => m.role === "assistant" && !m.isCompaction && !m.voice)
                   : undefined;
 
               if (firstUser && firstAssistant) {
@@ -842,6 +856,73 @@ export function useSessionManager(options: SessionManagerOptions) {
     [options.cwd]
   );
 
+  // ---- Live-call transcript ---------------------------------------------------
+  // Spoken turns from a GPT-Live call go into the thread as `voice` messages.
+  // They are Hyo's record, not Claude's: persisted to session-metadata against
+  // the tab's session id. A tab with no session yet (a call that hasn't handed
+  // anything to Claude) keeps them flagged unsaved and flushes as soon as an id
+  // exists — every append tries, and endCall calls flush explicitly.
+
+  const flushVoiceTurns = useCallback(() => {
+    const tab = stateRef.current.tabs.find((t) => t.id === stateRef.current.activeTabId);
+    if (!tab || !tab.cliSessionId) return;
+    const unsaved: VoiceTurn[] = [];
+    let claudeCount = 0;
+    for (const m of tab.messages) {
+      if (m.voice) {
+        if (m.voiceUnsaved) {
+          unsaved.push({
+            side: m.role === "user" ? "user" : "agent",
+            text: m.content,
+            at: m.voiceAt || new Date().toISOString(),
+            after: claudeCount,
+          });
+        }
+      } else {
+        claudeCount++;
+      }
+    }
+    if (!unsaved.length) return;
+    appendVoiceTurns(options.cwd, tab.cliSessionId, unsaved);
+    const tabId = tab.id;
+    setState((prev) => ({
+      ...prev,
+      tabs: prev.tabs.map((t) =>
+        t.id !== tabId
+          ? t
+          : { ...t, messages: t.messages.map((m) => (m.voiceUnsaved ? { ...m, voiceUnsaved: false } : m)) }
+      ),
+    }));
+  }, [options.cwd]);
+
+  const appendVoiceTurn = useCallback(
+    (side: "user" | "agent", text: string) => {
+      const tabId = stateRef.current.activeTabId;
+      const msg: Message = {
+        role: side === "user" ? "user" : "assistant",
+        content: text,
+        streaming: false,
+        voice: true,
+        voiceUnsaved: true,
+        voiceAt: new Date().toISOString(),
+      };
+      setState((prev) => ({
+        ...prev,
+        tabs: prev.tabs.map((tab) => {
+          if (tab.id !== tabId) return tab;
+          const title =
+            tab.messages.length === 0 && tab.title === "New conversation" && side === "user"
+              ? text.slice(0, 40) + (text.length > 40 ? "..." : "")
+              : tab.title;
+          return { ...tab, title, messages: [...tab.messages, msg] };
+        }),
+      }));
+      scrollRef.current.nearBottom = true;
+      setTimeout(flushVoiceTurns, 0);
+    },
+    [flushVoiceTurns]
+  );
+
   // Move a tab to sit where another tab currently is. Dropping onto the right
   // half of the target lands after it, which is what makes dragging a tab to
   // the end of the bar feel natural.
@@ -865,7 +946,7 @@ export function useSessionManager(options: SessionManagerOptions) {
   // ------- messaging -------
 
   const sendMessage = useCallback(
-    (content: string | any[], meta?: { displayText?: string; attachedFileNames?: string[]; isCompaction?: boolean }) => {
+    (content: string | any[], meta?: { displayText?: string; attachedFileNames?: string[]; isCompaction?: boolean; handoff?: boolean }) => {
       const tabId = stateRef.current.activeTabId;
 
       // For display, use the typed text; for arrays (image messages) use displayText or placeholder
@@ -879,6 +960,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         displayText: meta?.displayText,
         attachments: meta?.attachedFileNames?.map((name) => ({ type: "file", name })),
         isCompaction: meta?.isCompaction,
+        handoff: meta?.handoff,
       };
       const assistantMsg: Message = {
         role: "assistant",
@@ -943,7 +1025,13 @@ export function useSessionManager(options: SessionManagerOptions) {
           // Voice conversation mode: append the voice persona so Chad speaks for
           // listening. toggleVoiceMode kills the transport, so the next spawn
           // (here) picks up or drops the persona and --resumes the same session.
-          appendSystemPrompt: currentTab?.voiceMode ? VOICE_PERSONA : undefined,
+          // ElevenLabs: Claude IS the voice, so it gets the full spoken persona.
+          // GPT-Live: a separate model talks; Claude is the backend it hands to.
+          appendSystemPrompt: currentTab?.voiceMode
+            ? options.voiceEngine === "gpt-live"
+              ? LIVE_BACKEND_PERSONA
+              : VOICE_PERSONA
+            : undefined,
           onMessage: makeProcessEvent(tabId),
           onError: (error) => console.error("[hyo] CLI error:", error),
           onClose: (code) => {
@@ -1035,7 +1123,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       const tab = stateRef.current.tabs.find((t) => t.id === tabId);
       const lastAssistant = [...(tab?.messages || [])]
         .reverse()
-        .find((m) => m.role === "assistant");
+        .find((m) => m.role === "assistant" && !m.voice);
       const questions = lastAssistant?.askQuestion?.questions || [];
 
       // Send control_response with questions + answers as updatedInput.
@@ -1156,14 +1244,41 @@ export function useSessionManager(options: SessionManagerOptions) {
 
     // Load conversation history from JSONL
     const history = loadSessionHistory(options.cwd, pastSession.id);
-    const messages: Message[] = history.map((m) => ({
+    const claudeMessages: Message[] = history.map((m) => ({
       role: m.role,
       content: m.content,
       thinking: m.thinking || "",
       toolCalls: m.toolCalls || [],
       orderedBlocks: m.orderedBlocks || [],
       streaming: false,
+      // Hand-offs from a live call carry this marker in the prompt itself;
+      // the spoken request is the line just before it.
+      handoff: m.role === "user" && m.content.includes(HANDOFF_MARKER) ? true : undefined,
+      displayText:
+        m.role === "user" && m.content.includes(HANDOFF_MARKER)
+          ? handoffRequestText(m.content)
+          : undefined,
     }));
+    // Thread the spoken turns from any live calls back in, each after the
+    // Claude message that was last when it was said.
+    const voiceTurns = getVoiceTurns(options.cwd, pastSession.id);
+    let messages: Message[] = claudeMessages;
+    if (voiceTurns.length) {
+      messages = [];
+      let vi = 0;
+      for (let ci = 0; ci <= claudeMessages.length; ci++) {
+        while (vi < voiceTurns.length && voiceTurns[vi].after <= ci) {
+          const t = voiceTurns[vi++];
+          messages.push({
+            role: t.side === "user" ? "user" : "assistant",
+            content: t.text,
+            streaming: false,
+            voice: true,
+          });
+        }
+        if (ci < claudeMessages.length) messages.push(claudeMessages[ci]);
+      }
+    }
 
     const id = genId();
     setState((prev) => {
@@ -1350,5 +1465,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     openPastSession,
     refreshPastSessions,
     scrollRef,
+    appendVoiceTurn,
+    flushVoiceTurns,
   };
 }

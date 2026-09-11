@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0
+
+**The one where you can actually have a conversation**
+
+- **A second voice engine: GPT-Live.** It's a real call. You talk, it talks, you can cut in whenever you like, and it comes back to you the moment you're done, no waiting for it to finish a monologue. Pick **GPT-Live** in Settings → Voice, paste an OpenAI API key, and you're on.
+- **It does the talking, Claude does the work.** The voice is the one you're chatting with. The moment you ask for something that needs your files, your tasks or real work, it hands that to Claude in the same conversation, keeps you company while Claude's on it ("still with it, hang on"), and tells you what came back.
+- **Everything said lands in the thread.** Both sides of the call appear as you go. A hand-off shows as "↗ Handed to Claude" and what Claude found is what the voice tells you, so you're never reading the same thing twice. Pick the conversation up by typing later and Claude knows what was said.
+- **Pick a voice and hear it first.** Twenty-two voices to choose from, with a **Play sample** button next to the picker so you're not guessing.
+- **A Personality box.** One text field that says how the voice should carry itself. There's a sensible default; change it if you want it warmer, drier, or more like you.
+- **It greets you when the call connects.** By name, if your agent file or the Personality box tells it who you are, and it varies with the time of day rather than saying the same line every time. If you have more than one agent, it introduces itself as whichever one the tab is set to.
+- **A new voice panel.** Voice mode is now one full-screen surface: an orb that turns with whoever's speaking, a soft glow on your own theme's background, and just three controls, transcript, mute, end. You see it from the first moment, with "Connecting…" until the voice speaks.
+- **It works on your phone.** Turn voice on in Hyo mobile and your Mac sets up the call for you, so your OpenAI key never needs to be on the phone for calls. The phone gets the same panel, plus a mute button.
+- **One key for everything on mobile.** With GPT-Live on, dictation on the phone transcribes through OpenAI too, so you don't need an ElevenLabs key as well.
+- **The voice toggle stays put while you're dictating.** While a dictation is recording or transcribing, the voice-mode button is dimmed and does nothing, so a stray tap can't switch modes and lose your take.
+- **ElevenLabs is exactly as it was.** Leave the engine on ElevenLabs and nothing changes for you.
+
 ## 0.5.13
 
 **The one where the refresh button works the other way too**
