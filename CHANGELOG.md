@@ -15,6 +15,7 @@
 - **One key for everything on mobile.** With GPT-Live on, dictation on the phone transcribes through OpenAI too, so you don't need an ElevenLabs key as well.
 - **The voice toggle stays put while you're dictating.** While a dictation is recording or transcribing, the voice-mode button is dimmed and does nothing, so a stray tap can't switch modes and lose your take.
 - **ElevenLabs is exactly as it was.** Leave the engine on ElevenLabs and nothing changes for you.
+- **Your draft survives a model change.** Typing a message and then switching the model, effort or permission mode before sending used to wipe the box, attachments included. It stays put now.
 
 ## 0.5.13
 
