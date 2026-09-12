@@ -363,8 +363,13 @@ export class GatewayClient {
     this.tabHandlers.delete(tabId);
   }
 
-  sendPrompt(tabId: string, text: string, sessionId?: string, resume?: boolean, askFirst?: boolean, appendSystemPrompt?: string, agent?: string, model?: string): void {
-    this.send({ type: "prompt", tabId, text, sessionId, resume, askFirst, appendSystemPrompt, agent, model });
+  // `content` carries the full Anthropic content-block array when the message
+  // has images or PDFs attached; `text` carries the same message flattened to
+  // plain text. Both go on the wire every time. The gateway prefers `content`
+  // and falls back to `text`, so a phone running ahead of the Mac's gateway
+  // still delivers the words instead of failing the send.
+  sendPrompt(tabId: string, text: string, sessionId?: string, resume?: boolean, askFirst?: boolean, appendSystemPrompt?: string, agent?: string, model?: string, content?: any[]): void {
+    this.send({ type: "prompt", tabId, text, content, sessionId, resume, askFirst, appendSystemPrompt, agent, model });
   }
 
   sendPermission(

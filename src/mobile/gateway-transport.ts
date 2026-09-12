@@ -55,20 +55,14 @@ function genTabId(): string {
   });
 }
 
-// The gateway's `prompt` RPC only carries plain text — image/PDF blocks
-// aren't part of the current wire protocol. Flatten any content array to
-// text, noting what had to be dropped, rather than silently losing it.
+// The `prompt` RPC carries both shapes: `content` (the block array, verbatim)
+// and `text` (the same message flattened). The gateway writes `content`
+// straight to the CLI's stream-json stdin, which accepts image and document
+// blocks; `text` is what an older gateway reads.
 function flattenContentBlocks(blocks: any[]): string {
   const textParts: string[] = [];
-  let droppedMedia = 0;
   for (const b of blocks) {
     if (b?.type === "text" && b.text) textParts.push(b.text);
-    else if (b?.type === "image" || b?.type === "document") droppedMedia++;
-  }
-  if (droppedMedia > 0) {
-    textParts.push(
-      `[${droppedMedia} attached image/PDF file(s) were not sent — image and PDF attachments aren't supported over the mobile gateway yet.]`
-    );
   }
   return textParts.join("\n\n");
 }
@@ -113,6 +107,7 @@ export class GatewayTransport {
   }
 
   sendUserMessage(content: string | any[], askFirst?: boolean): void {
+    const blocks = typeof content === "string" ? undefined : content;
     const text = typeof content === "string" ? content : flattenContentBlocks(content);
     // sessionId/resume are consulted by the gateway whenever it has no live
     // process for this tabId — the first prompt, and again after any socket
@@ -120,7 +115,7 @@ export class GatewayTransport {
     // current from the CLI's own init event, so a respawn resumes the same
     // session rather than starting a fresh one. askFirst likewise reflects
     // the live "Ask First" toggle at send time rather than being fixed at spawn.
-    this.client.sendPrompt(this.tabId, text, this.options.sessionId, this.options.resume, askFirst, this.options.appendSystemPrompt, this.options.agent, this.options.model);
+    this.client.sendPrompt(this.tabId, text, this.options.sessionId, this.options.resume, askFirst, this.options.appendSystemPrompt, this.options.agent, this.options.model, blocks);
   }
 
   sendPermissionResponse(

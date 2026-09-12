@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1
+
+**The one where screenshots on mobile are fixed**
+
+- **Attachments work from your phone and iPad.** Send a screenshot or a PDF from Hyo mobile and Claude can see it, the same as it always could on your Mac. The attach button read the file fine, but the link back to your Mac only ever carried words, so the picture was dropped on the way and you got a line saying it hadn't been sent. Now the whole message goes across, image, PDF and all.
+
 ## 0.6.0
 
 **The one where you can actually have a conversation**

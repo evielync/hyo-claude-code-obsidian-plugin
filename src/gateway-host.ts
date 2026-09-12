@@ -1256,7 +1256,16 @@ export function startGatewayHost(config: GatewayHostConfig): void {
             } else if (state.client !== ws) {
               attachClient(state, ws);
             }
-            writeStdin(m.tabId, { type: "user", message: { role: "user", content: [{ type: "text", text: m.text }] } });
+            // `content` is the client's full Anthropic block array — text plus
+            // any image/document blocks from attachments. The CLI's stream-json
+            // stdin accepts those blocks verbatim (verified 2026-09-12: a base64
+            // image block round-trips and the model describes the picture). A
+            // client that sends only `text` goes through the fallback.
+            const promptContent =
+              Array.isArray(m.content) && m.content.length > 0
+                ? m.content
+                : [{ type: "text", text: m.text }];
+            writeStdin(m.tabId, { type: "user", message: { role: "user", content: promptContent } });
             state.generating = true;
             break;
           }
