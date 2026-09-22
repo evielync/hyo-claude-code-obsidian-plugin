@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.2
+
+**The one where Opus 5.5 moves in**
+
+- **Opus 5.5 is in the model picker.** It takes Opus 5's place in the list, so if Opus 5 was your default you are on 5.5 now and there is nothing to change. Opus 4.8 stays where it is for anyone who still wants it.
+- On a live voice call, the transcript, mute and end buttons stay reachable when a card or a permission request comes up. They used to get covered by whatever was on screen.
+
 ## 0.6.1
 
 **The one where screenshots on mobile are fixed**

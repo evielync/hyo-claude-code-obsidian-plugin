@@ -2687,6 +2687,14 @@ button.hyo-ask-send:disabled {
 .hyo-vv-perm-btns button.hyo-vv-perm-deny { background: color-mix(in srgb, var(--text-error) 16%, transparent); color: var(--text-error); }
 .hyo-blob.dim .hyo-blob-core { opacity: 0.45; }
 
+/* On a live call the transcript / mute / end buttons sit inside the surface,
+   so anything floating over the stage stops above them: the controls stay
+   reachable while a card or a permission ask is up. The height is the bar's
+   own box — 46px button + 14px above + 30px below. */
+.hyo-voiceview.live { --hyo-vv-barh: 90px; }
+.hyo-voiceview.live .hyo-vv-overlay { bottom: calc(14px + var(--hyo-vv-barh)); }
+.hyo-voiceview.live .hyo-vv-perm { bottom: calc(16px + var(--hyo-vv-barh)); }
+
 /* --- back-to-voice bar (shown above the transcript when flipped open) --- */
 .hyo-vv-backbar {
   display: flex; align-items: center; justify-content: space-between;

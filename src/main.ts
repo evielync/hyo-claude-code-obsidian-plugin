@@ -227,6 +227,13 @@ export default class HyoPlugin extends Plugin {
       this.settings.model = "claude-sonnet-5";
       await this.saveData(this.settings);
     }
+    // Opus 5.5 replaced Opus 5 in the picker. Anyone whose saved default was
+    // Opus 5 moves up to 5.5 rather than being left pointing at a model that
+    // is no longer in the list.
+    if (this.settings.model === "claude-opus-5") {
+      this.settings.model = "claude-opus-5-5";
+      await this.saveData(this.settings);
+    }
     // The CLI renamed the "default" permission mode to "manual" at some
     // point after 2.1.32. Settings saved under the old CLI still have the
     // old string, which the new CLI rejects as an invalid --permission-mode
