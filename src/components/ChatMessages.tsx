@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from "react";
 import { ChatMessage } from "./ChatMessage";
 import { StreamingMessage } from "./StreamingMessage";
 import type { Message } from "../hooks/useChatEngine";
+import type { ClaudeUpdateRunner } from "./ClaudeUpdateCard";
 
 interface ChatMessagesProps {
   messages: Message[];
@@ -9,6 +10,7 @@ interface ChatMessagesProps {
   onPermissionResponse: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
   onQuestionAnswer: (questionId: string, answers: Record<string, string>) => void;
   onRecover?: () => void;
+  onClaudeUpdate?: ClaudeUpdateRunner;
 }
 
 export function ChatMessages({
@@ -17,6 +19,7 @@ export function ChatMessages({
   onPermissionResponse,
   onQuestionAnswer,
   onRecover,
+  onClaudeUpdate,
 }: ChatMessagesProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -75,6 +78,8 @@ export function ChatMessages({
             onPermissionResponse={onPermissionResponse}
             onQuestionAnswer={onQuestionAnswer}
             hideProse={hideProse}
+            onClaudeUpdate={onClaudeUpdate}
+            isLast={i === messages.length - 1}
           />
         );
       })}

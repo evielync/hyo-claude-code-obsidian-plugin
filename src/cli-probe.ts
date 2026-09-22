@@ -1,4 +1,5 @@
 import { Platform } from "obsidian";
+import { compareVersions } from "./models";
 
 /**
  * Finding Claude and getting it working, done honestly and invisibly. Two rules
@@ -185,6 +186,66 @@ export function installClaude(onPhase: Phase): Promise<{ ok: boolean; error?: st
       resolve(code === 0 ? { ok: true } : { ok: false, error: `Installer stopped (code ${code}).` })
     );
   });
+}
+
+/**
+ * Bring Claude up to at least `required`, in the background — no terminal.
+ * First asks the installed Claude to update itself (`claude update`), which is
+ * quick and keeps it where it already lives. The version it reports afterwards
+ * is the only proof that worked; if it's still too old (an install the updater
+ * can't touch, like an old npm or Homebrew copy), we fall back to the official
+ * installer, which puts a fresh one in ~/.local.
+ *
+ * Resolves ok only once a Claude is confirmed at or above `required`. The
+ * caller re-runs detection afterwards, since the installer path can leave the
+ * working Claude somewhere new.
+ */
+export async function updateClaude(
+  cliPath: string,
+  required: string,
+  onPhase: Phase
+): Promise<{ ok: boolean; error?: string }> {
+  if (!cp) return { ok: false, error: "This only works on the desktop app." };
+  const newEnough = (v?: string) => !!v && compareVersions(v, required) >= 0;
+
+  if (cliPath) {
+    onPhase("Updating Claude…");
+    await new Promise<void>((resolve) => {
+      let child: any;
+      try {
+        child = cp!.spawn(cliPath, ["update"], { windowsHide: true });
+      } catch {
+        return resolve();
+      }
+      // The updater can hang on a prompt it expects a person to answer. Give
+      // it a fair run, then move on to the installer rather than wait forever.
+      const timer = setTimeout(() => {
+        try {
+          child.kill();
+        } catch {}
+        resolve();
+      }, 180000);
+      child.on("error", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      child.on("close", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    onPhase("Checking the new version…");
+    if (newEnough(probeClaude(cliPath).version)) return { ok: true };
+  }
+
+  const installed = await installClaude(onPhase);
+  if (!installed.ok) return installed;
+  onPhase("Checking the new version…");
+  // The installer may have put Claude somewhere other than cliPath, so look
+  // everywhere and accept any copy that's new enough.
+  const fresh = detectClaude();
+  if (fresh.candidates.some((c) => c.works && newEnough(c.version))) return { ok: true };
+  return { ok: false, error: `Claude still reports an older version than ${required}.` };
 }
 
 /**

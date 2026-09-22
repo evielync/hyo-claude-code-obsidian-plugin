@@ -13,6 +13,7 @@ import { listPastSessions, loadSessionHistory, saveCustomTitle, setTaskMeta as p
 import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
 import { generateConversationTitle } from "../title-generator";
 import { Platform } from "obsidian";
+import { parseClaudeUpdateError } from "../models";
 // Node built-in; deferred so this module loads on mobile.
 const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
 
@@ -247,6 +248,11 @@ export function useSessionManager(options: SessionManagerOptions) {
   const streamStatesRef = useRef<Record<string, StreamState>>({});
   const scrollRef = useRef({ nearBottom: true });
   const stateRef = useRef(state);
+  // The newest cliPath, readable before a re-render lands. Updating Claude can
+  // move it (the installer puts a fresh copy in ~/.local), and the resend that
+  // follows fires in the same tick, before `options` catches up.
+  const cliPathRef = useRef(options.cliPath);
+  cliPathRef.current = options.cliPath;
   stateRef.current = state;
 
   // Cleanup transports on unmount
@@ -467,7 +473,22 @@ export function useSessionManager(options: SessionManagerOptions) {
           // un-suspends and the Blob drops to "Listening" while Chad's still
           // working. Only the main-chain result ends the turn.
           if (event.isSidechain || event.parent_tool_use_id) return;
-          updateTabLastAssistant(tabId, () => ({ streaming: false }));
+          updateTabLastAssistant(tabId, (msg) => {
+            // Claude too old for this model: the turn ends on an API error
+            // naming the version it needs. Flag it so the message offers the
+            // update instead of leaving the person with a raw 400.
+            const text = [
+              typeof event.result === "string" ? event.result : "",
+              msg.content || "",
+              ...(msg.orderedBlocks || [])
+                .filter((b) => b.type === "text")
+                .map((b) => b.content || ""),
+            ].join("\n");
+            const found = parseClaudeUpdateError(text);
+            return found
+              ? { streaming: false, claudeUpdate: { ...found, status: "needed" } }
+              : { streaming: false };
+          });
           const mu: any = event.modelUsage || {};
           const firstModel: any = Object.values(mu)[0];
           const contextWindow: number | undefined = firstModel?.contextWindow;
@@ -1013,7 +1034,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         const cliSessionId = currentTab?.cliSessionId;
 
         const transport = new ClaudeTransport({
-          cliPath: options.cliPath,
+          cliPath: cliPathRef.current || options.cliPath,
           cwd: options.cwd,
           model: currentTab?.model || options.model,
           effort: currentTab?.effort || options.effort,
@@ -1426,6 +1447,75 @@ export function useSessionManager(options: SessionManagerOptions) {
     [options.cwd]
   );
 
+  // After Claude has been updated from the "needs an update" card: kill the
+  // old process (it's still the old binary) so the next send spawns the new
+  // one, mark the card done, and resend the message that failed. The resend
+  // --resumes the same session, so nothing is lost. `cliPath` is passed when
+  // the update moved Claude somewhere new.
+  const retryAfterClaudeUpdate = useCallback(
+    (tabId: string, cliPath?: string): boolean => {
+      if (cliPath) cliPathRef.current = cliPath;
+      const existing = transportsRef.current[tabId];
+      if (existing) {
+        try {
+          existing.stop();
+        } catch {}
+        delete transportsRef.current[tabId];
+      }
+
+      const tab = stateRef.current.tabs.find((t) => t.id === tabId);
+      if (!tab) return false;
+      const msgs = tab.messages;
+      let failedAt = -1;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].claudeUpdate?.status === "needed") {
+          failedAt = i;
+          break;
+        }
+      }
+      if (failedAt < 0) return false;
+
+      // Resend the user message that drew the error, in place of the failed
+      // pair. Only when this tab is the one in view (sendMessage sends to the
+      // active tab), and only a plain typed message: attachments were expanded
+      // into content we no longer hold, and a failed compaction has no message
+      // of its own. Otherwise the card just says it's done and to send again.
+      const prevUser = msgs[failedAt - 1];
+      const text = prevUser ? prevUser.displayText ?? prevUser.content : "";
+      const canResend =
+        stateRef.current.activeTabId === tabId &&
+        !msgs[failedAt].isCompaction &&
+        prevUser?.role === "user" &&
+        !prevUser.isCompaction &&
+        !prevUser.attachments?.length &&
+        typeof text === "string" &&
+        !!text.trim();
+
+      setState((prev) => ({
+        ...prev,
+        tabs: prev.tabs.map((t) => {
+          if (t.id !== tabId) return t;
+          if (canResend) {
+            return { ...t, messages: t.messages.filter((_, i) => i !== failedAt - 1 && i !== failedAt) };
+          }
+          return {
+            ...t,
+            messages: t.messages.map((m, i) =>
+              i === failedAt && m.claudeUpdate
+                ? { ...m, claudeUpdate: { ...m.claudeUpdate, status: "done" as const } }
+                : m
+            ),
+          };
+        }),
+      }));
+      if (canResend) {
+        setTimeout(() => sendMessage(text, { displayText: prevUser!.displayText }), 0);
+      }
+      return canResend;
+    },
+    [sendMessage]
+  );
+
   // ------- return -------
 
   const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
@@ -1461,6 +1551,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     stopGeneration,
     compact,
     recoverSession,
+    retryAfterClaudeUpdate,
     pastSessions,
     openPastSession,
     refreshPastSessions,

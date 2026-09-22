@@ -18,4 +18,4 @@ Empty means everything finished is already released.
 
 ## Waiting
 
-_(nothing)_
+- **Hyo updates Claude for you when a model needs a newer one.** Opus 5.5 only runs on a recent version of Claude, and on an older one your message came back as a technical error. Now you get a short note saying Claude needs an update, with an **Update Claude** button. Hyo updates it quietly in the background and sends your message again once it's done. If you pick a model your Claude is too old for, Hyo tells you as soon as you open the chat, so you can update before you hit the problem. On your phone, the note tells you to open Hyo on your computer, which does the update.

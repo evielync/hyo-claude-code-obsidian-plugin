@@ -36,6 +36,18 @@ export interface Message {
   // that follows was spoken by the voice (its own voice turn sits after it),
   // so the thread shows that reply's tool calls and screens, not its prose.
   handoff?: boolean;
+  // Claude refused the model because the installed CLI is too old. Set when
+  // the turn ends on that error so the message shows an "Update Claude" card
+  // instead of the raw API error. See ClaudeUpdateCard.
+  claudeUpdate?: ClaudeUpdateInfo;
+}
+
+export interface ClaudeUpdateInfo {
+  required: string;
+  current?: string;
+  // needed: card offered. done: updated and the message resent, so the card
+  // steps aside. Progress and failures live on the card itself.
+  status: "needed" | "done";
 }
 
 export interface ToolCallData {

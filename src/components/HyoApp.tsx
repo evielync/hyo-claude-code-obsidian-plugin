@@ -3,11 +3,12 @@ import type { App } from "obsidian";
 import type HyoPlugin from "../main";
 import { ChatPanel } from "./ChatPanel";
 import { useSessionManager } from "../hooks/useSessionManager";
-import { DEFAULT_EFFORT } from "../models";
+import { DEFAULT_EFFORT, compareVersions } from "../models";
 import {
   detectClaude,
   installClaude,
   signIn,
+  updateClaude,
   type ClaudeDetection,
 } from "../cli-probe";
 
@@ -97,6 +98,46 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
       setSetupMsg(`Sign-in didn't finish: ${r.error}`);
     }
   }, [plugin, runDetection]);
+
+  // Update Claude from the "needs an update" card or banner. Runs the update,
+  // then detects again WITHOUT blanking the screen: runDetection would tear the
+  // ChatPanel down mid-card, and the panel is what resends the failed message.
+  // If the working Claude moved (the installer's fresh copy in ~/.local), adopt
+  // it the same way runDetection does, and hand the new path back so the
+  // resend spawns it straight away.
+  const doUpdateClaude = React.useCallback(
+    async (
+      required: string,
+      onPhase: (m: string) => void
+    ): Promise<{ ok: boolean; error?: string; cliPath?: string }> => {
+      const r = await updateClaude(plugin.settings.cliPath, required, onPhase);
+      if (!r.ok) return r;
+      const result = detectClaude();
+      // detectClaude takes the first Claude that runs, which can still be the
+      // old copy the updater couldn't reach. Prefer the newest one.
+      const newest = result.candidates
+        .filter((c) => c.works && c.version)
+        .sort((a, b) => compareVersions(b.version!, a.version!))[0];
+      const chosen = newest
+        ? { ...result, path: newest.path, version: newest.version }
+        : result;
+      let movedTo: string | undefined;
+      if (chosen.path && chosen.path !== plugin.settings.cliPath) {
+        movedTo = chosen.path;
+        plugin.settings.cliPath = chosen.path;
+        // Set before saving, so the settings-changed handler sees no change
+        // and doesn't re-run the full detection.
+        lastCliPathRef.current = chosen.path;
+        await plugin.saveSettings();
+      }
+      // Only ever move a ready Claude forward here. If the fresh copy reports
+      // signed out, leave the chat up; the next message will say so.
+      if (chosen.state === "ready") setDetection(chosen);
+      else setDetection((d) => (d ? { ...d, version: chosen.version } : d));
+      return { ok: true, cliPath: movedTo };
+    },
+    [plugin]
+  );
 
   // Use custom working directory if set, otherwise use vault path
   const workingDirectory = plugin.settings.workingDirectory
@@ -230,7 +271,13 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
 
   return (
     <div className="hyo-app">
-      <ChatPanel sessionManager={sessionManager} plugin={plugin} app={app} />
+      <ChatPanel
+        sessionManager={sessionManager}
+        plugin={plugin}
+        app={app}
+        claudeVersion={detection.version}
+        onUpdateClaude={doUpdateClaude}
+      />
     </div>
   );
 }

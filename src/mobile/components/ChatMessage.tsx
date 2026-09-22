@@ -7,6 +7,8 @@ import { transformScreenBlocks } from "../voice/voice-persona";
 import type { Message } from "../hooks/useChatEngine";
 import { HIDDEN_TOOLS } from "../hooks/useChatEngine";
 import { THINKING_BLOCK_ERROR_RE } from "../session-repair";
+import { parseClaudeUpdateError } from "../../models";
+import { ClaudeUpdateCard } from "../../components/ClaudeUpdateCard";
 
 interface ChatMessageProps {
   message: Message;
@@ -169,6 +171,12 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
   const showRecover =
     !message.streaming && !!onRecover && isThinkingBlockErrorContent(fullText);
 
+  // Claude on the desktop is too old for the chosen model. The phone can't
+  // update it, so the card just says to open Hyo on the computer (the card
+  // drops its button on mobile).
+  const updateInfo = message.streaming ? null : parseClaudeUpdateError(fullText);
+  const updateCard = updateInfo ? <ClaudeUpdateCard required={updateInfo.required} /> : null;
+
   // Any text block at the same turn index as a Skill tool call is skill content — hide it.
   const skillTurnIndices = new Set(
     blocks
@@ -195,6 +203,7 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
           {!hideProse && <MarkdownBlock content={transformScreenBlocks(message.content)} />}
         </div>
         {showRecover && onRecover && <RecoverBanner onRecover={onRecover} />}
+        {updateCard}
         {!message.streaming && (
           <div className="hyo-message-actions">
             <CopyButton getText={getTextContent} />
@@ -250,6 +259,7 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
         )}
       </div>
       {showRecover && onRecover && <RecoverBanner onRecover={onRecover} />}
+      {updateCard}
       {!message.streaming && blocks.some((b) => b.type === "text") && (
         <div className="hyo-message-actions">
           <CopyButton getText={getTextContent} />

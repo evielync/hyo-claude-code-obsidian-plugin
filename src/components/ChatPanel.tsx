@@ -10,7 +10,8 @@ import type { TaskMeta } from "../settings";
 import { HyoStatusBar } from "./HyoStatusBar";
 import { ReleaseCard } from "./ReleaseCard";
 import { ReleaseNotes } from "./ReleaseNotes";
-import { MODEL_OPTIONS } from "../models";
+import { MODEL_OPTIONS, claudeUpdateNeeded } from "../models";
+import { ClaudeUpdateCard, type ClaudeUpdateRunner } from "./ClaudeUpdateCard";
 import { VoiceControls } from "./VoiceControls";
 import { VoiceView, type BlobState, type VoicePermission } from "./VoiceView";
 import type { AskQuestionData } from "../hooks/useChatEngine";
@@ -45,6 +46,13 @@ interface ChatPanelProps {
   sessionManager: ReturnType<typeof useSessionManager>;
   plugin: HyoPlugin;
   app: App;
+  /** What `claude --version` reported at detection, for the update banner. */
+  claudeVersion?: string;
+  /** Updates Claude in the background; returns the new path if it moved. */
+  onUpdateClaude?: (
+    required: string,
+    onPhase: (m: string) => void
+  ) => Promise<{ ok: boolean; error?: string; cliPath?: string }>;
 }
 
 // A short two-note chime so a permission ask is noticeable when she's not
@@ -77,7 +85,7 @@ function playPermissionChime() {
   }
 }
 
-export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
+export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdateClaude }: ChatPanelProps) {
   // Release card: shown when the installed version is newer than the last one
   // acknowledged. A blank lastSeenVersion means a fresh install, which gets no
   // card — nobody needs release notes for a version they never ran.
@@ -134,6 +142,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     stopGeneration,
     compact,
     recoverSession,
+    retryAfterClaudeUpdate,
     pastSessions,
     openPastSession,
     refreshPastSessions,
@@ -353,6 +362,29 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
   const [showTranscript, setShowTranscript] = useState(false);
   const [dismissedScreenIdx, setDismissedScreenIdx] = useState(-1);
   const inVoiceView = activeVoiceMode && hasVoiceApiKey;
+
+  // Claude updates, from the in-message card or the banner. After a good
+  // update the tab's old process is killed (it's still the old binary) and the
+  // failed message, if there is one, goes again.
+  const runClaudeUpdate = useMemo<ClaudeUpdateRunner | undefined>(() => {
+    if (!onUpdateClaude) return undefined;
+    return async (required, onPhase) => {
+      const tabId = activeTabId;
+      const r = await onUpdateClaude(required, onPhase);
+      if (!r.ok) return r;
+      const resent = retryAfterClaudeUpdate(tabId, r.cliPath);
+      return { ok: true, resent };
+    };
+  }, [onUpdateClaude, activeTabId, retryAfterClaudeUpdate]);
+
+  // Startup check: the installed Claude is older than the selected model
+  // needs. Offered as a banner before the first message fails, never a block.
+  // Dismissal holds for this model and version, so switching to another model
+  // that needs an update still gets told.
+  const updateRequired = claudeUpdateNeeded(activeModel, claudeVersion);
+  const updateKey = `${activeModel}@${claudeVersion}`;
+  const [dismissedUpdateKey, setDismissedUpdateKey] = useState<string | null>(null);
+  const showUpdateBanner = !!updateRequired && dismissedUpdateKey !== updateKey;
   const prevPermIdRef = useRef<string | null>(null);
 
   // Start the hands-free mic loop when the voice view is open, stop when it
@@ -1106,7 +1138,17 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           onSearchText={searchPastText}
           onRefresh={refreshPastSessions}
         />
-        {showReleaseNotes && (
+        {showUpdateBanner && !inVoiceView && (
+        <ClaudeUpdateCard
+          key={updateKey}
+          banner
+          required={updateRequired!}
+          onUpdate={runClaudeUpdate}
+          onDismiss={() => setDismissedUpdateKey(updateKey)}
+        />
+      )}
+
+      {showReleaseNotes && (
           <ReleaseNotes onClose={() => setShowReleaseNotes(false)} />
         )}
       </div>
@@ -1209,6 +1251,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
               onPermissionResponse={sendPermissionResponse}
               onQuestionAnswer={sendQuestionAnswer}
               onRecover={() => recoverSession(activeTabId)}
+              onClaudeUpdate={runClaudeUpdate}
             />
           ) : (
             <div className="hyo-messages">
@@ -1224,6 +1267,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           scrollRef={scrollRef}
           onPermissionResponse={sendPermissionResponse}
           onQuestionAnswer={sendQuestionAnswer}
+          onClaudeUpdate={runClaudeUpdate}
           onRecover={() => {
             const result = recoverSession(activeTabId);
             if (result.success) {

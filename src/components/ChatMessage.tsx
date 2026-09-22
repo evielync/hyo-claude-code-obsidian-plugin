@@ -6,6 +6,8 @@ import { MarkdownBlock, stripInlineThinkingTags } from "./MarkdownBlock";
 import type { Message } from "../hooks/useChatEngine";
 import { HIDDEN_TOOLS } from "../hooks/useChatEngine";
 import { THINKING_BLOCK_ERROR_RE } from "../session-repair";
+import { parseClaudeUpdateError } from "../models";
+import { ClaudeUpdateCard, type ClaudeUpdateRunner } from "./ClaudeUpdateCard";
 
 interface ChatMessageProps {
   message: Message;
@@ -14,9 +16,13 @@ interface ChatMessageProps {
   onQuestionAnswer?: (questionId: string, answers: Record<string, string>) => void;
   /** Claude's reply to a live-call hand-off: the voice spoke it, so show only the work. */
   hideProse?: boolean;
+  /** Runs the Claude update from the "needs an update" card. */
+  onClaudeUpdate?: ClaudeUpdateRunner;
+  /** Last message in the thread — see AssistantMessage's update fallback. */
+  isLast?: boolean;
 }
 
-export function ChatMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, hideProse }: ChatMessageProps) {
+export function ChatMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, hideProse, onClaudeUpdate, isLast }: ChatMessageProps) {
   if (message.isCompaction) {
     return <CompactionMessage message={message} />;
   }
@@ -43,6 +49,8 @@ export function ChatMessage({ message, onRecover, onPermissionResponse, onQuesti
         onPermissionResponse={onPermissionResponse}
         onQuestionAnswer={onQuestionAnswer}
         hideProse={hideProse}
+        onClaudeUpdate={onClaudeUpdate}
+        isLast={isLast}
       />
     );
   }
@@ -145,12 +153,14 @@ function isThinkingBlockErrorContent(text: string): boolean {
   return THINKING_BLOCK_ERROR_RE.test(text);
 }
 
-function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, hideProse }: {
+function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, hideProse, onClaudeUpdate, isLast }: {
   message: Message;
   onRecover?: () => void;
   onPermissionResponse?: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
   onQuestionAnswer?: (questionId: string, answers: Record<string, string>) => void;
   hideProse?: boolean;
+  onClaudeUpdate?: ClaudeUpdateRunner;
+  isLast?: boolean;
 }) {
   const blocks = message.orderedBlocks || [];
   const toolCalls = message.toolCalls || [];
@@ -169,6 +179,23 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
       .join("\n");
   const showRecover =
     !message.streaming && !!onRecover && isThinkingBlockErrorContent(fullText);
+
+  // Claude too old for the model. Flagged when the turn ended (claudeUpdate),
+  // or, for a conversation reopened from disk, read off the error text — but
+  // only on the last message, so an old error from before an update doesn't
+  // keep offering one. The card replaces the raw error text.
+  const updateInfo =
+    message.claudeUpdate ??
+    (isLast && !message.streaming ? parseClaudeUpdateError(fullText) : null);
+  const showUpdate = !!updateInfo;
+  const isUpdateError = (text: string) => !!updateInfo && !!parseClaudeUpdateError(text);
+  const updateCard = showUpdate ? (
+    <ClaudeUpdateCard
+      required={updateInfo!.required}
+      onUpdate={onClaudeUpdate}
+      updated={message.claudeUpdate?.status === "done"}
+    />
+  ) : null;
 
   // Any text block at the same turn index as a Skill tool call is skill content — hide it.
   const skillTurnIndices = new Set(
@@ -190,7 +217,8 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
       <div className={wrapClass}>
         <div className="hyo-message-content">
           {spokenNote}
-          {!hideProse && <MarkdownBlock content={message.content} />}
+          {!hideProse && !isUpdateError(message.content) && <MarkdownBlock content={message.content} />}
+          {updateCard}
         </div>
         {showRecover && onRecover && <RecoverBanner onRecover={onRecover} />}
         {!message.streaming && (
@@ -221,6 +249,7 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
           }
           if (block.type === "text") {
             if (hideProse || block.isSkillOutput || skillTurnIndices.has(block.turnIndex)) return null;
+            if (isUpdateError(block.content || "")) return null;
             return <MarkdownBlock key={i} content={block.content || ""} />;
           }
           if (block.type === "tool") {
@@ -230,6 +259,8 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
           }
           return null;
         })}
+
+        {updateCard}
 
         {message.askQuestion && onQuestionAnswer && (
           <AskQuestion

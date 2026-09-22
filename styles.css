@@ -2052,6 +2052,52 @@ button.hyo-ask-send:disabled {
   background: var(--interactive-accent-hover);
 }
 
+/* "Claude needs an update" — in place of the too-old-for-this-model error,
+   and as a banner above the messages when Hyo spots it first. */
+.hyo-claude-update-card {
+  margin-top: 4px;
+  padding: 12px 14px;
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hyo-claude-update-banner {
+  flex: 0 0 auto;
+  margin: 12px 12px 0 12px;
+}
+
+.hyo-claude-update-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hyo-claude-update-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.hyo-claude-update-text,
+.hyo-claude-update-status {
+  font-size: 0.9em;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.hyo-claude-update-error {
+  color: var(--text-error);
+}
+
+.hyo-recover-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* ======================= Voice Mode ======================= */
 
 /* Status bar voice toggle */

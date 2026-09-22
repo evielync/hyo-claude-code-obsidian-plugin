@@ -119,3 +119,68 @@ export const EFFORT_OPTIONS: EffortOption[] = [
   { id: "high", name: "High", desc: "More thorough — intelligence-sensitive work" },
   { id: "max", name: "Max", desc: "Most thorough, slowest, burns limits fastest" },
 ];
+
+// The oldest Claude Code that can run each model. A newer model needs a newer
+// CLI, and an older one fails the first message with a 400 ("Claude Code
+// 2.1.258 does not support this model; version 2.1.280 or newer is required").
+// Checking this up front lets Hyo offer the update before that happens.
+//
+// Keyed by ID prefix, same as the context table. Only list a model once the
+// minimum is verified from the real error, never guessed. Anything not listed
+// has no requirement, so a custom model ID never triggers a false nudge.
+const MIN_CLAUDE_VERSION: Record<string, string> = {
+  "claude-opus-5-5": "2.1.280",
+};
+
+/** Minimum Claude Code version for a model, or null when it has none. */
+export function requiredClaudeVersion(modelId: string): string | null {
+  const base = baseModelId(modelId);
+  for (const prefix of Object.keys(MIN_CLAUDE_VERSION)) {
+    if (base.startsWith(prefix)) return MIN_CLAUDE_VERSION[prefix];
+  }
+  return null;
+}
+
+/**
+ * Compare two dotted versions numerically: negative when a < b, 0 when equal,
+ * positive when a > b. Tolerates noise around the numbers, so the raw output of
+ * `claude --version` ("2.1.258 (Claude Code)") compares cleanly. Anything after
+ * a "-" (pre-release tags) is ignored.
+ */
+export function compareVersions(a: string, b: string): number {
+  const parts = (v: string) => {
+    const m = v.match(/\d+(?:\.\d+)*/);
+    return m ? m[0].split(".").map((n) => parseInt(n, 10)) : [];
+  };
+  const pa = parts(a);
+  const pb = parts(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/**
+ * The version a model needs when the installed Claude is too old for it, else
+ * null. An unknown installed version is never treated as too old: nudging
+ * someone to update on a guess is worse than letting the chat say so itself.
+ */
+export function claudeUpdateNeeded(modelId: string, installed?: string): string | null {
+  const required = requiredClaudeVersion(modelId);
+  if (!required || !installed || !/\d/.test(installed)) return null;
+  return compareVersions(installed, required) < 0 ? required : null;
+}
+
+/**
+ * Pull the versions out of Claude's "too old for this model" error. It can
+ * arrive bare or wrapped in another message (e.g. a failed compaction), so this
+ * looks for the phrase anywhere in the text. Returns null when it isn't there.
+ */
+export function parseClaudeUpdateError(text: string): { required: string; current?: string } | null {
+  if (!text) return null;
+  const req = text.match(/version\s+v?(\d+(?:\.\d+)+)\s+or\s+(?:newer|later|above|higher)\s+is\s+required/i);
+  if (!req) return null;
+  const cur = text.match(/Claude\s+Code\s+v?(\d+(?:\.\d+)+)\s+does\s+not\s+support/i);
+  return { required: req[1], ...(cur ? { current: cur[1] } : {}) };
+}
