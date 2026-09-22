@@ -2093,6 +2093,11 @@ button.hyo-ask-send:disabled {
   color: var(--text-error);
 }
 
+.hyo-claude-update-button {
+  align-self: flex-start;
+}
+
+.hyo-claude-update-button:disabled,
 .hyo-recover-button:disabled {
   opacity: 0.6;
   cursor: default;

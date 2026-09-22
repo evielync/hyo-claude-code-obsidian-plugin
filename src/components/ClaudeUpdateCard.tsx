@@ -51,11 +51,13 @@ export function ClaudeUpdateCard({ required, onUpdate, banner, onDismiss, update
         );
       } else {
         setPhase(null);
-        setError(r.error || "The update didn't finish.");
+        console.error("[hyo] Claude update failed:", r.error);
+        setError("fail");
       }
     } catch (e: any) {
       setPhase(null);
-      setError((e?.message || "The update didn't finish.").toString());
+      console.error("[hyo] Claude update failed:", e);
+      setError("fail");
     }
     setBusy(false);
   }, [onUpdate, busy, required, banner]);
@@ -83,14 +85,14 @@ export function ClaudeUpdateCard({ required, onUpdate, banner, onDismiss, update
       </div>
       {!done && <div className="hyo-claude-update-text">{body}</div>}
       {!Platform.isMobile && onUpdate && !done && (
-        <button className="hyo-recover-button" onClick={run} disabled={busy}>
+        <button className="mod-cta hyo-claude-update-button" onClick={run} disabled={busy}>
           {busy ? "Updating…" : "Update Claude"}
         </button>
       )}
       {phase && <div className="hyo-claude-update-status">{phase}</div>}
       {error && (
         <div className="hyo-claude-update-status hyo-claude-update-error">
-          Couldn't update Claude: {error}
+          The update didn't go through. Check you're online and try again.
         </div>
       )}
     </div>
