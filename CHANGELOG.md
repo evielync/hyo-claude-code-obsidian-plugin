@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.3
+
+**The one where Hyo keeps Claude up to date**
+
+- **Hyo updates Claude for you when a model needs a newer version.** Opus 5.5 only works with a recent version of Claude, and on an older one your message came back as a technical error. Now you get a short note saying Claude needs an update, with an **Update Claude** button. Hyo updates it in the background and sends your message again once it's done. If the model you've picked needs a newer Claude than you have, Hyo tells you as soon as you open the chat, so you can update before you run into it. On your phone, the note tells you to open Hyo on your computer, which does the update.
+
 ## 0.6.2
 
 **The one where Opus 5.5 moves in**
