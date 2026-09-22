@@ -384,7 +384,10 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   const updateRequired = claudeUpdateNeeded(activeModel, claudeVersion);
   const updateKey = `${activeModel}@${claudeVersion}`;
   const [dismissedUpdateKey, setDismissedUpdateKey] = useState<string | null>(null);
-  const showUpdateBanner = !!updateRequired && dismissedUpdateKey !== updateKey;
+  // A failed message in this tab already carries the same card, so the banner
+  // steps aside rather than offering the update twice.
+  const cardInThread = activeMessages.some((m) => m.claudeUpdate?.status === "needed");
+  const showUpdateBanner = !!updateRequired && dismissedUpdateKey !== updateKey && !cardInThread;
   const prevPermIdRef = useRef<string | null>(null);
 
   // Start the hands-free mic loop when the voice view is open, stop when it
@@ -1138,17 +1141,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
           onSearchText={searchPastText}
           onRefresh={refreshPastSessions}
         />
-        {showUpdateBanner && !inVoiceView && (
-        <ClaudeUpdateCard
-          key={updateKey}
-          banner
-          required={updateRequired!}
-          onUpdate={runClaudeUpdate}
-          onDismiss={() => setDismissedUpdateKey(updateKey)}
-        />
-      )}
-
-      {showReleaseNotes && (
+        {showReleaseNotes && (
           <ReleaseNotes onClose={() => setShowReleaseNotes(false)} />
         )}
       </div>
@@ -1195,6 +1188,16 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
           version={currentVersion}
           onDismiss={dismissReleaseCard}
           onOpenNotes={() => setShowReleaseNotes(true)}
+        />
+      )}
+
+      {showUpdateBanner && !inVoiceView && (
+        <ClaudeUpdateCard
+          key={updateKey}
+          banner
+          required={updateRequired!}
+          onUpdate={runClaudeUpdate}
+          onDismiss={() => setDismissedUpdateKey(updateKey)}
         />
       )}
 
