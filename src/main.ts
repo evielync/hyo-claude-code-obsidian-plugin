@@ -11,13 +11,19 @@ import { HyoSettingTab, HyoSettings, DEFAULT_SETTINGS, dispatchSettingsChanged }
 import { cleanupOldAttachments } from "./attachments";
 import { setDebug } from "./debug";
 import { probeCliCapabilities } from "./cli-capabilities";
-import { startGatewayHost, stopGatewayHost, GatewayStatus } from "./gateway-host";
+import { startGatewayHost, stopGatewayHost, resolveOwnConnectUrl, GatewayStatus } from "./gateway-host";
 import { CommandsManager } from "./commands";
 import { updateClaude, detectClaude } from "./cli-probe";
 import { compareVersions } from "./models";
 
 // Per-device key for "This computer is the gateway" (see isGatewayHost).
 const GATEWAY_HOST_KEY = "hyo-gateway-host";
+
+// Same Mac's address, ignoring case and a trailing slash.
+function sameAddress(a: string, b: string): boolean {
+  const norm = (u: string) => u.trim().toLowerCase().replace(/\/+$/, "");
+  return norm(a) === norm(b);
+}
 
 export default class HyoPlugin extends Plugin {
   settings: HyoSettings = DEFAULT_SETTINGS;
@@ -38,6 +44,8 @@ export default class HyoPlugin extends Plugin {
   // Last reported gateway state — the settings tab's Mobile section reads
   // this to show the same truth as the status bar.
   gatewayStatus: GatewayStatus | null = null;
+
+  private unloaded = false;
 
   async onload() {
     await this.loadSettings();
@@ -100,8 +108,11 @@ export default class HyoPlugin extends Plugin {
 
     // Host the mobile gateway from this Mac if this Mac is the gateway
     // (desktop only). The switch lives on this device, not in data.json.
-    if (!Platform.isMobile && this.isGatewayHost()) {
-      this.startMobileHost();
+    if (!Platform.isMobile) {
+      void this.decideGatewayHost().then((host) => {
+        // The Tailscale lookup can outlast a quick disable/reload.
+        if (host && !this.unloaded) this.startMobileHost();
+      });
     }
   }
 
@@ -124,19 +135,39 @@ export default class HyoPlugin extends Plugin {
 
   // "This computer is the gateway" — kept per device in this vault's local
   // storage, never in data.json, so Sync doesn't flip it on every other Mac.
-  // Before this switch existed it was the synced `enableMobileAccess`; the
-  // first read on each Mac seeds from that, so anyone already serving keeps
-  // serving. After that, the local value alone decides.
-  isGatewayHost(): boolean {
+  // null means this Mac hasn't decided yet (see decideGatewayHost).
+  isGatewayHost(): boolean | null {
     const stored = this.readLocal(GATEWAY_HOST_KEY);
-    if (typeof stored === "boolean") return stored;
-    const seeded = !!this.settings.enableMobileAccess;
-    this.writeLocal(GATEWAY_HOST_KEY, seeded);
-    return seeded;
+    return typeof stored === "boolean" ? stored : null;
   }
 
   setGatewayHost(on: boolean) {
     this.writeLocal(GATEWAY_HOST_KEY, on);
+  }
+
+  // Before the per-device switch, hosting followed the synced
+  // `enableMobileAccess`. A Mac with no local value yet decides once:
+  //   off                                  → off
+  //   on, no address yet (first setup)     → on
+  //   on, the address is this Mac's own    → on (it's the one serving)
+  //   on, the address is another Mac's     → off
+  // Telling the last two apart needs this Mac's own address. If Tailscale
+  // can't give it, nothing is saved and this Mac doesn't host this session,
+  // so it decides again next time. The toggle has the final say after that.
+  async decideGatewayHost(): Promise<boolean> {
+    const stored = this.isGatewayHost();
+    if (stored !== null) return stored;
+    let decided: boolean;
+    if (!this.settings.enableMobileAccess) decided = false;
+    else if (!this.settings.gatewayUrl.trim()) decided = true;
+    else {
+      const vault = (this.app.vault.adapter as any).basePath as string;
+      const own = await resolveOwnConnectUrl(vault);
+      if (!own) return false;
+      decided = sameAddress(own, this.settings.gatewayUrl);
+    }
+    this.setGatewayHost(decided);
+    return decided;
   }
 
   // Obsidian's vault-scoped local storage (1.8.7+), with a vault-keyed
@@ -263,6 +294,7 @@ export default class HyoPlugin extends Plugin {
   }
 
   onunload() {
+    this.unloaded = true;
     if (!Platform.isMobile) {
       try { stopGatewayHost(); } catch { /* ignore */ }
     }

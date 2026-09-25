@@ -43,7 +43,8 @@ export interface HyoSettings {
   gatewayUrl: string;
   askFirst: boolean;
   // Synced, so it no longer decides anything: each Mac's "This computer is
-  // the gateway" switch lives in local storage and was seeded from this once.
+  // the gateway" switch lives in local storage, decided from this once
+  // (see HyoPlugin.decideGatewayHost).
   enableMobileAccess: boolean;
   // The local port this vault's gateway listens on. Per-vault so more than one
   // vault can host mobile access at once without colliding, and so a user whose
@@ -1063,7 +1064,7 @@ export class HyoSettingTab extends PluginSettingTab {
           toggle
             // Stored on this device only (see HyoPlugin.isGatewayHost), so
             // Sync can't flip it on your other Macs.
-            .setValue(this.plugin.isGatewayHost())
+            .setValue(this.plugin.isGatewayHost() ?? false)
             .onChange(async (value) => {
               this.plugin.setGatewayHost(value);
               if (value) this.plugin.startMobileHost();
