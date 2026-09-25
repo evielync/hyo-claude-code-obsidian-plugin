@@ -8,18 +8,19 @@ import type { Message } from "../hooks/useChatEngine";
 import { HIDDEN_TOOLS } from "../hooks/useChatEngine";
 import { THINKING_BLOCK_ERROR_RE } from "../session-repair";
 import { parseClaudeUpdateError } from "../../models";
-import { ClaudeUpdateCard } from "../../components/ClaudeUpdateCard";
+import { ClaudeUpdateCard, type ClaudeUpdateRunner } from "../../components/ClaudeUpdateCard";
 
 interface ChatMessageProps {
   message: Message;
   onRecover?: () => void;
+  onClaudeUpdate?: ClaudeUpdateRunner;
   onPermissionResponse?: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
   onQuestionAnswer?: (questionId: string, answers: Record<string, string>) => void;
   /** Claude's reply to a live-call hand-off: the voice spoke it, so show only the work. */
   hideProse?: boolean;
 }
 
-export function ChatMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, hideProse }: ChatMessageProps) {
+export function ChatMessage({ message, onRecover, onClaudeUpdate, onPermissionResponse, onQuestionAnswer, hideProse }: ChatMessageProps) {
   if (message.isCompaction) {
     return <CompactionMessage message={message} />;
   }
@@ -43,6 +44,7 @@ export function ChatMessage({ message, onRecover, onPermissionResponse, onQuesti
       <AssistantMessage
         message={message}
         onRecover={onRecover}
+        onClaudeUpdate={onClaudeUpdate}
         onPermissionResponse={onPermissionResponse}
         onQuestionAnswer={onQuestionAnswer}
         hideProse={hideProse}
@@ -148,9 +150,10 @@ function isThinkingBlockErrorContent(text: string): boolean {
   return THINKING_BLOCK_ERROR_RE.test(text);
 }
 
-function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, hideProse }: {
+function AssistantMessage({ message, onRecover, onClaudeUpdate, onPermissionResponse, onQuestionAnswer, hideProse }: {
   message: Message;
   onRecover?: () => void;
+  onClaudeUpdate?: ClaudeUpdateRunner;
   onPermissionResponse?: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
   onQuestionAnswer?: (questionId: string, answers: Record<string, string>) => void;
   hideProse?: boolean;
@@ -171,11 +174,11 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
   const showRecover =
     !message.streaming && !!onRecover && isThinkingBlockErrorContent(fullText);
 
-  // Claude on the desktop is too old for the chosen model. The phone can't
-  // update it, so the card just says to open Hyo on the computer (the card
-  // drops its button on mobile).
+  // Claude on the gateway Mac is too old for the chosen model. While
+  // connected, the card's button has that Mac update it; otherwise the card
+  // says to open Hyo on that Mac.
   const updateInfo = message.streaming ? null : parseClaudeUpdateError(fullText);
-  const updateCard = updateInfo ? <ClaudeUpdateCard required={updateInfo.required} /> : null;
+  const updateCard = updateInfo ? <ClaudeUpdateCard required={updateInfo.required} onUpdate={onClaudeUpdate} /> : null;
 
   // Any text block at the same turn index as a Skill tool call is skill content — hide it.
   const skillTurnIndices = new Set(

@@ -12,6 +12,7 @@ import type {
 import { listPastSessions, loadSessionHistory, saveCustomTitle, setTaskMeta as persistTaskMeta, type PastSession } from "../session-parser";
 import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
 import { generateConversationTitle } from "../title-generator";
+import { parseClaudeUpdateError } from "../../models";
 
 // Re-export for convenience
 export type { PastSession };
@@ -1224,6 +1225,67 @@ export function useSessionManager(options: SessionManagerOptions) {
     []
   );
 
+  // After the gateway Mac updates Claude: stop this tab's process on the Mac
+  // (it's still the old Claude), then resend the message that drew the
+  // "needs an update" error, in place of the failed pair. Same rules as the
+  // desktop: only the tab in view, and only a plain typed message. Returns
+  // whether it resent.
+  const retryAfterClaudeUpdate = useCallback(
+    (tabId: string): boolean => {
+      const existing = transportsRef.current[tabId];
+      if (existing) {
+        try {
+          existing.stop();
+        } catch {}
+        delete transportsRef.current[tabId];
+      }
+
+      const tab = stateRef.current.tabs.find((t) => t.id === tabId);
+      if (!tab) return false;
+      const msgs = tab.messages;
+      const textOf = (m: Message) =>
+        (m.content || "") +
+        "\n" +
+        (m.orderedBlocks || [])
+          .filter((b) => b.type === "text")
+          .map((b) => b.content || "")
+          .join("\n");
+      let failedAt = -1;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const m = msgs[i];
+        if (m.role === "assistant" && !m.streaming && parseClaudeUpdateError(textOf(m))) {
+          failedAt = i;
+          break;
+        }
+      }
+      if (failedAt < 0) return false;
+
+      const prevUser = msgs[failedAt - 1];
+      const text = prevUser ? prevUser.displayText ?? prevUser.content : "";
+      const canResend =
+        stateRef.current.activeTabId === tabId &&
+        !msgs[failedAt].isCompaction &&
+        prevUser?.role === "user" &&
+        !prevUser.isCompaction &&
+        !prevUser.attachments?.length &&
+        typeof text === "string" &&
+        !!text.trim();
+      if (!canResend) return false;
+
+      setState((prev) => ({
+        ...prev,
+        tabs: prev.tabs.map((t) =>
+          t.id === tabId
+            ? { ...t, messages: t.messages.filter((_, i) => i !== failedAt - 1 && i !== failedAt) }
+            : t
+        ),
+      }));
+      setTimeout(() => sendMessage(text, { displayText: prevUser!.displayText }), 0);
+      return true;
+    },
+    [sendMessage]
+  );
+
   // ------- return -------
 
   const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
@@ -1255,6 +1317,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     stopGeneration,
     compact,
     recoverSession,
+    retryAfterClaudeUpdate,
     pastSessions,
     openPastSession,
     refreshPastSessions,

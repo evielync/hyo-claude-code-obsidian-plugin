@@ -22,6 +22,19 @@ export type TabMessage =
   | { type: "closed"; code: number | null }
   | { type: "error"; error: string };
 
+export interface ClaudeUpdateResult {
+  ok: boolean;
+  error?: string;
+  /** The gateway Mac runs a Hyo that can't update Claude for the phone. */
+  unsupported?: boolean;
+}
+
+// A gateway that knows update_claude answers "started" at once. Silence past
+// this means an older Hyo on the Mac.
+const CLAUDE_UPDATE_ACK_MS = 10_000;
+// The update itself (updater, then installer) can take a few minutes.
+const CLAUDE_UPDATE_MAX_MS = 8 * 60_000;
+
 export type TabHandler = (msg: TabMessage) => void;
 
 interface PendingRPC<T> {
@@ -64,6 +77,16 @@ export class GatewayClient {
   private historyPending = new Map<string, PendingRPC<any[]>>();
   private renamePending = new Map<string, PendingRPC<string>>();
   private titlePending = new Map<string, PendingRPC<string | null>>();
+  // Claude updates run on the Mac; progress comes back as it goes.
+  private claudeUpdatePending = new Map<
+    string,
+    {
+      onPhase: (m: string) => void;
+      resolve: (r: ClaudeUpdateResult) => void;
+      started: boolean;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   // One connection per gateway URL. If settings change the URL, tear down
   // the old socket and open a fresh one.
@@ -277,6 +300,25 @@ export class GatewayClient {
           this.historyPending.delete(msg.sessionId);
           clearTimeout(pending.timer);
           pending.resolve(msg.lines || []);
+        }
+        return;
+      }
+      case "claude_update": {
+        const pending = this.claudeUpdatePending.get(msg.requestId);
+        if (!pending) return;
+        if (msg.phase === "started") {
+          pending.started = true;
+          clearTimeout(pending.timer);
+          pending.timer = setTimeout(() => {
+            this.claudeUpdatePending.delete(msg.requestId);
+            pending.resolve({ ok: false, error: "The update took too long" });
+          }, CLAUDE_UPDATE_MAX_MS);
+        } else if (msg.phase === "progress") {
+          if (typeof msg.message === "string") pending.onPhase(msg.message);
+        } else if (msg.phase === "done") {
+          this.claudeUpdatePending.delete(msg.requestId);
+          clearTimeout(pending.timer);
+          pending.resolve({ ok: !!msg.ok, error: msg.error });
         }
         return;
       }
@@ -504,6 +546,22 @@ export class GatewayClient {
       }, RPC_TIMEOUT_MS);
       this.titlePending.set(requestId, { resolve, reject: () => resolve(null), timer });
       this.send({ type: "generate_title", requestId, userMessage, assistantMessage });
+    });
+  }
+
+  /**
+   * Ask the gateway Mac to update Claude. Never rejects: an older gateway
+   * that doesn't know the request comes back as `unsupported`.
+   */
+  updateClaude(required: string, onPhase: (message: string) => void): Promise<ClaudeUpdateResult> {
+    const requestId = genId();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.claudeUpdatePending.delete(requestId);
+        resolve({ ok: false, unsupported: true });
+      }, CLAUDE_UPDATE_ACK_MS);
+      this.claudeUpdatePending.set(requestId, { onPhase, resolve, started: false, timer });
+      this.send({ type: "update_claude", requestId, required });
     });
   }
 

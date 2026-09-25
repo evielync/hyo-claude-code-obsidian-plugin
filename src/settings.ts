@@ -42,6 +42,8 @@ export interface HyoSettings {
   // every mobile prompt.
   gatewayUrl: string;
   askFirst: boolean;
+  // Synced, so it no longer decides anything: each Mac's "This computer is
+  // the gateway" switch lives in local storage and was seeded from this once.
   enableMobileAccess: boolean;
   // The local port this vault's gateway listens on. Per-vault so more than one
   // vault can host mobile access at once without colliding, and so a user whose
@@ -1053,14 +1055,17 @@ export class HyoSettingTab extends PluginSettingTab {
         );
     } else {
       new Setting(containerEl)
-        .setName("Enable mobile access")
-        .setDesc("Host the gateway from this Mac while Obsidian is open, so your phone can connect.")
+        .setName("This computer is the gateway")
+        .setDesc(
+          "Turn this on for the Mac that stays on and serves your phone. Each computer has its own switch, so turning it on or off here doesn't change your other computers."
+        )
         .addToggle((toggle) =>
           toggle
-            .setValue(this.plugin.settings.enableMobileAccess)
+            // Stored on this device only (see HyoPlugin.isGatewayHost), so
+            // Sync can't flip it on your other Macs.
+            .setValue(this.plugin.isGatewayHost())
             .onChange(async (value) => {
-              this.plugin.settings.enableMobileAccess = value;
-              await this.plugin.saveSettings();
+              this.plugin.setGatewayHost(value);
               if (value) this.plugin.startMobileHost();
               else this.plugin.stopMobileHost();
               // The gateway comes up (or down) asynchronously — re-render once

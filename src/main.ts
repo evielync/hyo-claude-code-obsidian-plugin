@@ -13,6 +13,11 @@ import { setDebug } from "./debug";
 import { probeCliCapabilities } from "./cli-capabilities";
 import { startGatewayHost, stopGatewayHost, GatewayStatus } from "./gateway-host";
 import { CommandsManager } from "./commands";
+import { updateClaude, detectClaude } from "./cli-probe";
+import { compareVersions } from "./models";
+
+// Per-device key for "This computer is the gateway" (see isGatewayHost).
+const GATEWAY_HOST_KEY = "hyo-gateway-host";
 
 export default class HyoPlugin extends Plugin {
   settings: HyoSettings = DEFAULT_SETTINGS;
@@ -93,8 +98,9 @@ export default class HyoPlugin extends Plugin {
       }
     }
 
-    // Host the mobile gateway from this Mac if enabled (desktop only).
-    if (!Platform.isMobile && this.settings.enableMobileAccess) {
+    // Host the mobile gateway from this Mac if this Mac is the gateway
+    // (desktop only). The switch lives on this device, not in data.json.
+    if (!Platform.isMobile && this.isGatewayHost()) {
       this.startMobileHost();
     }
   }
@@ -113,6 +119,46 @@ export default class HyoPlugin extends Plugin {
       const cmd = this.pendingCommand;
       this.pendingCommand = null;
       this.runCommand(cmd.prompt, cmd.notePath);
+    }
+  }
+
+  // "This computer is the gateway" — kept per device in this vault's local
+  // storage, never in data.json, so Sync doesn't flip it on every other Mac.
+  // Before this switch existed it was the synced `enableMobileAccess`; the
+  // first read on each Mac seeds from that, so anyone already serving keeps
+  // serving. After that, the local value alone decides.
+  isGatewayHost(): boolean {
+    const stored = this.readLocal(GATEWAY_HOST_KEY);
+    if (typeof stored === "boolean") return stored;
+    const seeded = !!this.settings.enableMobileAccess;
+    this.writeLocal(GATEWAY_HOST_KEY, seeded);
+    return seeded;
+  }
+
+  setGatewayHost(on: boolean) {
+    this.writeLocal(GATEWAY_HOST_KEY, on);
+  }
+
+  // Obsidian's vault-scoped local storage (1.8.7+), with a vault-keyed
+  // window.localStorage fallback for older versions.
+  private readLocal(key: string): unknown {
+    const app = this.app as any;
+    try {
+      if (typeof app.loadLocalStorage === "function") return app.loadLocalStorage(key);
+      const raw = window.localStorage.getItem(`${app.appId || this.app.vault.getName()}-${key}`);
+      return raw == null ? null : JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  private writeLocal(key: string, value: unknown) {
+    const app = this.app as any;
+    try {
+      if (typeof app.saveLocalStorage === "function") app.saveLocalStorage(key, value);
+      else window.localStorage.setItem(`${app.appId || this.app.vault.getName()}-${key}`, JSON.stringify(value));
+    } catch (e) {
+      console.error("[hyo] Couldn't save a device setting:", e);
     }
   }
 
@@ -167,7 +213,8 @@ export default class HyoPlugin extends Plugin {
         }),
         // Write the Mac's own tailnet address into the vault's settings. It
         // syncs to the phone, which then connects automatically — nothing to
-        // paste on the phone.
+        // paste on the phone. Only the Mac whose "This computer is the
+        // gateway" switch is on runs this host, so only that Mac writes it.
         onConnectUrl: (url: string) => {
           // Only announce when the address is actually news — first setup or
           // a changed address. On every ordinary startup the status bar's
@@ -182,6 +229,24 @@ export default class HyoPlugin extends Plugin {
           }
         },
         onStatus: (s) => this.renderMobileStatus(s),
+        // The phone's "Update Claude" button runs here. Same update as the
+        // desktop card, then adopt the newest working Claude (the installer
+        // can leave a fresh copy somewhere else) so the phone's resend
+        // spawns it. Returns the path the gateway should spawn from now on.
+        updateClaude: async (required, onPhase) => {
+          const r = await updateClaude(this.settings.cliPath, required, onPhase);
+          if (!r.ok) return r;
+          const found = detectClaude();
+          const newest = found.candidates
+            .filter((c) => c.works && c.version)
+            .sort((a, b) => compareVersions(b.version!, a.version!))[0];
+          const chosen = newest?.path || found.path;
+          if (chosen && chosen !== this.settings.cliPath) {
+            this.settings.cliPath = chosen;
+            await this.saveSettings();
+          }
+          return { ok: true, cliPath: this.settings.cliPath };
+        },
       });
     } catch (e) {
       console.error("[hyo] Failed to start mobile gateway host:", e);

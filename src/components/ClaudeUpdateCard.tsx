@@ -4,7 +4,7 @@ import { Platform } from "obsidian";
 export type ClaudeUpdateRunner = (
   required: string,
   onPhase: (message: string) => void
-) => Promise<{ ok: boolean; error?: string; resent?: boolean }>;
+) => Promise<{ ok: boolean; error?: string; resent?: boolean; unsupported?: boolean }>;
 
 interface ClaudeUpdateCardProps {
   /** The Claude Code version the model needs. */
@@ -32,6 +32,8 @@ export function ClaudeUpdateCard({ required, onUpdate, banner, onDismiss, update
   const [phase, setPhase] = useState<string | null>(updated ? "Claude has been updated." : null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(!!updated);
+  // The phone asked, but the Mac runs a Hyo too old to update Claude for it.
+  const [unsupported, setUnsupported] = useState(false);
 
   const run = useCallback(async () => {
     if (!onUpdate || busy) return;
@@ -49,6 +51,9 @@ export function ClaudeUpdateCard({ required, onUpdate, banner, onDismiss, update
               ? "Claude is up to date. You're all set."
               : "Claude is up to date. Send your message again to carry on."
         );
+      } else if (r.unsupported) {
+        setPhase(null);
+        setUnsupported(true);
       } else {
         setPhase(null);
         console.error("[hyo] Claude update failed:", r.error);
@@ -62,9 +67,15 @@ export function ClaudeUpdateCard({ required, onUpdate, banner, onDismiss, update
     setBusy(false);
   }, [onUpdate, busy, required, banner]);
 
-  const body = Platform.isMobile
-    ? "Open Hyo on your computer and it will update Claude for you. Then this model will work here too."
-    : `This model needs Claude ${required} or newer. Hyo can update it for you in the background, and it only takes a minute.`;
+  // On the phone the update runs on the Mac that serves it, so the button
+  // only shows while connected to that Mac.
+  const canRun = !!onUpdate && !unsupported;
+  const body =
+    Platform.isMobile && !canRun
+      ? "Open Hyo on the Mac that runs your phone connection and it will update Claude for you."
+      : Platform.isMobile
+        ? `This model needs Claude ${required} or newer. Hyo can update it on your Mac from here, and it only takes a minute.`
+        : `This model needs Claude ${required} or newer. Hyo can update it for you in the background, and it only takes a minute.`;
 
   return (
     <div className={`hyo-claude-update-card${banner ? " hyo-claude-update-banner" : ""}`}>
@@ -84,7 +95,7 @@ export function ClaudeUpdateCard({ required, onUpdate, banner, onDismiss, update
         )}
       </div>
       {!done && <div className="hyo-claude-update-text">{body}</div>}
-      {!Platform.isMobile && onUpdate && !done && (
+      {canRun && !done && (
         <button className="mod-cta hyo-claude-update-button" onClick={run} disabled={busy}>
           {busy ? "Updating…" : "Update Claude"}
         </button>

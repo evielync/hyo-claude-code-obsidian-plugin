@@ -12,7 +12,8 @@ import { useVoiceMode } from "../hooks/useVoiceMode";
 import { parseVoiceResponse } from "../voice/voice-persona";
 import { HANDOFF_NOTE } from "../../voice/voice-persona";
 import { buildLiveHistory, describeToolForVoice } from "../../voice/gpt-live";
-import { GatewayClient } from "../gateway-client";
+import { GatewayClient, type ConnectionStatus } from "../gateway-client";
+import type { ClaudeUpdateRunner } from "../../components/ClaudeUpdateCard";
 import { VoiceView, type BlobState, type VoicePermission } from "./VoiceView";
 import { VoiceWaveform } from "./VoiceWaveform";
 import { useSkills, type Skill } from "../hooks/useSkills";
@@ -92,11 +93,37 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     stopGeneration,
     compact,
     recoverSession,
+    retryAfterClaudeUpdate,
     pastSessions,
     openPastSession,
     refreshPastSessions,
     scrollRef,
   } = sessionManager;
+
+  // "Update Claude" from the phone: the gateway Mac runs the update, then
+  // this tab's message goes again. Only offered while connected to a gateway;
+  // otherwise the card says to open Hyo on that Mac.
+  const [gatewayStatus, setGatewayStatus] = useState<ConnectionStatus>("disconnected");
+  useEffect(() => {
+    const url = plugin.settings.gatewayUrl;
+    if (!url) {
+      setGatewayStatus("disconnected");
+      return;
+    }
+    const client = GatewayClient.get(url);
+    setGatewayStatus(client.getStatus());
+    return client.onStatusChange(setGatewayStatus);
+  }, [plugin.settings.gatewayUrl]);
+  const runClaudeUpdate = useMemo<ClaudeUpdateRunner | undefined>(() => {
+    const url = plugin.settings.gatewayUrl;
+    if (!url || gatewayStatus !== "connected") return undefined;
+    return async (required, onPhase) => {
+      const tabId = activeTabId;
+      const r = await GatewayClient.get(url).updateClaude(required, onPhase);
+      if (!r.ok) return r;
+      return { ok: true, resent: retryAfterClaudeUpdate(tabId) };
+    };
+  }, [plugin.settings.gatewayUrl, gatewayStatus, activeTabId, retryAfterClaudeUpdate]);
 
   // ---- Task mode (the History screen) ----
   const [viewMode, setViewMode] = useState<"chat" | "tasks">("chat");
@@ -979,6 +1006,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
               scrollRef={scrollRef}
               onPermissionResponse={sendPermissionResponse}
               onQuestionAnswer={sendQuestionAnswer}
+              onClaudeUpdate={runClaudeUpdate}
               onRecover={() => {
                 const result = recoverSession(activeTabId);
                 if (result.success) {

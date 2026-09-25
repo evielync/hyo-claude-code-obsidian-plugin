@@ -80,6 +80,13 @@ export interface GatewayHostConfig {
   // Called whenever the host's visible state changes, so the plugin can show a
   // live "mobile access" indicator instead of leaving the user guessing.
   onStatus?: (status: GatewayStatus) => void;
+  // Runs the Claude update on this Mac when the phone asks for it (the
+  // phone's "Update Claude" button). Reports progress through onPhase and
+  // hands back the Claude path to spawn from now on.
+  updateClaude?: (
+    required: string,
+    onPhase: (message: string) => void
+  ) => Promise<{ ok: boolean; error?: string; cliPath?: string }>;
 }
 
 export interface GatewayStatus {
@@ -650,7 +657,7 @@ function writeStdin(tabId: string, obj: unknown): void {
 }
 
 // ---- Tailscale exposure ------------------------------------------------------
-// "Enable mobile access" should be the whole Mac-side setup. Starting the
+// "This computer is the gateway" should be the whole Mac-side setup. Starting the
 // gateway only binds localhost; this also runs `tailscale serve` so the phone
 // can actually reach it, and surfaces the exact wss:// URL to paste on the
 // phone. Best-effort: if Tailscale isn't installed/running it says so clearly
@@ -1105,6 +1112,8 @@ export function startGatewayHost(config: GatewayHostConfig): void {
     defaultModel: config.defaultModel,
     onConnectUrl: config.onConnectUrl ?? (() => {}),
     onStatus: config.onStatus ?? (() => {}),
+    updateClaude:
+      config.updateClaude ?? (async () => ({ ok: false, error: "This Mac can't update Claude from here." })),
   };
   activeConfig = resolved;
   statusCb = resolved.onStatus;
@@ -1363,6 +1372,27 @@ export function startGatewayHost(config: GatewayHostConfig): void {
                 send({ type: "live_sdp_answer", requestId: m.requestId, sdp: data.transport.sdp, sessionId: data?.session?.id });
               } catch (e: any) {
                 send({ type: "live_sdp_error", requestId: m.requestId, message: e?.message || "Couldn't reach OpenAI" });
+              }
+            })();
+            break;
+          }
+          case "update_claude": {
+            // The phone's "Update Claude" button. "started" goes back straight
+            // away: a gateway from before this existed ignores the request,
+            // and that silence is how the phone knows to fall back.
+            const requestId = m.requestId;
+            const required = typeof m.required === "string" ? m.required : "";
+            send({ type: "claude_update", requestId, phase: "started" });
+            void (async () => {
+              try {
+                const r = await cfg.updateClaude(required, (message) =>
+                  send({ type: "claude_update", requestId, phase: "progress", message }),
+                );
+                // Later spawns (the phone's resend) use the updated Claude.
+                if (r.ok && r.cliPath && activeConfig) activeConfig.cliPath = r.cliPath;
+                send({ type: "claude_update", requestId, phase: "done", ok: r.ok, error: r.error });
+              } catch (e: any) {
+                send({ type: "claude_update", requestId, phase: "done", ok: false, error: e?.message || String(e) });
               }
             })();
             break;
