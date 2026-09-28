@@ -1,11 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.6.4
 
-**The one where each Mac decides for itself**
+**The one where we fix gateway sync across devices**
 
-- **Pick which computer serves your phone.** The mobile access switch is now called **This computer is the gateway**, and each computer keeps its own. If you run Hyo on a laptop and on a Mac that stays on at home, you can turn it off on the laptop and the home Mac carries on serving your phone. Before, the switch travelled with your vault's settings, so turning it off anywhere turned it off everywhere, and whichever Mac opened Obsidian last took over your phone. After the update, every computer keeps the setting it had, so nothing changes until you flip a switch.
-- **Update Claude from your phone.** When a model needs a newer Claude, the note on your phone now has an **Update Claude** button. Your Mac does the update, your phone shows how it's going, and your message goes again once it's done. If your phone isn't connected, or your Mac is on an older Hyo, the note tells you to open Hyo on the Mac that runs your phone connection instead.
+- **Each computer now has its own gateway switch.** Turning it off on one Mac no longer turns it off on the others, and your phone stays connected to the Mac you choose.
+- **Update Claude from your phone.** When a model needs a newer Claude, tap **Update Claude** and your Mac does the update.
 
 ## 0.6.3
 
