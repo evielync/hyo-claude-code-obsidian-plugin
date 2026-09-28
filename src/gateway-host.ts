@@ -971,28 +971,6 @@ function announceConnectUrl(tsBin: string, slug: string, onUrl: (url: string) =>
   });
 }
 
-/**
- * This Mac's phone-facing address for a vault, worked out exactly as
- * announceConnectUrl does, without starting the gateway. Resolves null when
- * Tailscale can't be found or doesn't say (not running, signed out, …).
- */
-export function resolveOwnConnectUrl(vault: string): Promise<string | null> {
-  if (Platform.isMobile) return Promise.resolve(null);
-  const tsBin = findTailscaleBin();
-  if (!tsBin) return Promise.resolve(null);
-  const slug = vaultSlug(vault);
-  return new Promise((resolve) => {
-    runTailscale(tsBin, ["status", "--json"], (code, out) => {
-      try {
-        const host = String((JSON.parse(out) as any)?.Self?.DNSName || "").replace(/\.$/, "");
-        resolve(code === 0 && host ? `wss://${host}/${slug}` : null);
-      } catch {
-        resolve(null);
-      }
-    });
-  });
-}
-
 function setupTailscaleServe(port: number, slug: string, onUrl: (url: string) => void): void {
   const tsBin = findTailscaleBin();
   if (!tsBin) {
