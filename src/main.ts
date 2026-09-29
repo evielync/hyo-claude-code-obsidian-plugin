@@ -127,16 +127,21 @@ export default class HyoPlugin extends Plugin {
   // Before this switch existed it was the synced `enableMobileAccess`; the
   // first read on each Mac seeds from that, so anyone already serving keeps
   // serving. After that, the local value alone decides.
+  //
+  // Stored as the words "on" and "off". Obsidian's saveLocalStorage deletes
+  // the key for any falsy value, so a stored `false` reads back as "never
+  // set". A plain boolean is still read, for values saved by 0.6.4.
   isGatewayHost(): boolean {
     const stored = this.readLocal(GATEWAY_HOST_KEY);
-    if (typeof stored === "boolean") return stored;
+    if (stored === "on" || stored === true) return true;
+    if (stored === "off" || stored === false) return false;
     const seeded = !!this.settings.enableMobileAccess;
-    this.writeLocal(GATEWAY_HOST_KEY, seeded);
+    this.setGatewayHost(seeded);
     return seeded;
   }
 
   setGatewayHost(on: boolean) {
-    this.writeLocal(GATEWAY_HOST_KEY, on);
+    this.writeLocal(GATEWAY_HOST_KEY, on ? "on" : "off");
   }
 
   // Obsidian's vault-scoped local storage (1.8.7+), with a vault-keyed
@@ -297,6 +302,12 @@ export default class HyoPlugin extends Plugin {
     // is no longer in the list.
     if (this.settings.model === "claude-opus-5") {
       this.settings.model = "claude-opus-5-5";
+      await this.saveData(this.settings);
+    }
+    // Sonnet 5.5 replaced Sonnet 5 in the picker, and is the default for new
+    // installs. Anyone whose saved model was Sonnet 5 moves up to 5.5.
+    if (this.settings.model === "claude-sonnet-5") {
+      this.settings.model = "claude-sonnet-5-5";
       await this.saveData(this.settings);
     }
     // The CLI renamed the "default" permission mode to "manual" at some

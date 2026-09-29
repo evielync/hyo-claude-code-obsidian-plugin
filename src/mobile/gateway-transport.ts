@@ -12,12 +12,12 @@
 import { debug } from "./debug";
 import { GatewayClient } from "./gateway-client";
 
-// Sonnet 5 runs 1M context natively and doesn't accept a "[1m]" suffix —
-// kept here (moved from the retired claude-transport.ts) since settings/UI
-// no longer carry a model field at all, but stale saved data could.
+// The Sonnet 5 family runs 1M context natively and doesn't accept a "[1m]"
+// suffix. Stale saved data could still carry one, so strip it and keep the
+// rest of the ID, which is what tells Sonnet 5 and Sonnet 5.5 apart.
 export function normalizeModelId(id: string): string {
   if (id.startsWith("claude-sonnet-5") && id.includes("[1m]")) {
-    return "claude-sonnet-5";
+    return id.replace(/\[1m\]/g, "");
   }
   return id;
 }

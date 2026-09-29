@@ -17,10 +17,10 @@ import { parseClaudeUpdateError } from "../../models";
 // Re-export for convenience
 export type { PastSession };
 
-// Locked scope: mobile Hyo always talks to Chad on Sonnet 5, asking before
+// Locked scope: mobile Hyo always talks to Chad on Sonnet 5.5, asking before
 // it acts. The gateway enforces all three server-side regardless of what's
 // sent — these are just the values shown in the UI.
-const LOCKED_MODEL = "claude-sonnet-5";
+const LOCKED_MODEL = "claude-sonnet-5-5";
 const LOCKED_AGENT = ""; // empty = the CLI default agent
 // Display value only — matches PERMISSION_MODES' "manual" ("Ask First"),
 // which reflects the gateway's actual hardcoded behaviour.

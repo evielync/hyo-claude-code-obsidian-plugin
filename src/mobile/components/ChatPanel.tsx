@@ -447,7 +447,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
   );
   const [sessionPanelOpen, setSessionPanelOpen] = useState(false);
   const currentAgent = plugin.settings.defaultAgent || agents[0]?.name || "default";
-  const currentModel = plugin.settings.model || "claude-sonnet-5";
+  const currentModel = plugin.settings.model || "claude-sonnet-5-5";
   const setAgent = useCallback((name: string) => {
     plugin.settings.defaultAgent = name;
     void plugin.saveSettings();
