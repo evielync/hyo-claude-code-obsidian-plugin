@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.5
+
+**The one where Sonnet 5.5 arrives**
+
+- **Sonnet 5.5 is in the model picker.** Anthropic released it this week. It takes Sonnet 5's place, so if Sonnet 5 was your model you are on 5.5 now and there is nothing to change.
+- **The gateway switch stays off when you turn it off.** On a Mac where mobile access had been on before, "This computer is the gateway" switched itself back on. Now it stays where you put it. If yours came back on in 0.6.4, turn it off once more after updating.
+
 ## 0.6.4
 
 **The one where we fix gateway sync across devices**
