@@ -71,7 +71,6 @@ const RefreshIcon = () => (
 const PILL_LABEL: Partial<Record<TaskState, string>> = {
   working: "Working",
   "needs-attention": "Needs attention",
-  "needs-response": "Waiting on response",
   closed: "Closed",
 };
 
@@ -295,7 +294,6 @@ export function TaskScreen({
   // Always show every filter, even at zero — a stable, predictable bar.
   const FILTERS: { key: TaskState; label: string }[] = [
     { key: "needs-attention", label: "Needs attention" },
-    { key: "needs-response", label: "Waiting on response" },
     { key: "working", label: "Working" },
     { key: "closed", label: "Closed" },
   ];

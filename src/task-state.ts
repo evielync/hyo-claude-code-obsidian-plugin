@@ -13,21 +13,18 @@ import type { TaskMeta } from "./settings";
 
 // Ev's status model:
 //  needs-attention — a question or approval is waiting on you (agent is blocked)
-//  needs-response  — the agent messaged, you haven't replied
 //  working         — the agent is running right now
 //  closed          — you closed it; done, nothing needed either way (stays listed)
 //  idle            — quiet conversation, nothing pending, no pill
 export type TaskState =
   | "working"
   | "needs-attention"
-  | "needs-response"
   | "closed"
   | "idle";
 
 export interface TaskStateInput {
   generating: boolean;
   hasPending: boolean; // a held question / approval / plan
-  awaitingMyReply: boolean; // last message was the agent's, unanswered
   closed: boolean;
 }
 
@@ -38,7 +35,6 @@ export function deriveTaskState(input: TaskStateInput): TaskState {
   if (input.hasPending) return "needs-attention";
   if (input.generating) return "working";
   if (input.closed) return "closed";
-  if (input.awaitingMyReply) return "needs-response";
   return "idle";
 }
 
@@ -52,19 +48,6 @@ export function hasPendingAttention(tab: TabSession): boolean {
     if (m.permissionRequests?.some((r: any) => !r.resolved)) return true;
     if (m.askQuestion) return true;
     if (m.planReview && !m.planReview.resolved) return true;
-  }
-  return false;
-}
-
-// Is the ball in the user's court? True when the last real message in the
-// conversation came from the agent and hasn't been replied to.
-function liveAwaitingReply(tab: TabSession): boolean {
-  if (tab.generating) return false;
-  for (let i = tab.messages.length - 1; i >= 0; i--) {
-    const m: any = tab.messages[i];
-    if (!m) continue;
-    if (m.role === "assistant") return !!(m.content && m.content.trim());
-    if (m.role === "user") return false;
   }
   return false;
 }
@@ -146,7 +129,6 @@ export function buildTaskList(
       state: deriveTaskState({
         generating: tab.generating,
         hasPending: hasPendingAttention(tab),
-        awaitingMyReply: liveAwaitingReply(tab),
         closed: !!meta.closed,
       }),
       isOpen: true,
@@ -161,22 +143,13 @@ export function buildTaskList(
   for (const past of pastSessions) {
     if (byKey.has(past.id)) continue; // already live — live wins
     const meta = metaFor(tasks, past.id);
-    // If the agent spoke last and you haven't replied, the conversation needs
-    // your response — that's the signal, and "mark done" is how you clear it.
-    // Most finished chats will read needs-response, which is correct: they're
-    // your backlog until you close them.
-    const awaitingMyReply = past.lastRole === "assistant";
     byKey.set(past.id, {
       key: past.id,
       cliSessionId: past.id,
       tabId: null,
       title: past.title || meta.title || "Untitled",
       peek: past.lastSnippet || "",
-      state: meta.closed
-        ? "closed"
-        : awaitingMyReply
-        ? "needs-response"
-        : "idle",
+      state: meta.closed ? "closed" : "idle",
       isOpen: false,
       pinned: !!meta.pinned,
       closed: !!meta.closed,
@@ -194,14 +167,13 @@ export function buildTaskList(
 }
 
 // Pinned float to the top; then by urgency — blocked-on-you first, actively
-// working next, then waiting on a reply, then quiet ones. Recency breaks ties.
+// working next, then quiet ones. Recency breaks ties.
 // (Day grouping happens downstream, so in practice this orders within a day.)
 const STATE_RANK: Record<TaskState, number> = {
   "needs-attention": 0,
   working: 1,
-  "needs-response": 2,
-  idle: 3,
-  closed: 4,
+  idle: 2,
+  closed: 3,
 };
 
 export function sortTasks(list: BoardTask[]): BoardTask[] {
