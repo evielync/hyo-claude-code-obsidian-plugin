@@ -17,3 +17,5 @@ Empty means everything finished is already released.
 ---
 
 ## Waiting
+
+- **The history tab only flags conversations that need you.** "Waiting on response" is gone. It marked nearly every conversation, because almost every chat ends with the agent talking. Now a conversation only gets a label when an agent is working or is stuck waiting on your answer. Pin the ones you want to come back to, and mark them done when you've finished.
