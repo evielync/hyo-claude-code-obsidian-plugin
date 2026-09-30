@@ -4220,6 +4220,29 @@ button.hyo-ask-send:disabled {
 .is-mobile .hyo-tab:hover .hyo-tab-close, .is-mobile .hyo-tab-active .hyo-tab-close {
   opacity: 1;
 }
+/* One tap switches tabs. iOS treats the first tap on anything that reveals
+   content on :hover as a hover and holds back the click, so a close button
+   that appears on hover made every switch take two taps. On a phone the close
+   button only exists on the open tab and nothing changes on hover. The
+   callout and text selection are off so a long-press (rename) stays clean. */
+.is-mobile .hyo-tab:not(.hyo-tab-active) .hyo-tab-close {
+  display: none;
+}
+.is-mobile .hyo-tab {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  touch-action: pan-x;
+}
+@media (hover: none) {
+  .is-mobile .hyo-tab:hover {
+    color: var(--text-muted);
+    background: var(--background-secondary);
+  }
+  .is-mobile .hyo-tab-active:hover {
+    color: var(--text-normal);
+    background: var(--background-primary);
+  }
+}
 .is-mobile /* Working — Claude is running. Green "go" dot with a calm scale pulse: alive, .is-mobile but ambient (this is the constant background state, .is-mobile so it stays gentle). */
 .hyo-tab-dot {
   width: 5px;

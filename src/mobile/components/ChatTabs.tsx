@@ -88,10 +88,55 @@ export function ChatTabs({
     }
   }, [renamingId]);
 
-  const handleDoubleClick = (tab: TabSession) => {
-    setRenamingId(tab.id);
-    setRenameValue(tab.title);
+  // Rename is a long-press. A double-tap can't be used on a phone: two quick
+  // taps to switch conversation read as a double-tap and dropped her into the
+  // rename box mid-flow. Holding a tab is deliberate, so it never fires by
+  // accident. The click that follows a long-press is swallowed so letting go
+  // doesn't also switch tabs.
+  const pressTimer = useRef<number | null>(null);
+  const pressStart = useRef<{ x: number; y: number } | null>(null);
+  const longPressed = useRef(false);
+
+  const cancelPress = () => {
+    if (pressTimer.current !== null) {
+      window.clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
+    pressStart.current = null;
   };
+
+  const handlePointerDown = (e: React.PointerEvent, tab: TabSession) => {
+    longPressed.current = false;
+    cancelPress();
+    if (renamingId === tab.id) return;
+    pressStart.current = { x: e.clientX, y: e.clientY };
+    pressTimer.current = window.setTimeout(() => {
+      pressTimer.current = null;
+      longPressed.current = true;
+      setRenamingId(tab.id);
+      setRenameValue(tab.title);
+    }, 500);
+  };
+
+  // Scrolling the tab strip sideways must not turn into a rename.
+  const handlePointerMove = (e: React.PointerEvent) => {
+    const start = pressStart.current;
+    if (!start) return;
+    if (Math.abs(e.clientX - start.x) > 8 || Math.abs(e.clientY - start.y) > 8) {
+      cancelPress();
+    }
+  };
+
+  const handleTabClick = (tab: TabSession) => {
+    if (longPressed.current) {
+      longPressed.current = false;
+      return;
+    }
+    if (renamingId === tab.id) return;
+    onSwitch(tab.id);
+  };
+
+  useEffect(() => cancelPress, []);
 
   const handleRenameBlur = () => {
     if (renamingId && renameValue.trim()) {
@@ -121,8 +166,13 @@ export function ChatTabs({
           <div
             key={tab.id}
             className={`hyo-tab ${tab.id === activeTabId ? "hyo-tab-active" : ""}`}
-            onClick={() => onSwitch(tab.id)}
-            onDoubleClick={() => handleDoubleClick(tab)}
+            onClick={() => handleTabClick(tab)}
+            onPointerDown={(e) => handlePointerDown(e, tab)}
+            onPointerMove={handlePointerMove}
+            onPointerUp={cancelPress}
+            onPointerCancel={cancelPress}
+            onPointerLeave={cancelPress}
+            onContextMenu={(e) => e.preventDefault()}
           >
             {renamingId === tab.id ? (
               <input
