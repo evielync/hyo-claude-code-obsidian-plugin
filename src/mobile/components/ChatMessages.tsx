@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useLayoutEffect, useRef } from "react";
 import { ChatMessage } from "./ChatMessage";
 import { StreamingMessage } from "./StreamingMessage";
 import type { Message } from "../hooks/useChatEngine";
@@ -23,6 +23,19 @@ export function ChatMessages({
 }: ChatMessagesProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // Where she was reading. Kept only while the list is on screen, so it
+  // survives Hyo being hidden.
+  const saved = useRef({ top: 0, atBottom: true });
+
+  // Opening Hyo lands on the latest message.
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    scrollRef.current.nearBottom = true;
+    saved.current = { top: el.scrollTop, atBottom: true };
+  }, [scrollRef]);
+
   // Auto-scroll during streaming
   useEffect(() => {
     if (scrollRef.current.nearBottom && containerRef.current) {
@@ -35,13 +48,40 @@ export function ChatMessages({
     const el = containerRef.current;
     if (!el) return;
     const onScroll = () => {
+      // A hidden list reports a scroll of 0; that isn't her position.
+      if (el.clientHeight === 0) return;
       const threshold = 150;
-      scrollRef.current.nearBottom =
-        el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+      const near = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+      scrollRef.current.nearBottom = near;
+      saved.current = { top: el.scrollTop, atBottom: near };
     };
     el.addEventListener("scroll", onScroll);
     return () => el.removeEventListener("scroll", onScroll);
   }, [scrollRef]);
+
+  // Coming back to Hyo. When she switches to another view or app, Obsidian
+  // hides this panel and the browser throws its scroll position away, so it
+  // came back at the top of a long conversation. When the list reappears,
+  // or the keyboard changes its height, put her back where she was: at the
+  // latest message if that's where she was, otherwise the same spot.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let lastHeight = el.clientHeight;
+    const ro = new ResizeObserver(() => {
+      const h = el.clientHeight;
+      if (h > 0 && h !== lastHeight) {
+        if (saved.current.atBottom) {
+          el.scrollTop = el.scrollHeight;
+        } else if (lastHeight === 0) {
+          el.scrollTop = saved.current.top;
+        }
+      }
+      lastHeight = h;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   return (
     <div className="hyo-messages" ref={containerRef}>
