@@ -3867,6 +3867,11 @@ button.hyo-ask-send:disabled {
   background: var(--background-modifier-hover);
 }
 .is-mobile .hyo-input {
+  /* Sized by its own height, which Hyo sets as the text grows. The shared
+     .hyo-input rule gives it flex: 1, and inside this column card that makes
+     the flex basis win over the height, pinning the box at one line. */
+  flex: 0 0 auto;
+  overflow-y: auto;
   width: 100%;
   min-width: 0;
   padding: 2px 2px 8px;
@@ -3878,7 +3883,7 @@ button.hyo-ask-send:disabled {
   line-height: 1.4;
   resize: none;
   min-height: 24px;
-  max-height: 150px;
+  max-height: 200px;
   /* This is a bare <textarea>, so it inherits Obsidian's default form styling
      AND the active theme's `textarea { border-radius: var(--input-radius) }`.
      The visible container is the .hyo-input-card around it — the textarea

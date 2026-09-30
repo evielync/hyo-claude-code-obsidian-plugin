@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback, useEffect, useMemo } from "react";
+import React, { useRef, useState, useCallback, useEffect, useLayoutEffect, useMemo } from "react";
 import type { App } from "obsidian";
 import { Notice } from "obsidian";
 import { ChatMessages } from "./ChatMessages";
@@ -291,12 +291,6 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
         const joined = existing.trim() ? `${existing.trimEnd()} ${text}` : text;
         return { ...prev, [activeTabId]: joined };
       });
-      setTimeout(() => {
-        const el = inputRef.current;
-        if (!el) return;
-        el.style.height = "auto";
-        el.style.height = Math.min(el.scrollHeight, 150) + "px";
-      }, 50);
     },
   });
 
@@ -514,11 +508,18 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     return [...builtins, ...filtered];
   }, [skills, slashFilter, BUILTIN_COMMANDS]);
 
-  // Reset textarea height when switching tabs
+  // The box fits its text: one line when empty, growing with every line up to
+  // the cap, then scrolling. Driven off the value itself so typing, dictation,
+  // keyboard dictation, paste and switching to a tab with a long draft all
+  // size it the same way.
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 200) + "px";
+  }, [inputValue, activeTabId]);
+
   useEffect(() => {
-    if (inputRef.current) {
-      inputRef.current.style.height = "auto";
-    }
     setSlashMenuOpen(false);
   }, [activeTabId]);
 
@@ -709,8 +710,6 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
       const el = e.target;
       const val = el.value;
       setInputValues((prev) => ({ ...prev, [activeTabId]: val }));
-      el.style.height = "auto";
-      el.style.height = Math.min(el.scrollHeight, 150) + "px";
 
       // Slash command detection: only when input is exactly /word (no spaces, no newlines)
       if (val.startsWith("/") && !val.includes(" ") && !val.includes("\n")) {
@@ -1188,7 +1187,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
                       <polyline points="17 8 12 3 7 8" />
                       <line x1="12" y1="3" x2="12" y2="15" />
                     </svg>
-                    Upload from computer
+                    Photo or file
                   </button>
                 </div>
               )}
