@@ -1063,9 +1063,11 @@ button.hyo-ask-send:disabled {
   overflow-x: auto;
   overflow-y: hidden;
   gap: 2px;
+  scrollbar-width: none;
 }
 
 .hyo-tabs-left::-webkit-scrollbar {
+  display: none;
   height: 0;
 }
 
