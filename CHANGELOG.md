@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.6
+
+**The one where we fix all the annoying little bugs**
+
+- **One tap switches tabs on your phone.** Long-press a tab to rename it.
+- **The message box grows as you type**, so you can see your whole message before you send it. The attach button now says "Photo or file", so you know what it does.
+- **Your chat stays where you left it.** Switch to another app and come back, and Hyo opens at the same spot instead of jumping around.
+- **The tab bar's scrollbar is gone on desktop.** It used to appear over the tabs when you scrolled sideways and make them hard to click.
+- **The history tab only flags conversations that need you.** "Waiting on response" is gone. It marked nearly every conversation, because almost every chat ends with the agent talking. Now a conversation only gets a label when an agent is working or is stuck waiting on your answer. Pin the ones you want to come back to, and mark them done when you've finished.
+
 ## 0.6.5
 
 **The one where Sonnet 5.5 arrives**
