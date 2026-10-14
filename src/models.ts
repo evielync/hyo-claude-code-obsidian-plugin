@@ -38,6 +38,7 @@ const NATIVE_1M = [
   "claude-opus-4-8",
   "claude-opus-4-7",
   "claude-sonnet-5",
+  "claude-haiku-5",
 ];
 
 // Capped at 200K regardless of any suffix — without this a stray "[1m]" would
@@ -94,7 +95,7 @@ export const MODEL_OPTIONS: ModelOption[] = [
   model("claude-opus-5-5", "Opus 5.5"),
   model("claude-opus-4-8", "Opus 4.8"),
   model("claude-sonnet-5-5", "Sonnet 5.5"),
-  model("claude-haiku-4-5-20251001", "Haiku 4.5"),
+  model("claude-haiku-5-5", "Haiku 5.5"),
 ];
 
 // Reasoning effort — how hard the model works before answering. Paired with
@@ -120,16 +121,22 @@ export const EFFORT_OPTIONS: EffortOption[] = [
   { id: "max", name: "Max", desc: "Most thorough, slowest, burns limits fastest" },
 ];
 
-// The oldest Claude Code that can run each model. A newer model needs a newer
-// CLI, and an older one fails the first message with a 400 ("Claude Code
-// 2.1.258 does not support this model; version 2.1.280 or newer is required").
-// Checking this up front lets Hyo offer the update before that happens.
+// The oldest Claude Code that runs each model properly. A newer model needs a
+// newer CLI. An older one either fails the first message with a 400 ("Claude
+// Code 2.1.258 does not support this model; version 2.1.280 or newer is
+// required"), or runs it as an unrecognised model: it answers, but auto-compact
+// assumes a 200K window and cuts a 1M model short. Checking this up front lets
+// Hyo offer the update before either happens.
 //
 // Keyed by ID prefix, same as the context table. Only list a model once the
-// minimum is verified from the real error, never guessed. Anything not listed
-// has no requirement, so a custom model ID never triggers a false nudge.
+// minimum is verified by running the real CLI versions, never guessed.
+// Anything not listed has no requirement, so a custom model ID never triggers
+// a false nudge.
 const MIN_CLAUDE_VERSION: Record<string, string> = {
   "claude-opus-5-5": "2.1.280",
+  // 2.1.292 prints "unrecognized_model" for it; 2.1.293 is the first release
+  // that knows it (tested 2026-10-14).
+  "claude-haiku-5-5": "2.1.293",
 };
 
 /** Minimum Claude Code version for a model, or null when it has none. */

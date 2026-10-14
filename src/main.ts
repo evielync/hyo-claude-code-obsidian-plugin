@@ -310,6 +310,12 @@ export default class HyoPlugin extends Plugin {
       this.settings.model = "claude-sonnet-5-5";
       await this.saveData(this.settings);
     }
+    // Haiku 5.5 replaced Haiku 4.5 in the picker. Anyone whose saved model was
+    // Haiku 4.5 moves up to 5.5.
+    if (this.settings.model === "claude-haiku-4-5-20251001") {
+      this.settings.model = "claude-haiku-5-5";
+      await this.saveData(this.settings);
+    }
     // The CLI renamed the "default" permission mode to "manual" at some
     // point after 2.1.32. Settings saved under the old CLI still have the
     // old string, which the new CLI rejects as an invalid --permission-mode

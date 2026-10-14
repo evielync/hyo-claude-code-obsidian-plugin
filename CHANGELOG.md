@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.7
+
+**The one where Haiku 5.5 arrives**
+
+- **Haiku 5.5 is in the model picker.** Anthropic released it last week, and it holds a full 1M of context. It takes Haiku 4.5's place, so if Haiku 4.5 was your model you are on 5.5 now and there is nothing to change.
+- **Haiku 5.5 needs Claude 2.1.293 or newer.** Older versions still answer with it, but they cut long conversations short at 200K. If yours is older, Hyo offers the update when you pick Haiku 5.5. Tap **Update Claude** and it's done.
+
 ## 0.6.6
 
 **The one where we fix all the annoying little bugs**
