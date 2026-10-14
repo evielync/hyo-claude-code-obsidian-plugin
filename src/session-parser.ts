@@ -414,6 +414,37 @@ export interface HistoryMessage {
   orderedBlocks?: { type: "text" | "thinking" | "tool"; content?: string; toolId?: string; turnIndex: number }[];
 }
 
+/**
+ * The model a past conversation was last running on, read from the model ID
+ * Claude recorded on its own replies. Returns null when there's nothing usable
+ * (a conversation that never got a reply, or a file we can't read), so the
+ * caller falls back to the Settings default.
+ */
+export function loadSessionModel(cwd: string, sessionId: string): string | null {
+  const filePath = path.join(getProjectDir(cwd), `${sessionId}.jsonl`);
+  let text: string;
+  try {
+    text = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+  let model: string | null = null;
+  for (const line of text.split("\n")) {
+    if (!line.includes('"model"')) continue;
+    try {
+      const d = JSON.parse(line);
+      const id = d.message?.model;
+      // Subagent replies are on their own model; only the main thread counts.
+      if (d.type === "assistant" && d.isSidechain !== true && typeof id === "string" && id.startsWith("claude-")) {
+        model = id;
+      }
+    } catch {
+      /* skip a malformed line */
+    }
+  }
+  return model;
+}
+
 export function loadSessionHistory(cwd: string, sessionId: string): HistoryMessage[] {
   const dir = getProjectDir(cwd);
   const filePath = path.join(dir, `${sessionId}.jsonl`);

@@ -9,7 +9,7 @@ import type {
   AskQuestionData,
   PlanReviewData,
 } from "./useChatEngine";
-import { listPastSessions, loadSessionHistory, saveCustomTitle, setTaskMeta as persistTaskMeta, type PastSession, getProjectDir, appendVoiceTurns, getVoiceTurns, type VoiceTurn } from "../session-parser";
+import { listPastSessions, loadSessionHistory, loadSessionModel, saveCustomTitle, setTaskMeta as persistTaskMeta, type PastSession, getProjectDir, appendVoiceTurns, getVoiceTurns, type VoiceTurn } from "../session-parser";
 import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
 import { generateConversationTitle } from "../title-generator";
 import { Platform } from "obsidian";
@@ -758,7 +758,6 @@ export function useSessionManager(options: SessionManagerOptions) {
   const newTab = useCallback(() => {
     const id = genId();
     setState((prev) => {
-      const activeTab = prev.tabs.find((t) => t.id === prev.activeTabId);
       return {
         tabs: [
           ...prev.tabs,
@@ -768,9 +767,11 @@ export function useSessionManager(options: SessionManagerOptions) {
             title: "New conversation",
             messages: [],
             generating: false,
-            model: activeTab?.model || options.model,
-            effort: activeTab?.effort || options.effort,
-            permissionMode: activeTab?.permissionMode || options.permissionMode,
+            // A new tab starts on the defaults from Settings. The picker
+            // changes the tab you're in, nothing else.
+            model: options.model,
+            effort: options.effort,
+            permissionMode: options.permissionMode,
             agent: options.defaultAgent,
             voiceMode: false,
           },
@@ -1265,6 +1266,7 @@ export function useSessionManager(options: SessionManagerOptions) {
 
     // Load conversation history from JSONL
     const history = loadSessionHistory(options.cwd, pastSession.id);
+    const sessionModel = loadSessionModel(options.cwd, pastSession.id);
     const claudeMessages: Message[] = history.map((m) => ({
       role: m.role,
       content: m.content,
@@ -1303,7 +1305,6 @@ export function useSessionManager(options: SessionManagerOptions) {
 
     const id = genId();
     setState((prev) => {
-      const activeTab = prev.tabs.find((t) => t.id === prev.activeTabId);
       return {
         tabs: [
           ...prev.tabs,
@@ -1313,9 +1314,12 @@ export function useSessionManager(options: SessionManagerOptions) {
             title: pastSession.title,
             messages,
             generating: false,
-            model: activeTab?.model || options.model,
-            effort: activeTab?.effort || options.effort,
-            permissionMode: activeTab?.permissionMode || options.permissionMode,
+            // A reopened conversation carries on with the model it was
+            // last running on. Effort and permission mode aren't recorded
+            // in the session, so those come from Settings.
+            model: sessionModel || options.model,
+            effort: options.effort,
+            permissionMode: options.permissionMode,
             agent: options.defaultAgent,
             voiceMode: false,
           },

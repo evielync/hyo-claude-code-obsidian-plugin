@@ -623,19 +623,15 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   const handleModelChange = useCallback(
     async (model: string) => {
       setTabModel(model);
-      plugin.settings.model = model;
-      await plugin.saveSettings();
     },
-    [setTabModel, plugin]
+    [setTabModel]
   );
 
   const handleEffortChange = useCallback(
     async (effort: string) => {
       setTabEffort(effort);
-      plugin.settings.effortLevel = effort;
-      await plugin.saveSettings();
     },
-    [setTabEffort, plugin]
+    [setTabEffort]
   );
 
   // Custom models added via the picker's "Custom model ID" field. Kept in
@@ -663,7 +659,6 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
         setCustomModels(plugin.settings.customModels);
       }
       setTabModel(id);
-      plugin.settings.model = id;
       await plugin.saveSettings();
     },
     [setTabModel, plugin]
@@ -672,10 +667,8 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   const handlePermissionModeChange = useCallback(
     async (mode: string) => {
       setTabPermissionMode(mode);
-      plugin.settings.permissionMode = mode;
-      await plugin.saveSettings();
     },
-    [setTabPermissionMode, plugin]
+    [setTabPermissionMode]
   );
 
   const addFile = useCallback((file: AttachedFile) => {

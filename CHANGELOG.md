@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.8
+
+**The one where Hyo stops switching your model on you**
+
+- **New tabs open on your default model.** A new tab, or a command you run from a note, used to copy the model of whatever tab you were in. If you had Fable open, your next tab was Fable too. Now every new tab starts on the model you set in Settings.
+- **Reopened conversations keep their model.** Open a past conversation, or come back to your tabs after restarting Obsidian, and each one carries on with the model it was last using.
+
 ## 0.6.7
 
 **The one where Haiku 5.5 arrives**
