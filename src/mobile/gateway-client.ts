@@ -69,6 +69,7 @@ export class GatewayClient {
 
   private sessionsQueue: PendingRPC<any[]>[] = [];
   private agentsQueue: PendingRPC<any[]>[] = [];
+  private skillsQueue: PendingRPC<any[]>[] = [];
   private searchQueue: PendingRPC<Record<string, string>>[] = [];
   // Live voice: the desktop signs the phone's WebRTC offer and tells it which
   // engine/voice is set. Keyed by requestId.
@@ -234,6 +235,11 @@ export class GatewayClient {
       p.reject(new Error("Gateway connection closed"));
     }
     this.agentsQueue = [];
+    for (const p of this.skillsQueue) {
+      clearTimeout(p.timer);
+      p.reject(new Error("Gateway connection closed"));
+    }
+    this.skillsQueue = [];
     for (const p of this.searchQueue) {
       clearTimeout(p.timer);
       p.reject(new Error("Gateway connection closed"));
@@ -283,6 +289,14 @@ export class GatewayClient {
         if (pending) {
           clearTimeout(pending.timer);
           pending.resolve(msg.agents || []);
+        }
+        return;
+      }
+      case "skills": {
+        const pending = this.skillsQueue.shift();
+        if (pending) {
+          clearTimeout(pending.timer);
+          pending.resolve(msg.skills || []);
         }
         return;
       }
@@ -504,6 +518,18 @@ export class GatewayClient {
       }, RPC_TIMEOUT_MS);
       this.agentsQueue.push({ resolve, reject, timer });
       this.send({ type: "list_agents" });
+    });
+  }
+
+  listSkills(): Promise<any[]> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const idx = this.skillsQueue.findIndex((p) => p.resolve === resolve);
+        if (idx >= 0) this.skillsQueue.splice(idx, 1);
+        reject(new Error("list_skills timed out"));
+      }, RPC_TIMEOUT_MS);
+      this.skillsQueue.push({ resolve, reject, timer });
+      this.send({ type: "list_skills" });
     });
   }
 

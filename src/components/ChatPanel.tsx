@@ -414,6 +414,15 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   // and note. The prompt is queued, a fresh tab is opened, and the queued
   // text is flushed once that tab becomes active. See main.ts.
   const pendingCommandPromptRef = useRef<string | null>(null);
+  // The tab that was active when the command fired. The flush below waits for
+  // a different tab to be active: when the panel is mounting (Hyo was closed
+  // when the command fired) this effect and the flush effect run in the same
+  // pass, before newTab() has applied, so flushing on the first pass would send
+  // the prompt into the tab that was already there and the new tab would sit
+  // empty.
+  const pendingCommandFromTabRef = useRef<string | null>(null);
+  const activeTabIdRef = useRef(activeTabId);
+  activeTabIdRef.current = activeTabId;
   useEffect(() => {
     const run = (prompt: string, notePath?: string) => {
       let text = prompt;
@@ -421,6 +430,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
         text += `\n\nUse the note at \`${notePath}\` as the source for this task.`;
       }
       pendingCommandPromptRef.current = text;
+      pendingCommandFromTabRef.current = activeTabIdRef.current;
       newTab();
     };
     plugin.runCommand = run;
@@ -435,9 +445,10 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   }, [newTab, plugin]);
 
   useEffect(() => {
-    if (pendingCommandPromptRef.current) {
+    if (pendingCommandPromptRef.current && activeTabId !== pendingCommandFromTabRef.current) {
       const text = pendingCommandPromptRef.current;
       pendingCommandPromptRef.current = null;
+      pendingCommandFromTabRef.current = null;
       sendMessage(text);
     }
   }, [activeTabId, sendMessage]);
@@ -730,6 +741,28 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
           addFile({ name: file.name, fileType: "text", content: parts.join("\n") });
         } catch (err) {
           console.error("[hyo] Failed to parse Excel file:", err);
+          new Notice(`Could not read "${file.name}" — file may be corrupt or password-protected`);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+      return;
+    }
+
+    // Word — pull the body text out of word/document.xml
+    if (ext === ".docx") {
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+        try {
+          const buf = ev.target?.result as ArrayBuffer;
+          const { docxToText } = await import("../docx");
+          const content = await docxToText(buf);
+          if (!content.trim()) {
+            new Notice(`"${file.name}" has no text Hyo can read`);
+            return;
+          }
+          addFile({ name: file.name, fileType: "text", content });
+        } catch (err) {
+          console.error("[hyo] Failed to parse Word file:", err);
           new Notice(`Could not read "${file.name}" — file may be corrupt or password-protected`);
         }
       };
@@ -1398,7 +1431,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
                 ref={fileInputRef}
                 type="file"
                 style={{ display: "none" }}
-                accept="image/*,.pdf,.xlsx,.xls,.xlsm,.txt,.md,.json,.csv,.yaml,.yml,.toml,.xml,.html,.css,.js,.ts,.py,.rb,.go,.rs,.sh,.log"
+                accept="image/*,.pdf,.docx,.xlsx,.xls,.xlsm,.txt,.md,.json,.csv,.yaml,.yml,.toml,.xml,.html,.css,.js,.ts,.py,.rb,.go,.rs,.sh,.log"
                 multiple
                 onChange={handleFileInputChange}
               />

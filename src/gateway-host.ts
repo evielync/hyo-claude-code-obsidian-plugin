@@ -19,6 +19,7 @@
 //   { type:'stop',         tabId }
 //   { type:'generate_title', requestId, userMessage, assistantMessage }
 //   { type:'list_agents' }
+//   { type:'list_skills' }
 //   { type:'ping' }
 // Server -> client:
 //   { type:'stream', tabId, event }
@@ -28,6 +29,7 @@
 //   { type:'task_meta_set', sessionId }
 //   { type:'title', requestId, title }
 //   { type:'agents', agents:[{ name, description }] }
+//   { type:'skills', skills:[{ name, description }] }
 //   { type:'gateway', subtype, ... }
 
 import { Platform, Notice } from "obsidian";
@@ -505,6 +507,49 @@ function listAgents(vault: string): Array<{ name: string; description: string }>
   // user-level agent (mirrors how project settings shadow user settings elsewhere).
   for (const a of listAgentsFromDir(userDir)) seen.set(a.name, a);
   for (const a of listAgentsFromDir(vaultDir)) seen.set(a.name, a);
+  return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// ---- Skill listing (list_skills RPC) ---------------------------------------
+// The same three folders desktop's useSkills() scans — ~/.claude/skills, the
+// vault's .claude/skills and the vault's skills/ — so the phone's "/" menu
+// offers exactly what desktop offers. Claude is spawned with cwd at the vault
+// root, so the vault is the project here. Name and description only; the
+// phone never needs the skill body.
+function listSkillsFromDir(dir: string, seen: Map<string, { name: string; description: string }>): void {
+  if (!fs.existsSync(dir)) return;
+  let entries: FsType.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const d of entries) {
+    if (!d.isDirectory()) continue;
+    const skillFile = path.join(dir, d.name, "SKILL.md");
+    if (!fs.existsSync(skillFile)) continue;
+    let name = d.name;
+    let description = "";
+    try {
+      const fmMatch = fs.readFileSync(skillFile, "utf8").match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      if (fmMatch) {
+        const nm = fmMatch[1].match(/^name:\s*(.+)$/m);
+        if (nm) name = nm[1].trim();
+        const dm = fmMatch[1].match(/^description:\s*(.+)$/m);
+        if (dm) description = dm[1].trim().replace(/^["']|["']$/g, "");
+      }
+    } catch {
+      // unreadable SKILL.md — keep the folder name
+    }
+    if (!seen.has(name)) seen.set(name, { name, description });
+  }
+}
+
+function listSkills(vault: string): Array<{ name: string; description: string }> {
+  const seen = new Map<string, { name: string; description: string }>();
+  listSkillsFromDir(path.join(os.homedir(), ".claude", "skills"), seen);
+  listSkillsFromDir(path.join(vault, ".claude", "skills"), seen);
+  listSkillsFromDir(path.join(vault, "skills"), seen);
   return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -1230,6 +1275,9 @@ export function startGatewayHost(config: GatewayHostConfig): void {
             break;
           case "list_agents":
             send({ type: "agents", agents: listAgents(cfg.vault) });
+            break;
+          case "list_skills":
+            send({ type: "skills", skills: listSkills(cfg.vault) });
             break;
           case "reattach": {
             const ids: string[] = Array.isArray(m.tabIds) ? m.tabIds : m.tabId ? [m.tabId] : [];
