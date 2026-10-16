@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.9
+
+**The one where Hyo reads your Word docs**
+
+- **Attach a Word document and Claude reads it.** Drop in a .docx from the attach button, on your Mac or your phone, and Claude gets the full text: headings, bullet points and tables included. Client briefs, contracts and proposals no longer need converting first.
+- **Slash commands work on your phone.** Type / in Hyo mobile and you get the same skills you see on your Mac.
+- **Running a command from a note opens a fresh chat.** If Hyo was closed when you ran it, the command used to land in your old tab and leave the new one empty. Now it goes straight into the new tab.
+
 ## 0.6.8
 
 **The one where Hyo stops switching your model on you**
