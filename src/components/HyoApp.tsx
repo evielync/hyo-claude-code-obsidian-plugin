@@ -10,6 +10,7 @@ import {
   signIn,
   updateClaude,
   type ClaudeDetection,
+  type CodeNeeded,
 } from "../cli-probe";
 
 interface HyoAppProps {
@@ -98,6 +99,15 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
       setSetupMsg(`Sign-in didn't finish: ${r.error}`);
     }
   }, [plugin, runDetection]);
+
+  // Sign in again from the chat's "sign in again" card, when a login expires
+  // mid-conversation. Unlike doSignIn this leaves the chat up: the panel is
+  // what resends the message that failed.
+  const doSignInFromChat = React.useCallback(
+    (onPhase: (m: string) => void, onCodeNeeded: CodeNeeded) =>
+      signIn(plugin.settings.cliPath, onPhase, onCodeNeeded),
+    [plugin]
+  );
 
   // Update Claude from the "needs an update" card or banner. Runs the update,
   // then detects again WITHOUT blanking the screen: runDetection would tear the
@@ -277,6 +287,7 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
         app={app}
         claudeVersion={detection.version}
         onUpdateClaude={doUpdateClaude}
+        onSignInClaude={doSignInFromChat}
       />
     </div>
   );

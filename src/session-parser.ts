@@ -597,13 +597,13 @@ export function loadSessionHistory(cwd: string, sessionId: string): HistoryMessa
 
           const text = textParts.join("");
           if (text || toolCalls!.length > 0) {
-            messages.push({
+            pushAssistant(messages, {
               role: "assistant",
               content: text,
               thinking: thinkingParts.join(""),
               toolCalls,
               orderedBlocks,
-            });
+            }, d.message?.id);
           }
         }
       } catch {
@@ -739,4 +739,32 @@ function extractTitle(filePath: string): string | null {
     // ignore
   }
   return null;
+}
+
+// Claude writes one line per content block (and one per API turn), so a single
+// reply arrives as a string of assistant entries with only tool results
+// between them. Fold them into one message, the way the live chat shows it, so
+// a run of tool calls reads as one run. turnIndex numbers each API turn, which
+// is what the skill-output hiding keys on: entries sharing a message id are
+// the same turn.
+const lastAssistantId = new WeakMap<object, string | undefined>();
+function pushAssistant(messages: HistoryMessage[], entry: HistoryMessage, msgId: string | undefined): void {
+  const prev = messages[messages.length - 1];
+  if (!prev || prev.role !== "assistant") {
+    messages.push(entry);
+    lastAssistantId.set(entry, msgId);
+    return;
+  }
+  const prevBlocks = prev.orderedBlocks || [];
+  const lastTurn = prevBlocks.length ? prevBlocks[prevBlocks.length - 1].turnIndex : 0;
+  const sameTurn = !!msgId && msgId === lastAssistantId.get(prev);
+  const offset = sameTurn ? lastTurn : lastTurn + 1;
+  prev.orderedBlocks = [
+    ...prevBlocks,
+    ...(entry.orderedBlocks || []).map((b) => ({ ...b, turnIndex: b.turnIndex + offset })),
+  ];
+  prev.toolCalls = [...(prev.toolCalls || []), ...(entry.toolCalls || [])];
+  prev.content = [prev.content, entry.content].filter(Boolean).join("\n\n");
+  prev.thinking = [prev.thinking, entry.thinking].filter(Boolean).join("\n\n");
+  lastAssistantId.set(prev, msgId);
 }

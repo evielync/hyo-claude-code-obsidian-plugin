@@ -37,6 +37,9 @@ export interface HyoSettings {
   defaultAgent: string;
   maxOutputTokens: number;
   autoGenerateTitles: boolean;
+  // Off: each run of tool calls folds into one summary line (like Claude
+  // Desktop's Normal view). On: one row per tool call.
+  showAllToolCalls: boolean;
   // Mobile: the gateway URL the phone connects to (also what desktop hosts
   // when "enable mobile access" is on), and the permission default sent with
   // every mobile prompt.
@@ -103,6 +106,7 @@ export const DEFAULT_SETTINGS: HyoSettings = {
   defaultAgent: "",
   maxOutputTokens: 64000,
   autoGenerateTitles: true,
+  showAllToolCalls: false,
   gatewayUrl: "",
   askFirst: true,
   enableMobileAccess: false,
@@ -331,6 +335,21 @@ export class HyoSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.autoGenerateTitles)
           .onChange(async (value) => {
             this.plugin.settings.autoGenerateTitles = value;
+            await this.plugin.saveSettings();
+            this.showSaved();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Show every tool call")
+      .setDesc(
+        "Off: the steps your agent takes (reading files, running commands, searching) fold into one line per step, like \"Read 3 files, ran 2 commands\". Click the line to see them. On: every tool call gets its own row."
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.showAllToolCalls)
+          .onChange(async (value) => {
+            this.plugin.settings.showAllToolCalls = value;
             await this.plugin.saveSettings();
             this.showSaved();
           })

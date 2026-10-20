@@ -13,7 +13,7 @@ import { listPastSessions, loadSessionHistory, loadSessionModel, saveCustomTitle
 import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
 import { generateConversationTitle } from "../title-generator";
 import { Platform } from "obsidian";
-import { parseClaudeUpdateError } from "../models";
+import { parseClaudeUpdateError, isClaudeAuthError } from "../models";
 // Node built-in; deferred so this module loads on mobile.
 const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
 
@@ -485,9 +485,10 @@ export function useSessionManager(options: SessionManagerOptions) {
                 .map((b) => b.content || ""),
             ].join("\n");
             const found = parseClaudeUpdateError(text);
-            return found
-              ? { streaming: false, claudeUpdate: { ...found, status: "needed" } }
-              : { streaming: false };
+            if (found) return { streaming: false, claudeUpdate: { ...found, status: "needed" } };
+            // Login expired: offer sign-in on the message, same as the update.
+            if (isClaudeAuthError(text)) return { streaming: false, claudeSignIn: { status: "needed" } };
+            return { streaming: false };
           });
           const mu: any = event.modelUsage || {};
           const firstModel: any = Object.values(mu)[0];
@@ -1057,6 +1058,12 @@ export function useSessionManager(options: SessionManagerOptions) {
           onMessage: makeProcessEvent(tabId),
           onError: (error) => console.error("[hyo] CLI error:", error),
           onClose: (code) => {
+            // Hyo stopped this process on purpose (sign-in, update, agent or
+            // voice switch, closed tab) and has already let go of it. Its exit
+            // arrives late, often after a replacement process is running, so
+            // it must not touch the tab: no crash message, no ending the new
+            // turn, and no deleting the replacement from transportsRef.
+            if (transportsRef.current[tabId] !== transport) return;
             const wasGenerating = stateRef.current.tabs.find(
               (t) => t.id === tabId
             )?.generating;
@@ -1456,8 +1463,8 @@ export function useSessionManager(options: SessionManagerOptions) {
   // one, mark the card done, and resend the message that failed. The resend
   // --resumes the same session, so nothing is lost. `cliPath` is passed when
   // the update moved Claude somewhere new.
-  const retryAfterClaudeUpdate = useCallback(
-    (tabId: string, cliPath?: string): boolean => {
+  const retryFailedTurn = useCallback(
+    (tabId: string, kind: "claudeUpdate" | "claudeSignIn", cliPath?: string): boolean => {
       if (cliPath) cliPathRef.current = cliPath;
       const existing = transportsRef.current[tabId];
       if (existing) {
@@ -1472,7 +1479,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       const msgs = tab.messages;
       let failedAt = -1;
       for (let i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i].claudeUpdate?.status === "needed") {
+        if (msgs[i][kind]?.status === "needed") {
           failedAt = i;
           break;
         }
@@ -1505,8 +1512,8 @@ export function useSessionManager(options: SessionManagerOptions) {
           return {
             ...t,
             messages: t.messages.map((m, i) =>
-              i === failedAt && m.claudeUpdate
-                ? { ...m, claudeUpdate: { ...m.claudeUpdate, status: "done" as const } }
+              i === failedAt && m[kind]
+                ? { ...m, [kind]: { ...m[kind]!, status: "done" as const } }
                 : m
             ),
           };
@@ -1518,6 +1525,16 @@ export function useSessionManager(options: SessionManagerOptions) {
       return canResend;
     },
     [sendMessage]
+  );
+  const retryAfterClaudeUpdate = useCallback(
+    (tabId: string, cliPath?: string) => retryFailedTurn(tabId, "claudeUpdate", cliPath),
+    [retryFailedTurn]
+  );
+  // After signing in again: the tab's process still holds the dead login, so
+  // it's stopped and the failed message goes again on a fresh one.
+  const retryAfterSignIn = useCallback(
+    (tabId: string) => retryFailedTurn(tabId, "claudeSignIn"),
+    [retryFailedTurn]
   );
 
   // ------- return -------
@@ -1556,6 +1573,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     compact,
     recoverSession,
     retryAfterClaudeUpdate,
+    retryAfterSignIn,
     pastSessions,
     openPastSession,
     refreshPastSessions,

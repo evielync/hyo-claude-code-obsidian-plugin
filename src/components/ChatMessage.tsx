@@ -1,13 +1,14 @@
 import React, { useState, useCallback } from "react";
-import { ToolCall } from "./ToolCall";
+import { renderToolBlock, useShowAllToolCalls } from "./ToolCallRun";
 import { AskQuestion } from "./AskQuestion";
 import { PlanReview } from "./PlanReview";
 import { MarkdownBlock, stripInlineThinkingTags } from "./MarkdownBlock";
 import type { Message } from "../hooks/useChatEngine";
 import { HIDDEN_TOOLS } from "../hooks/useChatEngine";
 import { THINKING_BLOCK_ERROR_RE } from "../session-repair";
-import { parseClaudeUpdateError } from "../models";
+import { parseClaudeUpdateError, isClaudeAuthError } from "../models";
 import { ClaudeUpdateCard, type ClaudeUpdateRunner } from "./ClaudeUpdateCard";
+import { ClaudeSignInCard, type ClaudeSignInRunner } from "./ClaudeSignInCard";
 
 interface ChatMessageProps {
   message: Message;
@@ -18,11 +19,13 @@ interface ChatMessageProps {
   hideProse?: boolean;
   /** Runs the Claude update from the "needs an update" card. */
   onClaudeUpdate?: ClaudeUpdateRunner;
+  /** Runs the sign-in from the "sign in again" card. */
+  onClaudeSignIn?: ClaudeSignInRunner;
   /** Last message in the thread — see AssistantMessage's update fallback. */
   isLast?: boolean;
 }
 
-export function ChatMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, hideProse, onClaudeUpdate, isLast }: ChatMessageProps) {
+export function ChatMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, hideProse, onClaudeUpdate, onClaudeSignIn, isLast }: ChatMessageProps) {
   if (message.isCompaction) {
     return <CompactionMessage message={message} />;
   }
@@ -50,6 +53,7 @@ export function ChatMessage({ message, onRecover, onPermissionResponse, onQuesti
         onQuestionAnswer={onQuestionAnswer}
         hideProse={hideProse}
         onClaudeUpdate={onClaudeUpdate}
+        onClaudeSignIn={onClaudeSignIn}
         isLast={isLast}
       />
     );
@@ -153,17 +157,19 @@ function isThinkingBlockErrorContent(text: string): boolean {
   return THINKING_BLOCK_ERROR_RE.test(text);
 }
 
-function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, hideProse, onClaudeUpdate, isLast }: {
+function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, hideProse, onClaudeUpdate, onClaudeSignIn, isLast }: {
   message: Message;
   onRecover?: () => void;
   onPermissionResponse?: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
   onQuestionAnswer?: (questionId: string, answers: Record<string, string>) => void;
   hideProse?: boolean;
   onClaudeUpdate?: ClaudeUpdateRunner;
+  onClaudeSignIn?: ClaudeSignInRunner;
   isLast?: boolean;
 }) {
   const blocks = message.orderedBlocks || [];
   const toolCalls = message.toolCalls || [];
+  const showAllTools = useShowAllToolCalls();
   const wrapClass = `hyo-message hyo-message-assistant${hideProse ? " hyo-handoff-reply" : ""}`;
   const spokenNote = hideProse ? <div className="hyo-spoken-note">Spoken on the call</div> : null;
 
@@ -188,13 +194,21 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
     message.claudeUpdate ??
     (isLast && !message.streaming ? parseClaudeUpdateError(fullText) : null);
   const showUpdate = !!updateInfo;
-  const isUpdateError = (text: string) => !!updateInfo && !!parseClaudeUpdateError(text);
+  // Login expired: same idea, flagged when the turn ended or read off the
+  // last message's text. The sign-in card replaces the raw auth error.
+  const showSignIn =
+    !showUpdate &&
+    (!!message.claudeSignIn || (!!isLast && !message.streaming && isClaudeAuthError(fullText)));
+  const isUpdateError = (text: string) =>
+    (!!updateInfo && !!parseClaudeUpdateError(text)) || (showSignIn && isClaudeAuthError(text));
   const updateCard = showUpdate ? (
     <ClaudeUpdateCard
       required={updateInfo!.required}
       onUpdate={onClaudeUpdate}
       updated={message.claudeUpdate?.status === "done"}
     />
+  ) : showSignIn ? (
+    <ClaudeSignInCard onSignIn={onClaudeSignIn} signedIn={message.claudeSignIn?.status === "done"} />
   ) : null;
 
   // Any text block at the same turn index as a Skill tool call is skill content — hide it.
@@ -253,9 +267,8 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
             return <MarkdownBlock key={i} content={block.content || ""} />;
           }
           if (block.type === "tool") {
-            const tool = toolCalls.find((t) => t.id === block.toolId);
-            if (!tool || HIDDEN_TOOLS.has(tool.name)) return null;
-            return <ToolCall key={i} tool={tool} />;
+            return renderToolBlock(blocks, i, toolCalls, HIDDEN_TOOLS, showAllTools,
+              (b) => b.type === "thinking" ? !!b.content?.trim() : !(hideProse || b.isSkillOutput || skillTurnIndices.has(b.turnIndex) || isUpdateError(b.content || "")));
           }
           return null;
         })}

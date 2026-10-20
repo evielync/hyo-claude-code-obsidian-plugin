@@ -40,6 +40,9 @@ export interface Message {
   // the turn ends on that error so the message shows an "Update Claude" card
   // instead of the raw API error. See ClaudeUpdateCard.
   claudeUpdate?: ClaudeUpdateInfo;
+  // Claude's login expired, so the turn ended on an auth error. The message
+  // shows a "Sign in to Claude" card instead. See ClaudeSignInCard.
+  claudeSignIn?: { status: "needed" | "done" };
 }
 
 export interface ClaudeUpdateInfo {

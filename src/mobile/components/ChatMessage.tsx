@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from "react";
-import { ToolCall } from "./ToolCall";
+import { renderToolBlock, useShowAllToolCalls } from "../../components/ToolCallRun";
 import { AskQuestion } from "./AskQuestion";
 import { PlanReview } from "./PlanReview";
 import { MarkdownBlock, stripInlineThinkingTags } from "./MarkdownBlock";
@@ -160,6 +160,7 @@ function AssistantMessage({ message, onRecover, onClaudeUpdate, onPermissionResp
 }) {
   const blocks = message.orderedBlocks || [];
   const toolCalls = message.toolCalls || [];
+  const showAllTools = useShowAllToolCalls();
 
   // Detect the thinking-block API error from the message content so we can
   // surface the recovery button. The error arrives as plain text in either
@@ -234,9 +235,8 @@ function AssistantMessage({ message, onRecover, onClaudeUpdate, onPermissionResp
             return <MarkdownBlock key={i} content={transformScreenBlocks(block.content || "")} />;
           }
           if (block.type === "tool") {
-            const tool = toolCalls.find((t) => t.id === block.toolId);
-            if (!tool || HIDDEN_TOOLS.has(tool.name)) return null;
-            return <ToolCall key={i} tool={tool} />;
+            return renderToolBlock(blocks, i, toolCalls, HIDDEN_TOOLS, showAllTools,
+              (b) => b.type === "thinking" ? true : !(hideProse || b.isSkillOutput || skillTurnIndices.has(b.turnIndex)));
           }
           return null;
         })}

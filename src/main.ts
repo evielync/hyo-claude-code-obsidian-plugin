@@ -15,6 +15,7 @@ import { startGatewayHost, stopGatewayHost, GatewayStatus } from "./gateway-host
 import { CommandsManager } from "./commands";
 import { updateClaude, detectClaude } from "./cli-probe";
 import { compareVersions } from "./models";
+import { setShowAllToolCalls } from "./components/ToolCallRun";
 
 // Per-device key for "This computer is the gateway" (see isGatewayHost).
 const GATEWAY_HOST_KEY = "hyo-gateway-host";
@@ -41,6 +42,7 @@ export default class HyoPlugin extends Plugin {
 
   async onload() {
     await this.loadSettings();
+    setShowAllToolCalls(!!this.settings.showAllToolCalls);
 
     // Verbose "[hyo] ..." tracing is off by default. Expose the toggle so it
     // can be flipped from the developer console without a rebuild:
@@ -349,6 +351,7 @@ export default class HyoPlugin extends Plugin {
 
   async saveSettings() {
     await this.saveData(this.settings);
+    setShowAllToolCalls(!!this.settings.showAllToolCalls);
     dispatchSettingsChanged();
   }
 

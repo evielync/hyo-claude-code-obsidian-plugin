@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.10
+
+**The one where the tool calls get out of the way**
+
+- **Choose between a summary or every tool call.** Now you can choose to see every tool call, or switch to a summary that tucks them into one line so they don't clutter up your chat. Summary is on when you update. To see every tool call again, turn on **Show every tool call** in Hyo's settings.
+- **Sign in again without leaving the chat.** When your Claude login runs out mid-conversation, you used to get a "Failed to authenticate" error. Now a card shows up instead. Click **Sign in to Claude**, approve it in your browser, and Hyo sends your message again for you.
+- **Fixed: updating Claude from the card no longer ends in an error.** After the update, your message sometimes came back with "Claude process exited unexpectedly". It now goes through.
+
 ## 0.6.9
 
 **The one where Hyo reads your Word docs**

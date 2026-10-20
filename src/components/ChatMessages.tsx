@@ -3,6 +3,7 @@ import { ChatMessage } from "./ChatMessage";
 import { StreamingMessage } from "./StreamingMessage";
 import type { Message } from "../hooks/useChatEngine";
 import type { ClaudeUpdateRunner } from "./ClaudeUpdateCard";
+import type { ClaudeSignInRunner } from "./ClaudeSignInCard";
 
 interface ChatMessagesProps {
   messages: Message[];
@@ -11,6 +12,7 @@ interface ChatMessagesProps {
   onQuestionAnswer: (questionId: string, answers: Record<string, string>) => void;
   onRecover?: () => void;
   onClaudeUpdate?: ClaudeUpdateRunner;
+  onClaudeSignIn?: ClaudeSignInRunner;
 }
 
 export function ChatMessages({
@@ -20,6 +22,7 @@ export function ChatMessages({
   onQuestionAnswer,
   onRecover,
   onClaudeUpdate,
+  onClaudeSignIn,
 }: ChatMessagesProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -79,6 +82,7 @@ export function ChatMessages({
             onQuestionAnswer={onQuestionAnswer}
             hideProse={hideProse}
             onClaudeUpdate={onClaudeUpdate}
+            onClaudeSignIn={onClaudeSignIn}
             isLast={i === messages.length - 1}
           />
         );

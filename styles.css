@@ -2099,6 +2099,23 @@ button.hyo-ask-send:disabled {
   align-self: flex-start;
 }
 
+.hyo-claude-signin-code {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hyo-claude-signin-code-row {
+  display: flex;
+  gap: 6px;
+}
+
+.hyo-claude-signin-code-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-monospace);
+}
+
 .hyo-claude-update-button:disabled,
 .hyo-recover-button:disabled {
   opacity: 0.6;
@@ -5510,3 +5527,38 @@ button.hyo-ask-send:disabled {
 .hyo-check-fail { color: var(--color-red); font-weight: 700; }
 .hyo-mobile-check-detail { margin-top: 2px; font-size: 12px; color: var(--text-muted); word-break: break-word; }
 .hyo-mobile-check-fix { margin-top: 4px; font-size: 12px; color: var(--text-accent); }
+
+/* ── Tool call summary line (when "Show every tool call" is off) ── */
+.hyo-tool-run {
+  margin: 6px 0;
+  font-size: 12px;
+}
+.hyo-tool-run-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  margin-left: -6px;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.hyo-tool-run-header:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+.hyo-tool-run-summary.is-running {
+  animation: hyo-tool-run-pulse 1.6s ease-in-out infinite;
+}
+@keyframes hyo-tool-run-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+.hyo-tool-run-body {
+  margin: 4px 0 0 4px;
+  padding-left: 10px;
+  border-left: 2px solid var(--background-modifier-border);
+}
+.hyo-tool-run-body .hyo-tool-call {
+  margin: 4px 0;
+}

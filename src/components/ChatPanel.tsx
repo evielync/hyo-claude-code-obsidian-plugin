@@ -12,6 +12,8 @@ import { ReleaseCard } from "./ReleaseCard";
 import { ReleaseNotes } from "./ReleaseNotes";
 import { MODEL_OPTIONS, claudeUpdateNeeded } from "../models";
 import { ClaudeUpdateCard, type ClaudeUpdateRunner } from "./ClaudeUpdateCard";
+import type { ClaudeSignInRunner } from "./ClaudeSignInCard";
+import type { CodeNeeded } from "../cli-probe";
 import { VoiceControls } from "./VoiceControls";
 import { VoiceView, type BlobState, type VoicePermission } from "./VoiceView";
 import type { AskQuestionData } from "../hooks/useChatEngine";
@@ -53,6 +55,11 @@ interface ChatPanelProps {
     required: string,
     onPhase: (m: string) => void
   ) => Promise<{ ok: boolean; error?: string; cliPath?: string }>;
+  /** Signs Claude in again in the background. Desktop only. */
+  onSignInClaude?: (
+    onPhase: (m: string) => void,
+    onCodeNeeded: CodeNeeded
+  ) => Promise<{ ok: boolean; error?: string }>;
 }
 
 // A short two-note chime so a permission ask is noticeable when she's not
@@ -85,7 +92,7 @@ function playPermissionChime() {
   }
 }
 
-export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdateClaude }: ChatPanelProps) {
+export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdateClaude, onSignInClaude }: ChatPanelProps) {
   // Release card: shown when the installed version is newer than the last one
   // acknowledged. A blank lastSeenVersion means a fresh install, which gets no
   // card — nobody needs release notes for a version they never ran.
@@ -143,6 +150,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     compact,
     recoverSession,
     retryAfterClaudeUpdate,
+    retryAfterSignIn,
     pastSessions,
     openPastSession,
     refreshPastSessions,
@@ -376,6 +384,20 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
       return { ok: true, resent };
     };
   }, [onUpdateClaude, activeTabId, retryAfterClaudeUpdate]);
+
+  // Sign-in from the in-message card. After a good sign-in the tab's process
+  // (still holding the expired login) is stopped and the failed message goes
+  // again.
+  const runClaudeSignIn = useMemo<ClaudeSignInRunner | undefined>(() => {
+    if (!onSignInClaude) return undefined;
+    return async (onPhase, onCodeNeeded) => {
+      const tabId = activeTabId;
+      const r = await onSignInClaude(onPhase, onCodeNeeded);
+      if (!r.ok) return r;
+      const resent = retryAfterSignIn(tabId);
+      return { ok: true, resent };
+    };
+  }, [onSignInClaude, activeTabId, retryAfterSignIn]);
 
   // Startup check: the installed Claude is older than the selected model
   // needs. Offered as a banner before the first message fails, never a block.
@@ -1281,6 +1303,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
               onQuestionAnswer={sendQuestionAnswer}
               onRecover={() => recoverSession(activeTabId)}
               onClaudeUpdate={runClaudeUpdate}
+              onClaudeSignIn={runClaudeSignIn}
             />
           ) : (
             <div className="hyo-messages">
@@ -1297,6 +1320,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
           onPermissionResponse={sendPermissionResponse}
           onQuestionAnswer={sendQuestionAnswer}
           onClaudeUpdate={runClaudeUpdate}
+          onClaudeSignIn={runClaudeSignIn}
           onRecover={() => {
             const result = recoverSession(activeTabId);
             if (result.success) {

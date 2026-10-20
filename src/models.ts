@@ -191,3 +191,16 @@ export function parseClaudeUpdateError(text: string): { required: string; curren
   const cur = text.match(/Claude\s+Code\s+v?(\d+(?:\.\d+)+)\s+does\s+not\s+support/i);
   return { required: req[1], ...(cur ? { current: cur[1] } : {}) };
 }
+
+/**
+ * Claude's login has expired or been revoked, so the turn ended on an auth
+ * error instead of a reply. The wording varies by Claude version and by
+ * whether the refresh or the request failed, so this matches the known
+ * phrasings anywhere in the text.
+ */
+const CLAUDE_AUTH_ERROR_RE =
+  /failed to authenticate|oauth (session|token) (has )?(expired|been revoked)|authentication_error|invalid bearer token|please run \/login/i;
+
+export function isClaudeAuthError(text: string): boolean {
+  return !!text && CLAUDE_AUTH_ERROR_RE.test(text);
+}

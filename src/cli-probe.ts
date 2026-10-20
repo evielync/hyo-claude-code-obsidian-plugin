@@ -249,49 +249,128 @@ export async function updateClaude(
 }
 
 /**
- * Sign in in the background — no terminal window. Starts the login, opens the
- * browser for approval, then watches auth status (the real signal) until it
- * flips to signed in. The person only ever sees a browser tab.
+ * Called once the login is waiting. `submit` sends a pasted code to the login.
+ * `pageUrl` is the sign-in page that ends on a code to paste back, passed when
+ * Claude opened its own browser tab, so the card can offer it if that tab
+ * never appeared.
  */
-export async function signIn(cliPath: string, onPhase: Phase): Promise<{ ok: boolean; error?: string }> {
+export type CodeNeeded = (submit: (code: string) => void, pageUrl?: string) => void;
+
+/**
+ * Sign in in the background — no terminal window. Starts the login, opens the
+ * browser for approval, and waits for the login itself to report that it
+ * finished.
+ *
+ * `claude auth status` can't be the signal on its own: when a login has expired
+ * the old credentials are still on disk, so status reads "signed in" before the
+ * person has approved anything. It only counts here when status was signed out
+ * at the start and has since flipped.
+ *
+ * Sometimes Claude finishes the browser step on a page that shows a code to
+ * paste back instead of handing straight back to the app. `onCodeNeeded` lets
+ * the caller offer a box for it; whatever is submitted goes to the login's
+ * input, which is where Claude reads it.
+ */
+export async function signIn(
+  cliPath: string,
+  onPhase: Phase,
+  onCodeNeeded?: CodeNeeded
+): Promise<{ ok: boolean; error?: string }> {
   if (!cp) return { ok: false, error: "This only works on the desktop app." };
   onPhase("Starting sign-in…");
+  const wasSignedOut = checkAuth(cliPath).loggedIn === false;
   let child: any;
   try {
-    child = cp.spawn(cliPath, ["auth", "login", "--claudeai"], {});
+    child = cp.spawn(cliPath, ["auth", "login", "--claudeai"], {
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
   } catch (e: any) {
     return { ok: false, error: (e?.message || "Couldn't start sign-in.").toString() };
   }
 
-  let opened = false;
-  const handle = (buf: Buffer) => {
-    const match = buf.toString().match(/https?:\/\/[^\s"']+/);
-    if (match && !opened) {
-      opened = true;
-      openExternal(match[0]);
-      onPhase("Approve the sign-in in your browser…");
-    }
-  };
-  child.stdout?.on("data", handle);
-  child.stderr?.on("data", handle);
-  child.on("error", () => {});
-
-  // auth status is the source of truth — poll it until signed in or we give up.
-  const started = Date.now();
-  while (Date.now() - started < 120000) {
-    await new Promise((r) => setTimeout(r, 2000));
-    if (checkAuth(cliPath).loggedIn) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let opened = false;
+    let codeOffered = false;
+    let output = "";
+    const finish = (r: { ok: boolean; error?: string }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearInterval(poll);
       try {
         child.kill();
       } catch {}
-      onPhase("Signed in.");
-      return { ok: true };
-    }
-  }
-  try {
-    child.kill();
-  } catch {}
-  return checkAuth(cliPath).loggedIn
-    ? { ok: true }
-    : { ok: false, error: "Sign-in didn't finish. Check your browser and try again." };
+      if (r.ok) onPhase("Signed in.");
+      resolve(r);
+    };
+    const submit = (code: string) => {
+      const clean = code.trim();
+      if (!clean || settled) return;
+      onPhase("Checking the code…");
+      try {
+        child.stdin?.write(clean + "\n");
+      } catch (e: any) {
+        console.error("[hyo] couldn't pass the sign-in code to Claude:", e);
+        finish({ ok: false, error: "Couldn't pass the code to Claude. Click Sign in to try again." });
+      }
+    };
+    const offerCode = (pageUrl?: string) => {
+      if (codeOffered || !onCodeNeeded) return;
+      codeOffered = true;
+      onCodeNeeded(submit, pageUrl);
+    };
+    const handle = (buf: Buffer) => {
+      const text = buf.toString();
+      output += text;
+      const match = text.match(/https?:\/\/[^\s"']+/);
+      if (match && !opened) {
+        opened = true;
+        onPhase("Approve the sign-in in your browser…");
+        if (/opening browser/i.test(output)) {
+          // Claude opens its own tab, which hands straight back to Hyo once
+          // approved. The link it prints is the other route, a page that ends
+          // on a code to paste. Opening that too gives two tabs, and approving
+          // in the wrong one leaves the person copying a code. Keep it on the
+          // card for when Claude's tab never shows up.
+          offerCode(match[0]);
+        } else {
+          // Older Claude: it only prints the link, so Hyo opens it.
+          openExternal(match[0]);
+          offerCode();
+        }
+      }
+      if (/paste|authori[sz]ation code|enter (the )?code/i.test(text)) offerCode();
+      if (/login successful|logged in as|successfully (logged|signed) in/i.test(text)) finish({ ok: true });
+    };
+    child.stdout?.on("data", handle);
+    child.stderr?.on("data", handle);
+    child.on("error", (e: any) => {
+      console.error("[hyo] sign-in process error:", e);
+      finish({ ok: false, error: (e?.message || "Sign-in couldn't start.").toString() });
+    });
+    child.on("close", (code: number | null) => {
+      if (settled) return;
+      if (code === 0) {
+        finish(checkAuth(cliPath).loggedIn === false
+          ? { ok: false, error: "Claude closed the sign-in but still reports you as signed out. Try again." }
+          : { ok: true });
+        return;
+      }
+      const last = output.trim().split(/\r?\n/).filter(Boolean).pop();
+      console.error("[hyo] sign-in exited", code, output.slice(-500));
+      finish({ ok: false, error: last ? `Claude said: ${last}` : `Sign-in stopped (code ${code}).` });
+    });
+
+    // Signed out at the start and signed in now: done, even if the login
+    // process lingers. Never used when old credentials were already present.
+    const poll = setInterval(() => {
+      if (wasSignedOut && checkAuth(cliPath).loggedIn) finish({ ok: true });
+    }, 2000);
+    const timer = setTimeout(
+      () => finish({ ok: false, error: "Sign-in timed out after five minutes. Click Sign in to try again." }),
+      300000
+    );
+  });
 }

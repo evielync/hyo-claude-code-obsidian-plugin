@@ -1,5 +1,5 @@
 import React from "react";
-import { ToolCall } from "./ToolCall";
+import { renderToolBlock, useShowAllToolCalls } from "../../components/ToolCallRun";
 import { PermissionRequest } from "./PermissionRequest";
 import { AskQuestion } from "./AskQuestion";
 import { PlanReview } from "./PlanReview";
@@ -18,6 +18,7 @@ export function StreamingMessage({
   onPermissionResponse,
   onQuestionAnswer,
 }: StreamingMessageProps) {
+  const showAllTools = useShowAllToolCalls();
   if (message.isCompaction) {
     return (
       <div className="hyo-compaction-line">
@@ -69,9 +70,8 @@ export function StreamingMessage({
             );
           }
           if (block.type === "tool") {
-            const tool = toolCalls.find((t) => t.id === block.toolId);
-            if (!tool || HIDDEN_TOOLS.has(tool.name)) return null;
-            return <ToolCall key={i} tool={tool} />;
+            return renderToolBlock(blocks, i, toolCalls, HIDDEN_TOOLS, showAllTools,
+              (b) => b.type === "thinking" ? true : !(b.isSkillOutput || skillTurnIndices.has(b.turnIndex)));
           }
           return null;
         })}
@@ -145,6 +145,13 @@ function getActivityLabel(message: Message): string | null {
 
   const hasUnfinishedTool = toolCalls.some((t) => !t.result);
   if (hasUnfinishedTool) return "Working...";
+
+  // Between steps: every tool has finished but the agent is still deciding
+  // what to do next, so nothing new arrives on screen. If the latest thing in
+  // the message isn't text being written, keep the indicator up so it never
+  // looks stalled.
+  const last = orderedBlocks[orderedBlocks.length - 1];
+  if (last && last.type !== "text") return "Working...";
 
   return null;
 }
