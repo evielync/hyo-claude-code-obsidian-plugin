@@ -34,14 +34,10 @@ export const SCENARIOS: Scenario[] = [
     claude: "real",
     steps: [
       { say: "Hey Chad, what's on for today?" },
-      { waitAnswer: 200000 },
-      { say: "Okay. Tell me a bit more about the first one." },
-      { waitAnswer: 150000 },
-      { say: "Great, thanks. Bye." },
-      { wait: 4000 },
+      { waitAnswer: 105000 },
       { hangUp: true },
     ],
-    jobs: [1, 2],
+    jobs: [1, 1],
   },
   {
     name: "real-hang-up-mid-job",

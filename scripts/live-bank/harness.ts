@@ -41,10 +41,12 @@ export function clipFor(text: string): Clip {
   const h = createHash("sha1").update(text).digest("hex").slice(0, 16);
   const wav = path.join(AUDIO_CACHE, `${h}.wav`);
   if (!fs.existsSync(wav)) {
-    const aiff = path.join(AUDIO_CACHE, `${h}.aiff`);
-    execFileSync("say", ["-v", "Flo (English (UK))", "-r", "175", "-o", aiff, text]);
-    execFileSync("afconvert", ["-f", "WAVE", "-d", "LEI16@24000", "-c", "1", aiff, wav]);
-    fs.unlinkSync(aiff);
+    // Rendered to a file (never played), under a unique name so two runs can't collide.
+    const tmp = path.join(AUDIO_CACHE, `${h}.${process.pid}`);
+    execFileSync("say", ["-v", "Flo (English (UK))", "-r", "175", "-o", `${tmp}.aiff`, text]);
+    execFileSync("afconvert", ["-f", "WAVE", "-d", "LEI16@24000", "-c", "1", `${tmp}.aiff`, `${tmp}.wav`]);
+    fs.unlinkSync(`${tmp}.aiff`);
+    fs.renameSync(`${tmp}.wav`, wav);
   }
   const b = fs.readFileSync(wav);
   const i = b.indexOf("data");
@@ -372,7 +374,7 @@ export async function runCall(build: string, sc: Scenario, make: MakeBuild, pers
       if (ev.type === "session.input_audio.append") return;
       if (ev.type === "session.commentary.append") {
         log(`   -> say (${ev.delegation_id ? "job " + String(ev.delegation_id).slice(-6) : "general"}): ${String(ev.content).slice(0, 300)}`);
-        if (ev.delegation_id) results.push({ at: Date.now(), text: ev.content });
+        if (ev.delegation_id && !/^Still working on it/.test(String(ev.content))) results.push({ at: Date.now(), text: ev.content });
         firstVoiceAudioAfter.push({ ref: "say", since: Date.now() });
       } else if (ev.type === "session.thinking.append") {
         log(`   -> know: ${String(ev.content).slice(0, 200)}`);
@@ -543,6 +545,8 @@ export async function runBank(build: string, scenarios: Scenario[], make: MakeBu
   const list = only.length ? scenarios.filter((s) => only.includes(s.name)) : scenarios;
   const outDir = path.join(__dirname, "../../.live-bank", `${new Date().toISOString().slice(0, 16).replace(/:/g, "-")}-${build}`);
   const out: CallResult[] = [];
+  // Render every clip first (files only, nothing played).
+  for (const sc of list) for (const st of sc.steps) if ("say" in st) clipFor(st.say);
   for (const sc of list) {
     console.log(`--- ${build}: ${sc.name}`);
     try {
