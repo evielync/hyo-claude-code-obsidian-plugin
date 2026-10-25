@@ -1,5 +1,6 @@
 import { debug } from "./debug";
 import { Platform } from "obsidian";
+import { isSelfStartedPrompt } from "./reply-stream";
 import { mergeStoredCalls, upsertCall, callOnlySessions, type VoiceCallRecord } from "./voice/voice-call";
 import type * as fsTypes from "fs"; // type-only (erased at build) for annotations
 // Node built-ins are desktop-only; deferred so this module loads on mobile.
@@ -498,17 +499,38 @@ export function loadSessionHistory(cwd: string, sessionId: string): HistoryMessa
     return [];
   }
 
-  const messages: HistoryMessage[] = [];
-  const pendingToolResults = new Map<string, string>();
-
+  const entries: any[] = [];
   try {
     const text = fs.readFileSync(filePath, "utf8");
-    const lines = text.split("\n");
-
-    for (const line of lines) {
+    for (const line of text.split("\n")) {
       if (!line.trim()) continue;
       try {
-        const d = JSON.parse(line);
+        entries.push(JSON.parse(line));
+      } catch {
+        /* skip a malformed line */
+      }
+    }
+  } catch {
+    return [];
+  }
+  return parseSessionEntries(entries);
+}
+
+/** A session's parsed jsonl lines, as chat messages. */
+export function parseSessionEntries(entries: any[]): HistoryMessage[] {
+  const messages: HistoryMessage[] = [];
+  const pendingToolResults = new Map<string, string>();
+  // Claude started the next turn itself: its reply is a message of its own.
+  let replyBreak = false;
+
+  {
+    for (const d of entries) {
+      if (!d) continue;
+      try {
+        if (isSelfStartedPrompt(d)) {
+          replyBreak = true;
+          continue;
+        }
 
         if (d.type === "user") {
           const content = d.message?.content;
@@ -647,15 +669,14 @@ export function loadSessionHistory(cwd: string, sessionId: string): HistoryMessa
               thinking: thinkingParts.join(""),
               toolCalls,
               orderedBlocks,
-            }, d.message?.id);
+            }, d.message?.id, replyBreak);
+            replyBreak = false;
           }
         }
       } catch {
         continue;
       }
     }
-  } catch {
-    // ignore
   }
 
   return messages;
@@ -792,9 +813,9 @@ function extractTitle(filePath: string): string | null {
 // is what the skill-output hiding keys on: entries sharing a message id are
 // the same turn.
 const lastAssistantId = new WeakMap<object, string | undefined>();
-function pushAssistant(messages: HistoryMessage[], entry: HistoryMessage, msgId: string | undefined): void {
+function pushAssistant(messages: HistoryMessage[], entry: HistoryMessage, msgId: string | undefined, newReply = false): void {
   const prev = messages[messages.length - 1];
-  if (!prev || prev.role !== "assistant") {
+  if (!prev || prev.role !== "assistant" || newReply) {
     messages.push(entry);
     lastAssistantId.set(entry, msgId);
     return;

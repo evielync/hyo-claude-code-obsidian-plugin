@@ -1,5 +1,6 @@
 import { debug } from "../debug";
 import { addOutgoing, startQueued } from "../../send-queue";
+import { newStreamState, processContentBlocks, buildSnapshot, endTurn, startsTurnOfItsOwn, openReply, type StreamState } from "../../reply-stream";
 import { useState, useCallback, useRef, useEffect } from "react";
 import { GatewayTransport } from "../gateway-transport";
 import { VOICE_PERSONA } from "../voice/voice-persona";
@@ -30,14 +31,6 @@ const LOCKED_AGENT = ""; // empty = the CLI default agent
 const LOCKED_PERMISSION_MODE = "manual";
 
 // ------- types -------
-
-interface StreamState {
-  toolCalls: ToolCallData[];
-  orderedBlocks: OrderedBlock[];
-  turnIndex: number;
-  toolResultSinceLastText: boolean;
-  skillResultPending: boolean; // true after Skill tool_result, until next text block is consumed
-}
 
 export interface TabSession {
   id: string;
@@ -92,105 +85,6 @@ function genId(): string {
   });
 }
 
-function processContentBlocks(contentArr: any[], ss: StreamState, source: "user" | "assistant") {
-  for (const block of contentArr) {
-    if (block.type === "text") {
-      if (ss.toolResultSinceLastText && ss.orderedBlocks.length > 0)
-        ss.turnIndex++;
-      const existing = ss.orderedBlocks.find(
-        (b) => b.type === "text" && b.turnIndex === ss.turnIndex
-      );
-      if (existing) {
-        existing.content = block.text || "";
-        // When Claude's assistant event updates a previously suppressed block, unsuppress it
-        if (source === "assistant") existing.isSkillOutput = false;
-      } else {
-        // Text arriving in a user event immediately after a Skill tool_result is a system message — hide it
-        const isSkillOutput = source === "user" && ss.skillResultPending;
-        ss.skillResultPending = false;
-        ss.orderedBlocks.push({
-          type: "text",
-          content: block.text || "",
-          turnIndex: ss.turnIndex,
-          isSkillOutput,
-        });
-      }
-      ss.toolResultSinceLastText = false;
-    } else if (block.type === "thinking") {
-      const existing = ss.orderedBlocks.find(
-        (b) => b.type === "thinking" && b.turnIndex === ss.turnIndex
-      );
-      if (existing) existing.content = block.thinking || "";
-      else
-        ss.orderedBlocks.push({
-          type: "thinking",
-          content: block.thinking || "",
-          turnIndex: ss.turnIndex,
-        });
-    } else if (block.type === "tool_use") {
-      const tool: ToolCallData = {
-        id: block.id,
-        name: block.name,
-        input: block.input,
-        result: null,
-      };
-      if (!ss.toolCalls.find((t) => t.id === tool.id)) {
-        ss.toolCalls.push(tool);
-        ss.orderedBlocks.push({
-          type: "tool",
-          toolId: tool.id,
-          turnIndex: ss.turnIndex,
-        });
-        // Immediately suppress text at this turn if it's a Skill call
-        if (tool.name === "Skill") {
-          for (const b of ss.orderedBlocks) {
-            if (b.type === "text" && b.turnIndex === ss.turnIndex) {
-              b.isSkillOutput = true;
-            }
-          }
-        }
-      }
-    } else if (block.type === "tool_result") {
-      const tool = ss.toolCalls.find((t) => t.id === block.tool_use_id);
-      if (tool) {
-        tool.result =
-          typeof block.content === "string"
-            ? block.content
-            : JSON.stringify(block.content);
-        if (tool.name === "Skill") {
-          ss.skillResultPending = true;
-          // Retroactively suppress text at the same turn as the Skill tool block
-          const skillBlock = ss.orderedBlocks.find(
-            (b) => b.type === "tool" && b.toolId === tool.id
-          );
-          if (skillBlock) {
-            for (const b of ss.orderedBlocks) {
-              if (b.type === "text" && b.turnIndex === skillBlock.turnIndex) {
-                b.isSkillOutput = true;
-              }
-            }
-          }
-        }
-      }
-      ss.toolResultSinceLastText = true;
-    }
-  }
-}
-
-function buildSnapshot(ss: StreamState) {
-  return {
-    content: ss.orderedBlocks
-      .filter((b) => b.type === "text")
-      .map((b) => b.content)
-      .join(""),
-    thinking: ss.orderedBlocks
-      .filter((b) => b.type === "thinking")
-      .map((b) => b.content)
-      .join(""),
-    toolCalls: [...ss.toolCalls],
-    orderedBlocks: [...ss.orderedBlocks.map((b) => ({ ...b }))],
-  };
-}
 
 // ------- hook -------
 
@@ -362,13 +256,7 @@ export function useSessionManager(options: SessionManagerOptions) {
                 };
               }),
             }));
-            streamStatesRef.current[tabId] = {
-              toolCalls: [],
-              orderedBlocks: [],
-              turnIndex: 0,
-              toolResultSinceLastText: false,
-              skillResultPending: false,
-            };
+            streamStatesRef.current[tabId] = newStreamState();
             // Nudge the CLI to resume what it was doing before compaction.
             setTimeout(() => {
               transportsRef.current[tabId]?.sendUserMessage(
@@ -460,6 +348,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         // is tracked from individual assistant events (see below) since result.usage
         // aggregates across multiple API calls within a turn.
         if (event.type === "result") {
+          endTurn(ss, event);
           updateTabLastAssistant(tabId, () => ({ streaming: false }));
           const mu: any = event.modelUsage || {};
           const firstModel: any = Object.values(mu)[0];
@@ -532,6 +421,29 @@ export function useSessionManager(options: SessionManagerOptions) {
           }
 
           return;
+        }
+
+        // Claude started a turn of its own (a background agent finished, a
+        // task notification, another session's message): it gets its own
+        // reply below, and the one before it stays as it was.
+        if (startsTurnOfItsOwn(ss, event)) {
+          turnRunningRef.current[tabId] = true;
+          const reply: Message = {
+            role: "assistant",
+            content: "",
+            thinking: "",
+            toolCalls: [],
+            orderedBlocks: [],
+            streaming: true,
+          };
+          setState((prev) => ({
+            ...prev,
+            tabs: prev.tabs.map((tab) =>
+              tab.id === tabId
+                ? { ...tab, messages: openReply(tab.messages, reply), generating: true }
+                : tab
+            ),
+          }));
         }
 
         // User event (tool results)
@@ -908,13 +820,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       }
       turnRunningRef.current[tabId] = true;
 
-      streamStatesRef.current[tabId] = {
-        toolCalls: [],
-        orderedBlocks: [],
-        turnIndex: 0,
-        toolResultSinceLastText: false,
-        skillResultPending: false,
-      };
+      streamStatesRef.current[tabId] = newStreamState();
 
       setState((prev) => ({
         ...prev,

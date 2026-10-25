@@ -7,6 +7,7 @@
 // jsonl lines into chat messages.
 
 import { GatewayClient } from "./gateway-client";
+import { isSelfStartedPrompt } from "../reply-stream";
 import type { VoiceCallRecord } from "../voice/voice-call";
 
 export interface PastSession {
@@ -131,9 +132,17 @@ export function parseSessionLines(lines: any[]): HistoryMessage[] {
   const messages: HistoryMessage[] = [];
   const pendingToolResults = new Map<string, string>();
 
+  // Claude started the next turn itself: its reply is a message of its own.
+  let replyBreak = false;
+
   for (const d of lines) {
     if (!d) continue;
     try {
+      if (isSelfStartedPrompt(d)) {
+        replyBreak = true;
+        continue;
+      }
+
       if (d.type === "user") {
         const content = d.message?.content;
         if (!content) continue;
@@ -257,7 +266,8 @@ export function parseSessionLines(lines: any[]): HistoryMessage[] {
             thinking: thinkingParts.join(""),
             toolCalls,
             orderedBlocks,
-          }, d.message?.id);
+          }, d.message?.id, replyBreak);
+          replyBreak = false;
         }
       }
     } catch {
@@ -275,9 +285,9 @@ export function parseSessionLines(lines: any[]): HistoryMessage[] {
 // is what the skill-output hiding keys on: entries sharing a message id are
 // the same turn.
 const lastAssistantId = new WeakMap<object, string | undefined>();
-function pushAssistant(messages: HistoryMessage[], entry: HistoryMessage, msgId: string | undefined): void {
+function pushAssistant(messages: HistoryMessage[], entry: HistoryMessage, msgId: string | undefined, newReply = false): void {
   const prev = messages[messages.length - 1];
-  if (!prev || prev.role !== "assistant") {
+  if (!prev || prev.role !== "assistant" || newReply) {
     messages.push(entry);
     lastAssistantId.set(entry, msgId);
     return;
