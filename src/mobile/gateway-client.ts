@@ -75,7 +75,7 @@ export class GatewayClient {
   // engine/voice is set. Keyed by requestId.
   private liveSdpPending = new Map<string, PendingRPC<{ sdp: string }>>();
   private liveConfigPending = new Map<string, PendingRPC<{ engine: string; voice: string }>>();
-  private historyPending = new Map<string, PendingRPC<any[]>>();
+  private historyPending = new Map<string, PendingRPC<{ lines: any[]; voiceCalls: any[] }>>();
   private renamePending = new Map<string, PendingRPC<string>>();
   private titlePending = new Map<string, PendingRPC<string | null>>();
   // Claude updates run on the Mac; progress comes back as it goes.
@@ -313,7 +313,8 @@ export class GatewayClient {
         if (pending) {
           this.historyPending.delete(msg.sessionId);
           clearTimeout(pending.timer);
-          pending.resolve(msg.lines || []);
+          // voiceCalls: from a gateway that has them; older ones send none.
+          pending.resolve({ lines: msg.lines || [], voiceCalls: Array.isArray(msg.voiceCalls) ? msg.voiceCalls : [] });
         }
         return;
       }
@@ -337,7 +338,8 @@ export class GatewayClient {
         return;
       }
       case "task_meta_set":
-        // Fire-and-forget ack; the list refresh that follows picks up the state.
+      case "voice_call_saved":
+        // Fire-and-forget acks; the list refresh that follows picks up the state.
         return;
       case "live_sdp_answer":
       case "live_sdp_error": {
@@ -533,7 +535,8 @@ export class GatewayClient {
     });
   }
 
-  getHistory(sessionId: string): Promise<any[]> {
+  /** A conversation's transcript lines and its saved voice calls. */
+  getHistory(sessionId: string): Promise<{ lines: any[]; voiceCalls: any[] }> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.historyPending.delete(sessionId);
@@ -553,6 +556,12 @@ export class GatewayClient {
       this.renamePending.set(sessionId, { resolve, reject, timer });
       this.send({ type: "rename", sessionId, title });
     });
+  }
+
+  // Fire-and-forget: save a finished voice call to the conversation's shared
+  // metadata on the gateway (insert, or replace the record with that id).
+  saveVoiceCall(sessionId: string, call: unknown, title?: string): void {
+    this.send({ type: "save_voice_call", sessionId, call, title });
   }
 
   // Fire-and-forget: persist pinned/closed to the shared metadata on the

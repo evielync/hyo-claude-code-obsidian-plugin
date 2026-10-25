@@ -34,7 +34,8 @@
 
 import { Platform, Notice } from "obsidian";
 import { debug } from "./debug";
-import { getProjectDir, saveCustomTitle, setTaskMeta } from "./session-parser";
+import { getProjectDir, saveCustomTitle, setTaskMeta, saveVoiceCall, getVoiceCalls } from "./session-parser";
+import { callOnlySessions } from "./voice/voice-call";
 import { buildLiveInstructions, readAgentIdentity } from "./voice/gpt-live";
 import type * as FsType from "fs";
 import type * as PathType from "path";
@@ -61,8 +62,13 @@ const WebSocketServer: typeof WsServer = Platform.isMobile
 export interface LiveVoiceConfig {
   engine: string;
   openAiApiKey: string;
-  voice: string;
+  /** Built-in name, or `{ id }` for a custom voice. */
+  voice: string | { id: string };
+  /** A custom voice's description, for the instructions. */
+  voiceDescription?: string;
   personality: string;
+  /** Settings → Voice → About you, read fresh for each call (text or the chosen note). */
+  getAboutYou?: () => Promise<string>;
 }
 
 export interface GatewayHostConfig {
@@ -385,6 +391,21 @@ function listSessions(cwd: string) {
       lastActive: md.lastActive || null,
     });
   }
+  // Conversations that are only a voice call so far (no transcript yet).
+  for (const c of callOnlySessions(meta, (id) => fs.existsSync(path.join(dir, `${id}.jsonl`)))) {
+    rows.push({
+      id: c.id,
+      title: c.title,
+      date: c.date,
+      size: 0,
+      lastRole: c.lastRole,
+      lastSnippet: c.lastSnippet,
+      pinned: c.pinned,
+      closed: c.closed,
+      lastActive: c.lastActive || null,
+      callOnly: true,
+    });
+  }
   rows.sort((a, b) => b.date - a.date);
   return rows.slice(0, 150);
 }
@@ -629,7 +650,10 @@ function spawnTab(
   } else {
     args.push("--permission-mode", "bypassPermissions");
   }
-  if (resume && sessionId) args.push("--resume", sessionId);
+  // A conversation that began as a voice call has an id but no transcript
+  // yet: Claude starts it with --session-id rather than resuming nothing.
+  const canResume = !!resume && !!sessionId && fs.existsSync(path.join(getProjectDir(config.vault), `${sessionId}.jsonl`));
+  if (canResume) args.push("--resume", sessionId!);
   else if (sessionId) args.push("--session-id", sessionId);
   if (appendSystemPrompt) args.push("--append-system-prompt", appendSystemPrompt);
 
@@ -1260,7 +1284,12 @@ export function startGatewayHost(config: GatewayHostConfig): void {
             send({ type: "sessions", sessions: listSessions(cfg.vault) });
             break;
           case "get_history":
-            send({ type: "history", sessionId: m.sessionId, lines: getHistoryLines(cfg.vault, m.sessionId) });
+            send({
+              type: "history",
+              sessionId: m.sessionId,
+              lines: getHistoryLines(cfg.vault, m.sessionId),
+              voiceCalls: getVoiceCalls(cfg.vault, m.sessionId),
+            });
             break;
           case "search_sessions":
             send({ type: "search_results", query: m.query, hits: searchSessions(cfg.vault, m.query) });
@@ -1268,6 +1297,13 @@ export function startGatewayHost(config: GatewayHostConfig): void {
           case "rename":
             saveCustomTitle(cfg.vault, m.sessionId, m.title);
             send({ type: "renamed", sessionId: m.sessionId, title: m.title });
+            break;
+          case "save_voice_call":
+            // A call made on the phone, saved where desktop keeps its own.
+            if (typeof m.sessionId === "string" && m.call && typeof m.call.id === "string") {
+              saveVoiceCall(cfg.vault, m.sessionId, m.call, typeof m.title === "string" ? m.title : undefined);
+            }
+            send({ type: "voice_call_saved", sessionId: m.sessionId });
             break;
           case "set_task_meta":
             setTaskMeta(cfg.vault, m.sessionId, m.patch || {});
@@ -1369,7 +1405,12 @@ export function startGatewayHost(config: GatewayHostConfig): void {
           }
           case "live_config": {
             const lv = cfg.getLiveVoice?.();
-            send({ type: "live_config", requestId: m.requestId, engine: lv?.engine || "elevenlabs", voice: lv?.voice || "marin" });
+            send({
+              type: "live_config",
+              requestId: m.requestId,
+              engine: lv?.engine || "elevenlabs",
+              voice: typeof lv?.voice === "string" ? lv.voice : lv?.voice ? "custom" : "marin",
+            });
             break;
           }
           case "live_sdp": {
@@ -1388,10 +1429,15 @@ export function startGatewayHost(config: GatewayHostConfig): void {
             }
             const agent = typeof m.agent === "string" && m.agent ? m.agent : cfg.defaultAgent;
             const history = Array.isArray(m.history) ? m.history.slice(-60) : [];
+            // About you goes into the starting instructions, read fresh (capped
+            // so a slow read never holds up the call).
+            const aboutYou = lv.getAboutYou
+              ? await Promise.race([lv.getAboutYou().catch(() => ""), new Promise<string>((r) => setTimeout(() => r(""), 1500))])
+              : "";
             const session = {
               model: "gpt-live-1",
               delegation: { type: "client" },
-              instructions: buildLiveInstructions(lv.personality, readAgentIdentity(agent)),
+              instructions: buildLiveInstructions(lv.personality, readAgentIdentity(agent), { voiceDescription: lv.voiceDescription, aboutYou }),
               input: history
                 .filter((h: any) => h && (h.role === "user" || h.role === "assistant") && typeof h.text === "string" && h.text)
                 .map((h: any) => ({

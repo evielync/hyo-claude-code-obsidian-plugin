@@ -1,7 +1,9 @@
 import React, { useEffect, useRef } from "react";
 import { ChatMessage } from "./ChatMessage";
 import { StreamingMessage } from "./StreamingMessage";
+import { VoiceCallLine } from "./VoiceCallLine";
 import type { Message } from "../hooks/useChatEngine";
+import type { VoiceCallRecord } from "../voice/voice-call";
 import type { ClaudeUpdateRunner } from "./ClaudeUpdateCard";
 import type { ClaudeSignInRunner } from "./ClaudeSignInCard";
 
@@ -13,6 +15,8 @@ interface ChatMessagesProps {
   onRecover?: () => void;
   onClaudeUpdate?: ClaudeUpdateRunner;
   onClaudeSignIn?: ClaudeSignInRunner;
+  /** Tapping a voice-call line opens its transcript. */
+  onOpenCall?: (call: VoiceCallRecord) => void;
 }
 
 export function ChatMessages({
@@ -23,6 +27,7 @@ export function ChatMessages({
   onRecover,
   onClaudeUpdate,
   onClaudeSignIn,
+  onOpenCall,
 }: ChatMessagesProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -70,9 +75,11 @@ export function ChatMessages({
           );
         }
 
-        // Claude's reply to a live-call hand-off: the voice spoke the words
-        // (its own turn follows), so show only the work.
-        const hideProse = msg.role === "assistant" && !!messages[i - 1]?.handoff;
+        // A voice call: one line where it started; tap for the transcript.
+        if (msg.voiceCall) {
+          return <VoiceCallLine key={`call-${msg.voiceCall.id}`} call={msg.voiceCall} onOpen={(c) => onOpenCall?.(c)} />;
+        }
+
         return (
           <ChatMessage
             key={`msg-${i}`}
@@ -80,7 +87,6 @@ export function ChatMessages({
             onRecover={onRecover}
             onPermissionResponse={onPermissionResponse}
             onQuestionAnswer={onQuestionAnswer}
-            hideProse={hideProse}
             onClaudeUpdate={onClaudeUpdate}
             onClaudeSignIn={onClaudeSignIn}
             isLast={i === messages.length - 1}

@@ -7,7 +7,10 @@ import {
   STT_TIMEOUT_ERROR,
 } from "../voice/elevenlabs-api";
 import { openAiSpeechToText } from "../voice/openai-stt";
-import { GptLiveSession, type GptLiveHistoryItem } from "../../voice/gpt-live";
+import type { GptLiveHistoryItem } from "../../voice/gpt-live";
+import { playChime, CONNECT_CHIME, HANGUP_CHIME } from "../../voice/chimes";
+import { LiveCall } from "../../voice/live-call";
+import type { VoiceCallRecord, CallEndReason } from "../../voice/voice-call";
 
 export type VoiceState = "idle" | "listening" | "thinking" | "speaking" | "error";
 
@@ -33,8 +36,14 @@ interface UseVoiceModeOptions {
   live?: {
     enabled: boolean;
     exchangeSdp: (offerSdp: string, agent: string, history: GptLiveHistoryItem[]) => Promise<{ sdp: string }>;
-    getContext: () => { agent: string; history: GptLiveHistoryItem[] };
-    onVoiceTurn: (side: "user" | "agent", text: string) => void;
+    /** The tab's agent, the conversation so far, and where the call's line goes. */
+    getContext: () => { agent: string; history: GptLiveHistoryItem[]; after: number };
+    /** A job from the live call: the whole request for Claude, and the user's words for the record. */
+    onHandoff: (prompt: string, said: string) => void;
+
+    onVoiceTurn?: (side: "user" | "agent", text: string) => void;
+    /** The call is over. `record` is null when nothing happened on it. */
+    onCallEnded: (record: VoiceCallRecord | null, reason: CallEndReason) => void;
   };
 }
 
@@ -51,26 +60,20 @@ export function useVoiceMode({
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   // ---- GPT-Live call (full duplex) ----
   const isLive = !!live?.enabled;
-  const liveRef = useRef<GptLiveSession | null>(null);
-  const liveDelegationRef = useRef<string | null>(null);
-  const handoffQueueRef = useRef<string[]>([]);
-  const nudgeTimerRef = useRef<number | null>(null);
+  // Session, record and hand-offs live in LiveCall — the same code as desktop.
+  const liveRef = useRef<LiveCall | null>(null);
   const [liveSide, setLiveSide] = useState<"user" | "agent" | null>(null);
   const [liveLevel, setLiveLevel] = useState(0);
-  const liveLevelRef = useRef<{ user: number; agent: number }>({ user: 0, agent: 0 });
   const [liveStatus, setLiveStatus] = useState<"off" | "connecting" | "connected" | "live">("off");
   const liveOptsRef = useRef(live);
   liveOptsRef.current = live;
 
   const stopLive = useCallback(() => {
-    liveRef.current?.stop();
+    const call = liveRef.current;
     liveRef.current = null;
-    liveDelegationRef.current = null;
-    handoffQueueRef.current = [];
-    if (nudgeTimerRef.current) {
-      clearTimeout(nudgeTimerRef.current);
-      nudgeTimerRef.current = null;
-    }
+    call?.hangUp();
+    liveMutedRef.current = false;
+    setLiveMuted(false);
     setVoiceState("idle");
     setLiveSide(null);
     setLiveLevel(0);
@@ -80,95 +83,67 @@ export function useVoiceMode({
   const startLive = useCallback(async () => {
     const opts = liveOptsRef.current;
     if (!opts?.enabled || liveRef.current) return;
-    const { agent, history } = opts.getContext();
-    handoffQueueRef.current = [];
-    setLiveStatus("connecting");
-    const session = new GptLiveSession({
-      transport: "webrtc",
-      greet: true,
-      apiKey: "", // the desktop signs; the phone never holds the key
-      voice: "",
-      instructions: "",
-      history,
-      exchangeSdp: (offerSdp) => opts.exchangeSdp(offerSdp, agent, history),
-      onState: (s) => {
-        setVoiceState(s === "connecting" ? "thinking" : s === "closed" ? "idle" : s);
-        if (s === "connecting") setLiveStatus("connecting");
-        else if (s === "closed") setLiveStatus("off");
-        else setLiveStatus((prev) => (prev === "live" ? "live" : "connected"));
+    const { agent, history, after } = opts.getContext();
+    const call: LiveCall = new LiveCall({
+      transports: ["webrtc"],
+      after,
+      session: {
+        apiKey: "", // the desktop signs; the phone never holds the key
+        voice: "",
+        instructions: "",
+        history,
+        exchangeSdp: (offerSdp) => opts.exchangeSdp(offerSdp, agent, history),
       },
-      onFirstSpeech: () => setLiveStatus("live"),
-      onTurn: (side, text) => liveOptsRef.current?.onVoiceTurn(side, text),
-      onLevel: (side, level) => {
-        const lv = liveLevelRef.current;
-        lv[side] = level;
-        const top = lv.user >= lv.agent ? "user" : "agent";
-        const val = Math.max(lv.user, lv.agent);
-        setLiveLevel(val);
-        setLiveSide(val > 0.05 ? top : null);
+      onHandoff: (prompt, said) => liveOptsRef.current?.onHandoff(prompt, said),
+      onTurn: (side, text) => liveOptsRef.current?.onVoiceTurn?.(side, text),
+      onUi: (ui) => {
+        setLiveStatus(ui.status);
+        setLiveSide(ui.side);
+        setLiveLevel(ui.level);
+        // voiceState is the dictation mic's; a live call shows in the call bar.
       },
-      onDelegation: (id, text) => {
-        liveDelegationRef.current = id;
-        const s = liveRef.current;
-        if (!text) {
-          s?.appendThinking("No request text was heard for this hand-off; ask the user to say it again.", id);
-          return;
-        }
-        handoffQueueRef.current.push(id);
-        onTranscriptRef.current(text);
-        s?.appendThinking("The backend agent has started on this. No result yet.", id);
-        if (nudgeTimerRef.current) clearTimeout(nudgeTimerRef.current);
-        nudgeTimerRef.current = window.setTimeout(() => {
-          nudgeTimerRef.current = null;
-          if (handoffQueueRef.current.includes(id)) {
-            liveRef.current?.appendCommentary("Still working on it; it's taking a little longer than usual.", id);
-          }
-        }, 25000);
+      // A chime instead of a spoken greeting, once it can really hear.
+      onLive: () => playChime(CONNECT_CHIME),
+      onEnded: (record, reason) => {
+        if (reason === "hung-up") playChime(HANGUP_CHIME);
+        if (liveRef.current === call) liveRef.current = null;
+        liveOptsRef.current?.onCallEnded(record, reason);
       },
       onError: (msg) => {
         console.error("[hyo-voice] GPT-Live:", msg);
         new Notice(`Hyo voice: ${msg}`, 7000);
       },
     });
-    liveRef.current = session;
-    try {
-      await session.start();
-    } catch (err) {
-      console.error("[hyo-voice] GPT-Live start failed:", err);
-      new Notice(`Hyo voice: couldn't start the call — ${err instanceof Error ? err.message : "error"}`, 8000);
-      session.stop();
-      liveRef.current = null;
-      setLiveStatus("off");
-      setVoiceState("idle");
-    }
+    liveRef.current = call;
+    await call.start();
   }, []);
 
-  /** Claude finished a hand-off: the whole spoken reply, in one piece. */
-  const finishHandoff = useCallback((spoken: string) => {
-    const s = liveRef.current;
-    if (!s) return;
-    const id = handoffQueueRef.current.shift() ?? liveDelegationRef.current;
-    if (nudgeTimerRef.current) {
-      clearTimeout(nudgeTimerRef.current);
-      nudgeTimerRef.current = null;
-    }
-    if (handoffQueueRef.current.length > 0) {
-      s.appendThinking(`Earlier result, now superseded: ${spoken}`, id);
-      return;
-    }
-    s.appendCommentary(spoken, id);
-    liveDelegationRef.current = null;
+  /** Claude finished a reply: the answer to the open hand-off, or something typed in the chat. */
+  const finishReply = useCallback((markdown: string) => {
+    liveRef.current?.finishReply(markdown);
   }, []);
 
-  /** Silent progress note while Claude works. */
-  const notifyProgress = useCallback((doing: string) => {
-    const id = handoffQueueRef.current[0] ?? liveDelegationRef.current;
-    liveRef.current?.appendThinking(`The backend agent is ${doing}. No result yet.`, id);
+  const noteSilently = useCallback((text: string) => {
+    liveRef.current?.note(text);
   }, []);
+
+  /** A permission ask was answered on screen: the voice knows without her saying so. */
+  const notifyPermissionAnswered = useCallback((allowed: boolean) => {
+    liveRef.current?.permissionAnswered(allowed);
+  }, []);
+
+  /** A step Claude is taking, in plain words: a short silent progress note. */
+  const notifyProgress = useCallback((label: string | null) => {
+    liveRef.current?.step(label);
+  }, []);
+
+
+  /** The live call that's on now, if any (its record grows as it goes). */
+  const currentCall = useCallback((): VoiceCallRecord | null => liveRef.current?.callRecord ?? null, []);
 
   /** Something on screen needs the user (permission ask, question). */
   const notifyAttention = useCallback((text: string) => {
-    liveRef.current?.appendThinking(text, liveDelegationRef.current);
+    liveRef.current?.notifyAttention(text);
   }, []);
 
   const toggleLiveMute = useCallback(() => {
@@ -531,8 +506,11 @@ export function useVoiceMode({
     isLive,
     startLive,
     stopLive,
-    finishHandoff,
+    finishReply,
     notifyProgress,
+    notifyPermissionAnswered,
+    noteSilently,
+    currentCall,
     notifyAttention,
     toggleLiveMute,
     liveMuted,

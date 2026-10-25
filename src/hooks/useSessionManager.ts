@@ -1,4 +1,5 @@
 import { debug } from "../debug";
+import { addOutgoing, startQueued } from "../send-queue";
 import { useState, useCallback, useRef, useEffect } from "react";
 import { ClaudeTransport, normalizeModelId } from "../claude-transport";
 import { VOICE_PERSONA, LIVE_BACKEND_PERSONA, HANDOFF_MARKER } from "../voice/voice-persona";
@@ -9,7 +10,8 @@ import type {
   AskQuestionData,
   PlanReviewData,
 } from "./useChatEngine";
-import { listPastSessions, loadSessionHistory, loadSessionModel, saveCustomTitle, setTaskMeta as persistTaskMeta, type PastSession, getProjectDir, appendVoiceTurns, getVoiceTurns, type VoiceTurn } from "../session-parser";
+import { listPastSessions, loadSessionHistory, loadSessionModel, saveCustomTitle, setTaskMeta as persistTaskMeta, type PastSession, getProjectDir, saveVoiceCall, getVoiceCalls, hasTranscript } from "../session-parser";
+import { handoffRequestText, threadCalls, insertCallLine, sessionSpawn, callHome, type VoiceCallRecord } from "../voice/voice-call";
 import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
 import { generateConversationTitle } from "../title-generator";
 import { Platform } from "obsidian";
@@ -23,16 +25,6 @@ export type { PastSession };
 // A bare greeting opener ("hi chad", "hey", "good morning") carries no topic —
 // used to skip it when picking what to title a conversation from, so voice
 // chats started with a hello don't end up titled off the hello (or untitled).
-/** The spoken request inside a hand-off prompt: after any voice-call excerpt, before the note. */
-function handoffRequestText(content: string): string {
-  let t = content;
-  const i = t.indexOf("[End of voice call excerpt]");
-  if (i >= 0) t = t.slice(i + "[End of voice call excerpt]".length);
-  const j = t.indexOf(HANDOFF_MARKER);
-  if (j >= 0) t = t.slice(0, j);
-  return t.trim();
-}
-
 function isTrivialOpener(text: string): boolean {
   const s = text.trim().toLowerCase().replace(/[.!,?'"]/g, "");
   if (!s) return true;
@@ -55,6 +47,9 @@ interface StreamState {
 export interface TabSession {
   id: string;
   cliSessionId: string | null;
+  // The id was chosen by Hyo when a call ended in a tab Claude hadn't been
+  // used in yet. No transcript exists, so Claude starts it with --session-id.
+  sessionPending?: boolean;
   title: string;
   messages: Message[];
   generating: boolean;
@@ -245,6 +240,25 @@ export function useSessionManager(options: SessionManagerOptions) {
   const [pastSessions, setPastSessions] = useState<PastSession[]>([]);
 
   const transportsRef = useRef<Record<string, ClaudeTransport>>({});
+  // Messages sent while Claude is still answering, per tab, oldest first.
+  // They show in the chat at once and go to Claude when the turn ends (see
+  // send-queue.ts). turnRunningRef is set the moment a turn starts, so two
+  // sends in the same tick can't both start one.
+  const queuedSendsRef = useRef<Record<string, { id: string; content: string | any[]; meta?: any }[]>>({});
+  const turnRunningRef = useRef<Record<string, boolean>>({});
+  const sendMessageRef = useRef<(content: string | any[], meta?: any, opts?: { tabId?: string; fromQueue?: string }) => void>(() => {});
+  /** The turn on this tab ended: send the next waiting message, if any. */
+  const turnEnded = (tabId: string) => {
+    turnRunningRef.current[tabId] = false;
+    const next = queuedSendsRef.current[tabId]?.shift();
+    if (next) setTimeout(() => sendMessageRef.current(next.content, next.meta, { tabId, fromQueue: next.id }), 0);
+  };
+  // The system prompt each tab's process was spawned with. Voice mode changes
+  // it; the process is swapped on the next send between turns, never by
+  // killing a turn that's running (a hand-off carries on after hang-up).
+  const transportPromptRef = useRef<Record<string, string | undefined>>({});
+  const personaFor = (voiceMode: boolean | undefined): string | undefined =>
+    voiceMode ? (options.voiceEngine === "gpt-live" ? LIVE_BACKEND_PERSONA : VOICE_PERSONA) : undefined;
   const streamStatesRef = useRef<Record<string, StreamState>>({});
   const scrollRef = useRef({ nearBottom: true });
   const stateRef = useRef(state);
@@ -314,7 +328,7 @@ export function useSessionManager(options: SessionManagerOptions) {
               ...prev,
               tabs: prev.tabs.map((tab) =>
                 tab.id === tabId
-                  ? { ...tab, cliSessionId: event.session_id }
+                  ? { ...tab, cliSessionId: event.session_id, sessionPending: false }
                   : tab
               ),
             }));
@@ -510,6 +524,8 @@ export function useSessionManager(options: SessionManagerOptions) {
                 : tab
             ),
           }));
+          // Anything sent while this turn ran goes now.
+          turnEnded(tabId);
 
           // Auto-generate title after first response
           if (options.autoGenerateTitles) {
@@ -879,72 +895,77 @@ export function useSessionManager(options: SessionManagerOptions) {
     [options.cwd]
   );
 
-  // ---- Live-call transcript ---------------------------------------------------
-  // Spoken turns from a GPT-Live call go into the thread as `voice` messages.
-  // They are Hyo's record, not Claude's: persisted to session-metadata against
-  // the tab's session id. A tab with no session yet (a call that hasn't handed
-  // anything to Claude) keeps them flagged unsaved and flushes as soon as an id
-  // exists — every append tries, and endCall calls flush explicitly.
+  // ---- Voice calls -----------------------------------------------------------
+  // Each finished call becomes one `voiceCall` line in the thread, where the
+  // call started. The record is Hyo's, not Claude's: written to
+  // session-metadata against the tab's session id. A tab with no session yet
+  // (a call that never handed anything to Claude) keeps it flagged unsaved;
+  // the effect below writes it the moment an id exists.
 
-  const flushVoiceTurns = useCallback(() => {
-    const tab = stateRef.current.tabs.find((t) => t.id === stateRef.current.activeTabId);
-    if (!tab || !tab.cliSessionId) return;
-    const unsaved: VoiceTurn[] = [];
-    let claudeCount = 0;
-    for (const m of tab.messages) {
-      if (m.voice) {
-        if (m.voiceUnsaved) {
-          unsaved.push({
-            side: m.role === "user" ? "user" : "agent",
-            text: m.content,
-            at: m.voiceAt || new Date().toISOString(),
-            after: claudeCount,
-          });
-        }
-      } else {
-        claudeCount++;
-      }
+  const persistCall = (cliSessionId: string | null, call: VoiceCallRecord): boolean => {
+    if (!cliSessionId) return false;
+    try {
+      saveVoiceCall(options.cwd, cliSessionId, call);
+      return true;
+    } catch (e) {
+      console.error("[hyo] Couldn't save the voice call:", e);
+      return false;
     }
-    if (!unsaved.length) return;
-    appendVoiceTurns(options.cwd, tab.cliSessionId, unsaved);
-    const tabId = tab.id;
-    setState((prev) => ({
-      ...prev,
-      tabs: prev.tabs.map((t) =>
-        t.id !== tabId
-          ? t
-          : { ...t, messages: t.messages.map((m) => (m.voiceUnsaved ? { ...m, voiceUnsaved: false } : m)) }
-      ),
-    }));
-  }, [options.cwd]);
+  };
 
-  const appendVoiceTurn = useCallback(
-    (side: "user" | "agent", text: string) => {
-      const tabId = stateRef.current.activeTabId;
-      const msg: Message = {
-        role: side === "user" ? "user" : "assistant",
-        content: text,
-        streaming: false,
-        voice: true,
-        voiceUnsaved: true,
-        voiceAt: new Date().toISOString(),
-      };
+  /**
+   * Put a finished call in its tab's thread and save it. Calling again with
+   * the same id replaces it. A tab Claude hasn't been used in yet gets its
+   * conversation id here, chosen by Hyo, so the call is saved at once and the
+   * conversation shows in history; Claude takes the same id when it's first
+   * asked anything (see sessionSpawn).
+   */
+  const addVoiceCall = useCallback(
+    (tabId: string, call: VoiceCallRecord) => {
+      const tab = stateRef.current.tabs.find((t) => t.id === tabId);
+      if (!tab) return;
+      const { sessionId, minted, title } = callHome(tab, call);
+      // Written before the state update so it survives the panel closing.
+      let saved = false;
+      try {
+        saveVoiceCall(options.cwd, sessionId, call, title);
+        saved = true;
+      } catch (e) {
+        console.error("[hyo] Couldn't save the voice call:", e);
+      }
+      const line: Message = { role: "system", content: "", streaming: false, voiceCall: call, voiceCallUnsaved: !saved };
       setState((prev) => ({
         ...prev,
-        tabs: prev.tabs.map((tab) => {
-          if (tab.id !== tabId) return tab;
-          const title =
-            tab.messages.length === 0 && tab.title === "New conversation" && side === "user"
-              ? text.slice(0, 40) + (text.length > 40 ? "..." : "")
-              : tab.title;
-          return { ...tab, title, messages: [...tab.messages, msg] };
+        tabs: prev.tabs.map((t) => {
+          if (t.id !== tabId) return t;
+          if (minted && !t.cliSessionId) t = { ...t, cliSessionId: sessionId, sessionPending: true, title: title || t.title };
+          const exists = t.messages.some((m) => m.voiceCall?.id === call.id);
+          const messages = exists
+            ? t.messages.map((m) => (m.voiceCall?.id === call.id ? line : m))
+            : insertCallLine(t.messages, line as Message & { voiceCall: VoiceCallRecord });
+          return { ...t, messages };
         }),
       }));
-      scrollRef.current.nearBottom = true;
-      setTimeout(flushVoiceTurns, 0);
     },
-    [flushVoiceTurns]
+    [options.cwd]
   );
+
+  useEffect(() => {
+    for (const tab of state.tabs) {
+      if (!tab.cliSessionId) continue;
+      const unsaved = tab.messages.filter((m) => m.voiceCall && m.voiceCallUnsaved);
+      if (!unsaved.length) continue;
+      for (const m of unsaved) persistCall(tab.cliSessionId, m.voiceCall!);
+      const tabId = tab.id;
+      setState((prev) => ({
+        ...prev,
+        tabs: prev.tabs.map((t) =>
+          t.id !== tabId ? t : { ...t, messages: t.messages.map((m) => (m.voiceCallUnsaved ? { ...m, voiceCallUnsaved: false } : m)) }
+        ),
+      }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.tabs]);
 
   // Move a tab to sit where another tab currently is. Dropping onto the right
   // half of the target lands after it, which is what makes dragging a tab to
@@ -969,8 +990,17 @@ export function useSessionManager(options: SessionManagerOptions) {
   // ------- messaging -------
 
   const sendMessage = useCallback(
-    (content: string | any[], meta?: { displayText?: string; attachedFileNames?: string[]; isCompaction?: boolean; handoff?: boolean }) => {
-      const tabId = stateRef.current.activeTabId;
+    (
+      content: string | any[],
+      meta?: { displayText?: string; attachedFileNames?: string[]; isCompaction?: boolean; handoff?: boolean },
+      opts?: { tabId?: string; fromQueue?: string }
+    ) => {
+      const tabId = opts?.tabId ?? stateRef.current.activeTabId;
+      const wasGenerating =
+        !opts?.fromQueue &&
+        (!!turnRunningRef.current[tabId] ||
+          !!stateRef.current.tabs.find((t) => t.id === tabId)?.generating ||
+          (queuedSendsRef.current[tabId]?.length ?? 0) > 0);
 
       // For display, use the typed text; for arrays (image messages) use displayText or placeholder
       const displayContent = typeof content === "string"
@@ -995,6 +1025,21 @@ export function useSessionManager(options: SessionManagerOptions) {
         isCompaction: meta?.isCompaction,
       };
 
+      // Claude is mid-turn: show it now, send it when the turn ends.
+      if (wasGenerating && !meta?.isCompaction) {
+        const qid = genId();
+        (queuedSendsRef.current[tabId] ||= []).push({ id: qid, content, meta });
+        setState((prev) => ({
+          ...prev,
+          tabs: prev.tabs.map((tab) =>
+            tab.id === tabId ? { ...tab, messages: addOutgoing(tab.messages, userMsg, assistantMsg, true, qid) } : tab
+          ),
+        }));
+        scrollRef.current.nearBottom = true;
+        return;
+      }
+      turnRunningRef.current[tabId] = true;
+
       streamStatesRef.current[tabId] = {
         toolCalls: [],
         orderedBlocks: [],
@@ -1015,6 +1060,8 @@ export function useSessionManager(options: SessionManagerOptions) {
           // Compaction: don't add a user message — just the streaming assistant marker
           const newMessages = meta?.isCompaction
             ? [...tab.messages, assistantMsg]
+            : opts?.fromQueue
+            ? startQueued(tab.messages, opts.fromQueue, assistantMsg)
             : [...tab.messages, userMsg, assistantMsg];
           return {
             ...tab,
@@ -1026,6 +1073,18 @@ export function useSessionManager(options: SessionManagerOptions) {
       }));
       scrollRef.current.nearBottom = true;
 
+      // Voice mode changes the system prompt, which is fixed at spawn. Swap
+      // the process here, between turns — if a turn is still running (a
+      // hand-off carrying on after hang-up), keep it and swap next time.
+      {
+        const t = stateRef.current.tabs.find((x) => x.id === tabId);
+        const running = transportsRef.current[tabId];
+        if (running && running.isRunning() && !wasGenerating && transportPromptRef.current[tabId] !== personaFor(t?.voiceMode)) {
+          running.stop();
+          delete transportsRef.current[tabId];
+        }
+      }
+
       if (
         !transportsRef.current[tabId] ||
         !transportsRef.current[tabId].isRunning()
@@ -1034,6 +1093,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           (t) => t.id === tabId
         );
         const cliSessionId = currentTab?.cliSessionId;
+        transportPromptRef.current[tabId] = personaFor(currentTab?.voiceMode);
 
         const transport = new ClaudeTransport({
           cliPath: cliPathRef.current || options.cliPath,
@@ -1042,19 +1102,18 @@ export function useSessionManager(options: SessionManagerOptions) {
           effort: currentTab?.effort || options.effort,
           permissionMode: currentTab?.permissionMode || options.permissionMode,
           agent: currentTab?.agent || "",
-          sessionId: cliSessionId || undefined,
-          resume: !!cliSessionId,
+          // A conversation that began as a call starts with --session-id on
+          // the id Hyo gave it; anything Claude has written is resumed.
+          ...sessionSpawn(
+            cliSessionId ?? null,
+            currentTab?.sessionPending || (!!cliSessionId && !hasTranscript(options.cwd, cliSessionId))
+          ),
           maxOutputTokens: options.maxOutputTokens,
-          // Voice conversation mode: append the voice persona so Chad speaks for
-          // listening. toggleVoiceMode kills the transport, so the next spawn
-          // (here) picks up or drops the persona and --resumes the same session.
-          // ElevenLabs: Claude IS the voice, so it gets the full spoken persona.
-          // GPT-Live: a separate model talks; Claude is the backend it hands to.
-          appendSystemPrompt: currentTab?.voiceMode
-            ? options.voiceEngine === "gpt-live"
-              ? LIVE_BACKEND_PERSONA
-              : VOICE_PERSONA
-            : undefined,
+          // Voice conversation mode: append the voice persona. ElevenLabs:
+          // Claude IS the voice, so it gets the full spoken persona. GPT-Live:
+          // a separate model talks; Claude is the backend it hands to. A
+          // persona change respawns between turns (above) and --resumes.
+          appendSystemPrompt: personaFor(currentTab?.voiceMode),
           onMessage: makeProcessEvent(tabId),
           onError: (error) => console.error("[hyo] CLI error:", error),
           onClose: (code) => {
@@ -1073,6 +1132,7 @@ export function useSessionManager(options: SessionManagerOptions) {
                 tab.id === tabId ? { ...tab, generating: false } : tab
               ),
             }));
+            turnEnded(tabId);
             updateTabLastAssistant(tabId, () => ({ streaming: false }));
             // If process exited with error while generating, show error message
             if (code !== 0 && code !== null && wasGenerating) {
@@ -1104,6 +1164,8 @@ export function useSessionManager(options: SessionManagerOptions) {
     },
     [options, makeProcessEvent, updateTabLastAssistant]
   );
+
+  sendMessageRef.current = sendMessage;
 
   const sendPermissionResponse = useCallback(
     (requestId: string, behavior: "allow" | "allow_always" | "deny") => {
@@ -1213,21 +1275,15 @@ export function useSessionManager(options: SessionManagerOptions) {
   }, []);
 
   const toggleVoiceMode = useCallback(() => {
-    // Entering/leaving voice mode changes the system prompt (the voice persona
-    // is passed via --append-system-prompt at spawn). Kill the current
-    // transport so the next sendMessage respawns with the persona attached or
-    // dropped; --resume against the tab's cliSessionId keeps the conversation.
-    setState((prev) => {
-      const tabId = prev.activeTabId;
-      transportsRef.current[tabId]?.stop();
-      delete transportsRef.current[tabId];
-      return {
-        ...prev,
-        tabs: prev.tabs.map((tab) =>
-          tab.id === tabId ? { ...tab, voiceMode: !tab.voiceMode } : tab
-        ),
-      };
-    });
+    // The voice persona is a spawn-time argument, so the next send swaps the
+    // process (see sendMessage). Nothing is stopped here: a hand-off still
+    // running when the call ends keeps going and posts to the chat.
+    setState((prev) => ({
+      ...prev,
+      tabs: prev.tabs.map((tab) =>
+        tab.id === prev.activeTabId ? { ...tab, voiceMode: !tab.voiceMode } : tab
+      ),
+    }));
   }, []);
 
   const setTabAgent = useCallback((agent: string) => {
@@ -1289,26 +1345,13 @@ export function useSessionManager(options: SessionManagerOptions) {
           ? handoffRequestText(m.content)
           : undefined,
     }));
-    // Thread the spoken turns from any live calls back in, each after the
-    // Claude message that was last when it was said.
-    const voiceTurns = getVoiceTurns(options.cwd, pastSession.id);
-    let messages: Message[] = claudeMessages;
-    if (voiceTurns.length) {
-      messages = [];
-      let vi = 0;
-      for (let ci = 0; ci <= claudeMessages.length; ci++) {
-        while (vi < voiceTurns.length && voiceTurns[vi].after <= ci) {
-          const t = voiceTurns[vi++];
-          messages.push({
-            role: t.side === "user" ? "user" : "assistant",
-            content: t.text,
-            streaming: false,
-            voice: true,
-          });
-        }
-        if (ci < claudeMessages.length) messages.push(claudeMessages[ci]);
-      }
-    }
+    // Each voice call goes back in as its one line, where the call started.
+    const messages: Message[] = threadCalls(claudeMessages, getVoiceCalls(options.cwd, pastSession.id), (call) => ({
+      role: "system",
+      content: "",
+      streaming: false,
+      voiceCall: call,
+    }));
 
     const id = genId();
     setState((prev) => {
@@ -1318,6 +1361,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           {
             id,
             cliSessionId: pastSession.id,
+            sessionPending: !!pastSession.callOnly,
             title: pastSession.title,
             messages,
             generating: false,
@@ -1578,7 +1622,6 @@ export function useSessionManager(options: SessionManagerOptions) {
     openPastSession,
     refreshPastSessions,
     scrollRef,
-    appendVoiceTurn,
-    flushVoiceTurns,
+    addVoiceCall,
   };
 }

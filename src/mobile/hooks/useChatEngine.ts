@@ -1,4 +1,5 @@
 import { debug } from "../debug";
+import type { VoiceCallRecord } from "../../voice/voice-call";
 import { useState, useCallback, useRef } from "react";
 import { GatewayTransport } from "../gateway-transport";
 
@@ -32,6 +33,12 @@ export interface Message {
   voiceAt?: string;
   // A user message the voice handed to Claude during a live call.
   handoff?: boolean;
+  // One finished voice call, shown as a single "Voice chat · 01:38" line
+  // where the call started; tapping it opens the transcript. Not part of
+  // Claude's session — Hyo keeps it in session-metadata (`voiceCalls`).
+  voiceCall?: VoiceCallRecord;
+  // Set until the call is written to session-metadata (needs a session id).
+  voiceCallUnsaved?: boolean;
 }
 
 export interface ToolCallData {

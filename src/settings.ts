@@ -1,9 +1,11 @@
-import { App, Modal, Notice, PluginSettingTab, Setting, Platform, setIcon } from "obsidian";
+import { App, FuzzySuggestModal, Modal, Notice, PluginSettingTab, Setting, Platform, TFile, setIcon } from "obsidian";
 // Node built-ins are desktop-only; deferred so this module loads on mobile.
 const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
 const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
 const os: typeof import("os") = Platform.isMobile ? (undefined as any) : require("os");
 import type HyoPlugin from "./main";
+import { CUSTOM_VOICE_PREFIX, resolveLiveVoice, type CustomLiveVoice } from "./voice/live-voice";
+export { CUSTOM_VOICE_PREFIX, resolveLiveVoice, type CustomLiveVoice };
 import { MODEL_OPTIONS, EFFORT_OPTIONS, DEFAULT_EFFORT } from "./models";
 import type { Skill } from "./hooks/useSkills";
 import { checkMobileAccess, mobileLogPath } from "./gateway-host";
@@ -68,6 +70,11 @@ export interface HyoSettings {
   voiceAutoSpeak: boolean;
   openAiApiKey: string;
   gptLiveVoice: string;
+  gptLiveCustomVoices: CustomLiveVoice[];
+  /** "About you" for the voice: name, what they do, how they like to be spoken to. */
+  voiceAboutYou: string;
+  /** A vault note to use as "About you" instead, read fresh at each call. Empty = the text above. */
+  voiceAboutYouNote: string;
   // Who the voice is and how it talks — the only part of the voice's prompt
   // the user writes. Hyo adds the fixed policies underneath.
   voicePersonality: string;
@@ -121,6 +128,9 @@ export const DEFAULT_SETTINGS: HyoSettings = {
   voiceAutoSpeak: true,
   openAiApiKey: "",
   gptLiveVoice: "marin",
+  gptLiveCustomVoices: [],
+  voiceAboutYou: "",
+  voiceAboutYouNote: "",
   voicePersonality: "",
   voiceDebugLog: false,
   tasks: {},
@@ -471,8 +481,11 @@ export class HyoSettingTab extends PluginSettingTab {
 
       const liveVoiceSetting = new Setting(containerEl)
         .setName("Voice")
-        .setDesc("One of OpenAI's built-in voices. Takes effect on the next call. Play sample says one line in the chosen voice (about two seconds of call time).")
+        .setDesc("One of OpenAI's built-in voices, or a custom voice you've added below. Takes effect on the next call. Play sample says one line in the chosen voice (about two seconds of call time).")
         .addDropdown((dropdown) => {
+          for (const c of this.plugin.settings.gptLiveCustomVoices || []) {
+            dropdown.addOption(`${CUSTOM_VOICE_PREFIX}${c.id}`, `${c.name || "Custom voice"} (custom)`);
+          }
           for (const v of GPT_LIVE_VOICES) {
             dropdown.addOption(v, v.charAt(0).toUpperCase() + v.slice(1));
           }
@@ -495,7 +508,8 @@ export class HyoSettingTab extends PluginSettingTab {
             btn.setDisabled(true).setButtonText("Playing…");
             try {
               const { playVoiceSample } = await import("./voice/gpt-live");
-              await playVoiceSample(key, this.plugin.settings.gptLiveVoice || "marin");
+              const { voice } = resolveLiveVoice(this.plugin.settings.gptLiveVoice, this.plugin.settings.gptLiveCustomVoices);
+              await playVoiceSample(key, voice);
             } catch (e) {
               new Notice(`Couldn't play the sample — ${e instanceof Error ? e.message : "error"}`);
             } finally {
@@ -503,6 +517,102 @@ export class HyoSettingTab extends PluginSettingTab {
             }
           });
         });
+
+      // Custom voices: an id from OpenAI's custom voices, with the description
+      // it was made from (OpenAI's guide: keep that description in the
+      // call's instructions so the voice stays in character).
+      for (const c of this.plugin.settings.gptLiveCustomVoices || []) {
+        new Setting(containerEl)
+          .setName(c.name || "Custom voice")
+          .setDesc(`${c.id}${c.description ? ` · ${c.description.slice(0, 120)}${c.description.length > 120 ? "…" : ""}` : ""}`)
+          .addButton((btn) =>
+            btn.setButtonText("Remove").onClick(async () => {
+              const s = this.plugin.settings;
+              s.gptLiveCustomVoices = (s.gptLiveCustomVoices || []).filter((v) => v.id !== c.id);
+              if (s.gptLiveVoice === `${CUSTOM_VOICE_PREFIX}${c.id}`) s.gptLiveVoice = "marin";
+              await this.plugin.saveSettings();
+              dispatchSettingsChanged();
+              this.display();
+            })
+          );
+      }
+      const draft = { name: "", id: "", description: "" };
+      const customSetting = new Setting(containerEl)
+        .setName("Add a custom voice")
+        .setDesc("Paste a custom voice's id (it starts voice_) and the description it was made from. It joins the list above.")
+        .addText((t) => t.setPlaceholder("Name, e.g. Chad").onChange((v) => (draft.name = v.trim())))
+        .addText((t) => t.setPlaceholder("voice_…").onChange((v) => (draft.id = v.trim())))
+        .addButton((btn) =>
+          btn.setButtonText("Add").onClick(async () => {
+            if (!/^voice_[A-Za-z0-9]+$/.test(draft.id)) {
+              new Notice("That doesn't look like a voice id. It starts with voice_.");
+              return;
+            }
+            const s = this.plugin.settings;
+            const list = (s.gptLiveCustomVoices || []).filter((v) => v.id !== draft.id);
+            list.push({ id: draft.id, name: draft.name || "Custom voice", description: draft.description.trim() });
+            s.gptLiveCustomVoices = list;
+            s.gptLiveVoice = `${CUSTOM_VOICE_PREFIX}${draft.id}`;
+            await this.plugin.saveSettings();
+            dispatchSettingsChanged();
+            this.display();
+          })
+        );
+      const descArea = containerEl.createEl("textarea", {
+        attr: { rows: "3", placeholder: "The voice's description, e.g. A natural, relaxed British man in his forties…" },
+      });
+      descArea.style.width = "100%";
+      descArea.style.fontFamily = "inherit";
+      descArea.addEventListener("input", () => (draft.description = descArea.value));
+      customSetting.settingEl.style.borderBottom = "none";
+
+      const aboutNote = this.plugin.settings.voiceAboutYouNote || "";
+      const aboutSetting = new Setting(containerEl)
+        .setName("About you")
+        .setDesc(
+          aboutNote
+            ? `The voice reads your note "${aboutNote.replace(/\.md$/, "")}" fresh at the start of each call.`
+            : "A few lines the voice always knows: your name, what you do, how you like to be spoken to. Or use a note from your vault instead."
+        )
+        .addButton((btn) =>
+          btn.setButtonText(aboutNote ? "Change note" : "Use a note").onClick(() => {
+            new NotePickerModal(this.app, async (path) => {
+              this.plugin.settings.voiceAboutYouNote = path;
+              await this.plugin.saveSettings();
+              dispatchSettingsChanged();
+              this.display();
+            }).open();
+          })
+        );
+      if (aboutNote) {
+        aboutSetting.addButton((btn) =>
+          btn.setButtonText("Write it here instead").onClick(async () => {
+            this.plugin.settings.voiceAboutYouNote = "";
+            await this.plugin.saveSettings();
+            dispatchSettingsChanged();
+            this.display();
+          })
+        );
+      } else {
+        const aboutText = new Setting(containerEl).addTextArea((text) => {
+          text.inputEl.rows = 3;
+          text.inputEl.style.width = "100%";
+          text.inputEl.style.fontFamily = "inherit";
+          return text
+            .setPlaceholder("I'm Sam. I run a small design studio. Keep it brief and skip the pleasantries.")
+            .setValue(this.plugin.settings.voiceAboutYou || "")
+            .onChange(async (value) => {
+              this.plugin.settings.voiceAboutYou = value;
+              await this.plugin.saveSettings();
+              this.showSavedNear(aboutSetting.nameEl as HTMLElement);
+              dispatchSettingsChanged();
+            });
+        });
+        aboutText.infoEl.remove();
+        aboutText.settingEl.style.borderTop = "none";
+        aboutText.settingEl.style.paddingTop = "0";
+        (aboutText.controlEl as HTMLElement).style.width = "100%";
+      }
 
       const personalitySetting = new Setting(containerEl)
         .setName("Personality")
@@ -1265,6 +1375,23 @@ export class HyoSettingTab extends PluginSettingTab {
           })
       );
     }
+  }
+}
+
+/** Pick a note from the vault (Settings → Voice → About you). */
+class NotePickerModal extends FuzzySuggestModal<TFile> {
+  constructor(app: App, private onPick: (path: string) => void) {
+    super(app);
+    this.setPlaceholder("Pick the note the voice should read about you");
+  }
+  getItems(): TFile[] {
+    return this.app.vault.getMarkdownFiles();
+  }
+  getItemText(f: TFile): string {
+    return f.path.replace(/\.md$/, "");
+  }
+  onChooseItem(f: TFile): void {
+    this.onPick(f.path);
   }
 }
 

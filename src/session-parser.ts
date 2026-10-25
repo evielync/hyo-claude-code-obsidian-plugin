@@ -1,5 +1,6 @@
 import { debug } from "./debug";
 import { Platform } from "obsidian";
+import { mergeStoredCalls, upsertCall, callOnlySessions, type VoiceCallRecord } from "./voice/voice-call";
 import type * as fsTypes from "fs"; // type-only (erased at build) for annotations
 // Node built-ins are desktop-only; deferred so this module loads on mobile.
 const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
@@ -19,6 +20,9 @@ export interface PastSession {
   pinned?: boolean;
   closed?: boolean;
   lastActiveMeta?: string;
+  // Began as a voice call and nothing has gone to Claude yet: the id is
+  // Hyo's, no transcript file exists, and Claude starts it with --session-id.
+  callOnly?: boolean;
 }
 
 // Match Claude Code's project directory hashing exactly.
@@ -111,10 +115,8 @@ function getMetadataPath(cwd: string): string {
   return path.join(getProjectDir(cwd), "session-metadata.json");
 }
 
-// A spoken turn from a GPT-Live call. These never reach Claude's session file
-// (the voice handles small talk itself), so Hyo keeps them here and threads
-// them back into the conversation on load. `after` = how many messages the
-// Claude session had when this was said, which is where it slots in.
+// A spoken turn as 0.6.x saved it, one per line. Read back as calls; never
+// written any more. `after` = how many messages the Claude session had then.
 export interface VoiceTurn {
   side: "user" | "agent";
   text: string;
@@ -132,19 +134,39 @@ interface SessionMetadata {
     closed?: boolean;
     lastActive?: string; // ISO
     voiceTurns?: VoiceTurn[];
+    // One record per voice call (see voice/voice-call.ts). Hyo's, not
+    // Claude's: the talk on a call never reaches Claude's session file.
+    voiceCalls?: VoiceCallRecord[];
   };
 }
 
-export function appendVoiceTurns(cwd: string, sessionId: string, turns: VoiceTurn[]): void {
-  if (!turns.length) return;
+/**
+ * Save a call (insert, or replace the record with the same id). `title`
+ * names a conversation that began as this call, unless it already has one.
+ */
+export function saveVoiceCall(cwd: string, sessionId: string, call: VoiceCallRecord, title?: string): void {
   const metadata = loadMetadata(cwd);
   if (!metadata[sessionId]) metadata[sessionId] = {};
-  metadata[sessionId].voiceTurns = [...(metadata[sessionId].voiceTurns || []), ...turns];
+  if (title && !metadata[sessionId].customTitle) metadata[sessionId].customTitle = title;
+  metadata[sessionId].voiceCalls = upsertCall(metadata[sessionId].voiceCalls, call);
   saveMetadata(cwd, metadata);
 }
 
-export function getVoiceTurns(cwd: string, sessionId: string): VoiceTurn[] {
-  return loadMetadata(cwd)[sessionId]?.voiceTurns || [];
+/** Claude has written this conversation (its transcript file exists). */
+export function hasTranscript(cwd: string, sessionId: string): boolean {
+  return getCandidateProjectDirs(cwd).some((d) => {
+    try {
+      return fs.existsSync(path.join(d, `${sessionId}.jsonl`));
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** Every call in a conversation, older per-turn saves included, in thread order. */
+export function getVoiceCalls(cwd: string, sessionId: string): VoiceCallRecord[] {
+  const m = loadMetadata(cwd)[sessionId];
+  return mergeStoredCalls(m?.voiceCalls, m?.voiceTurns);
 }
 
 function loadMetadata(cwd: string): SessionMetadata {
@@ -242,7 +264,28 @@ export function listPastSessions(cwd: string): PastSession[] {
   const entries = allEntries.slice(0, 150);
 
   const metadata = loadMetadata(cwd);
-  return entries.map((f) => {
+  // Conversations that are only a voice call so far (no transcript yet).
+  const hasTranscript = (id: string) =>
+    candidates.some((d) => {
+      try {
+        return fs.existsSync(path.join(d, `${id}.jsonl`));
+      } catch {
+        return false;
+      }
+    });
+  const callOnly: PastSession[] = callOnlySessions(metadata as any, hasTranscript).map((c) => ({
+    id: c.id,
+    title: c.title,
+    date: new Date(c.date),
+    size: 0,
+    lastRole: c.lastRole,
+    lastSnippet: c.lastSnippet,
+    pinned: c.pinned,
+    closed: c.closed,
+    lastActiveMeta: c.lastActive,
+    callOnly: true,
+  }));
+  const fromFiles: PastSession[] = entries.map((f) => {
     const sessionId = f.name.replace(".jsonl", "");
     const meta = metadata[sessionId] || {};
     const title = meta.customTitle || extractTitle(f.fullPath) || "Untitled";
@@ -260,6 +303,7 @@ export function listPastSessions(cwd: string): PastSession[] {
       lastActiveMeta: meta.lastActive,
     };
   });
+  return [...fromFiles, ...callOnly].sort((a, b) => b.date.getTime() - a.date.getTime()).slice(0, 150);
 }
 
 // Read the last real message from a session file — its role and a short text

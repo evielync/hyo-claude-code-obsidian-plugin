@@ -7,6 +7,7 @@
 // jsonl lines into chat messages.
 
 import { GatewayClient } from "./gateway-client";
+import type { VoiceCallRecord } from "../voice/voice-call";
 
 export interface PastSession {
   id: string;
@@ -22,6 +23,8 @@ export interface PastSession {
   pinned?: boolean;
   closed?: boolean;
   lastActiveMeta?: string;
+  // Began as a voice call; nothing has gone to Claude yet (see desktop).
+  callOnly?: boolean;
 }
 
 export interface HistoryMessage {
@@ -47,6 +50,7 @@ export async function listPastSessions(gatewayUrl: string): Promise<PastSession[
       pinned: !!s.pinned,
       closed: !!s.closed,
       lastActiveMeta: s.lastActive || undefined,
+      callOnly: !!s.callOnly,
     }));
   } catch (e) {
     console.error("[hyo] Failed to list past sessions:", e);
@@ -94,15 +98,17 @@ export interface SessionHistory {
    *  a long conversation onto a different model can overflow its context window
    *  ("Prompt is too long"). Null when the transcript records no model. */
   model: string | null;
+  /** The conversation's voice calls, from the shared metadata. */
+  voiceCalls: VoiceCallRecord[];
 }
 
 export async function loadSessionHistory(gatewayUrl: string, sessionId: string): Promise<SessionHistory> {
   try {
-    const lines = await GatewayClient.get(gatewayUrl).getHistory(sessionId);
-    return { messages: parseSessionLines(lines), model: extractSessionModel(lines) };
+    const { lines, voiceCalls } = await GatewayClient.get(gatewayUrl).getHistory(sessionId);
+    return { messages: parseSessionLines(lines), model: extractSessionModel(lines), voiceCalls };
   } catch (e) {
     console.error("[hyo] Failed to load session history:", e);
-    return { messages: [], model: null };
+    return { messages: [], model: null, voiceCalls: [] };
   }
 }
 
@@ -288,4 +294,13 @@ function pushAssistant(messages: HistoryMessage[], entry: HistoryMessage, msgId:
   prev.content = [prev.content, entry.content].filter(Boolean).join("\n\n");
   prev.thinking = [prev.thinking, entry.thinking].filter(Boolean).join("\n\n");
   lastAssistantId.set(prev, msgId);
+}
+
+/** Save a finished voice call on the gateway (fire-and-forget). */
+export function saveVoiceCall(gatewayUrl: string, sessionId: string, call: VoiceCallRecord, title?: string): void {
+  try {
+    GatewayClient.get(gatewayUrl).saveVoiceCall(sessionId, call, title);
+  } catch (e) {
+    console.error("[hyo] Failed to save the voice call:", e);
+  }
 }

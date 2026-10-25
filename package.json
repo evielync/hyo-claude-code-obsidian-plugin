@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production",
-    "release": "node esbuild.config.mjs production && echo '\u2713 Built. Now run: gh release create VERSION main.js manifest.json styles.css --title TITLE --notes NOTES'"
+    "release": "node esbuild.config.mjs production && echo '✓ Built. Now run: gh release create VERSION main.js manifest.json styles.css --title TITLE --notes NOTES'",
+    "test": "node scripts/run-tests.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",

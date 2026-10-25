@@ -1,4 +1,5 @@
 import { debug } from "../debug";
+import type { VoiceCallRecord } from "../voice/voice-call";
 import { useState, useCallback, useRef } from "react";
 import { ClaudeTransport } from "../claude-transport";
 
@@ -25,17 +26,20 @@ export interface Message {
   planReview?: PlanReviewData | null;
   isCompaction?: boolean;
   attachments?: { type: string; name: string; preview?: string }[];
-  // Said on a GPT-Live call and handled by the voice itself — shown in the
-  // thread, never part of Claude's session. See VoiceTurn in session-parser.
+  // Older builds (0.6.x) put each spoken turn in the thread. Kept only so
+  // old in-memory messages type-check; calls are `voiceCall` records now.
   voice?: boolean;
-  // Voice turns are written to session-metadata once the tab has a session id;
-  // until then they wait here flagged unsaved.
   voiceUnsaved?: boolean;
-  voiceAt?: string; // ISO, when it was said
-  // A user message the voice handed to Claude during a live call. The reply
-  // that follows was spoken by the voice (its own voice turn sits after it),
-  // so the thread shows that reply's tool calls and screens, not its prose.
+  voiceAt?: string;
+  // A user message the voice handed to Claude during a live call. Shown as
+  // "Asked on the call" with the request; Claude's reply shows in full.
   handoff?: boolean;
+  // One finished voice call, shown as a single "Voice chat · 01:38" line
+  // where the call started; tapping it opens the transcript. Not part of
+  // Claude's session — Hyo keeps it in session-metadata (`voiceCalls`).
+  voiceCall?: VoiceCallRecord;
+  // Set until the call is written to session-metadata (needs a session id).
+  voiceCallUnsaved?: boolean;
   // Claude refused the model because the installed CLI is too old. Set when
   // the turn ends on that error so the message shows an "Update Claude" card
   // instead of the raw API error. See ClaudeUpdateCard.

@@ -2,6 +2,7 @@ import { Platform } from "obsidian";
 import { TranscriptGrouper } from "openai/helpers/live";
 import type { Message } from "../hooks/useChatEngine";
 import { parseVoiceResponse } from "./voice-persona";
+import { plainForVoice, type VoiceCallRecord } from "./voice-call";
 
 /**
  * GPT-Live engine — a full-duplex call with OpenAI's `gpt-live-1` voice model,
@@ -17,10 +18,12 @@ import { parseVoiceResponse } from "./voice-persona";
  *     the user can edit, the situation, and the labelled policies from
  *     OpenAI's template. It starts with the Hyo conversation as history.
  *   - When it judges a turn needs real work it emits `session.delegation.created`
- *     (an id, no text). We hand the user's last spoken turn to Claude through
- *     the normal send path, send silent progress notes while Claude works,
- *     and return the finished reply as one `session.commentary.append`, which
- *     the voice speaks in its own words.
+ *     (an id, no text). LiveCall (live-call.ts) hands Claude everything the
+ *     user said since the last hand-off, sends short silent progress notes
+ *     while Claude works, and returns the spoken part of the finished reply
+ *     as `session.commentary.append`, which the voice says in its own words.
+ *   - No greeting: the call opens with a chime once it can hear, and the
+ *     voice waits for the user.
  *
  * Two transports, same events:
  *   - **WebRTC** (default). Mic and speaker are media tracks; events ride the
@@ -52,18 +55,29 @@ export interface LiveSessionConfig {
   }>;
   audio: {
     format?: { type: "audio/pcm"; rate: 24000 };
-    output: { voice: string };
+    /** A built-in voice name, or `{ id }` for a custom voice (SDK: CustomVoice). */
+    output: { voice: string | { id: string } };
   };
+}
+
+/**
+ * Headless audio, for the call bank only (scripts/call-bank): the WebSocket
+ * path without a microphone or speakers. `start` gets a function that sends
+ * base64 PCM16 24 kHz to the session and returns a stop function.
+ */
+export interface HeadlessAudio {
+  start: (send: (b64: string) => void) => () => void;
+  onOutput?: (b64: string) => void;
 }
 
 export interface GptLiveOptions {
   apiKey: string;
-  voice: string;
+  voice: string | { id: string };
   instructions: string;
   history: GptLiveHistoryItem[];
   transport?: LiveTransport;
-  /** Greet the user as soon as the session is up (docs: "Greet before the caller speaks"). */
-  greet?: boolean;
+  /** Call bank only: no microphone or speakers (WebSocket transport). */
+  headless?: HeadlessAudio;
   /**
    * WebRTC only: turn the local SDP offer into OpenAI's answer. Defaults to a
    * direct POST with `apiKey`. The phone passes one that asks the gateway.
@@ -76,7 +90,10 @@ export interface GptLiveOptions {
   onLevel: (side: LiveSide, level: number) => void;
   /** The voice has started saying its first words (first output transcript). */
   onFirstSpeech?: () => void;
-  /** The voice wants the backend. `text` = the user's latest spoken turn. */
+  /**
+   * The voice wants the backend. `text` = the user's words still being
+   * transcribed (may be empty); their finished turns came through onTurn.
+   */
   onDelegation: (delegationId: string, text: string) => void;
   onError: (message: string) => void;
   /** Diagnostics (sandbox only): every event in and out to ~/Dropbox/chad/hyo-live.log. */
@@ -96,12 +113,26 @@ export function liveLog(line: string): void {
 const LIVE_HTTP_URL = "https://api.openai.com/v1/live/sessions";
 const LIVE_WS_URL = "wss://api.openai.com/v1/live/sessions";
 const SAMPLE_RATE = 24000;
-const MAX_APPEND_CHARS = 1200; // ≈ 400 tokens, under the 500-token cap
+/**
+ * Every append is capped at 500 tokens (SDK: CommentaryAppendEvent /
+ * ThinkingAppendEvent). 1,200 characters is ≈ 300–400 tokens. Longer text is
+ * split into pieces of this size, never cut.
+ */
+export const MAX_APPEND_CHARS = 1200;
 const SPEAKING_HOLD_MS = 350;
 const SPEAKING_RMS = 0.008;
 const LEVEL_GAIN = 6; // speech RMS is small; scale so normal talk reads ~0.5–0.8
 const LEVEL_TICK_MS = 80;
 const ICE_TIMEOUT_MS = 10000;
+/**
+ * Silent notes are paced: one session.thinking.append in flight at a time
+ * (the next after its acknowledgement), and none while the user is
+ * speaking. Each append takes time on the session timeline in proportion to
+ * its length (docs: "Understand when context reaches the model").
+ */
+export const SPEECH_QUIET_MS = 700;
+const USER_SPEECH_LEVEL = 0.06;
+const THINK_ACK_TIMEOUT_MS = 3000;
 const CLOSE_TIMEOUT_MS = 5000;
 
 let eventSeq = 0;
@@ -135,10 +166,21 @@ export class GptLiveSession {
   private grouper: TranscriptGrouper | null = null;
   private latestUserText = "";
   private spokenYet = false;
-  private greetEventId: string | null = null;
-  private greetNudgeTimer: number | null = null;
+  // WebRTC: the media path is connected (the session can actually hear).
+  private mediaUp = false;
+  private stopHeadless: (() => void) | null = null;
   // Commentary appends in flight, so a rejection can be surfaced by name.
   private pendingCommentary = new Set<string>();
+  // Paced silent notes (see SPEECH_QUIET_MS).
+  private thinkQueue: Array<{ event_id: string; content: string; delegation_id: string | null }> = [];
+  private thinkInFlight: string | null = null;
+  private thinkTimer: number | null = null;
+  private lastUserSpeechAt = 0;
+
+  /** What the user is saying right now, not yet closed into a turn. */
+  get openUserText(): string {
+    return this.latestUserText.replace(/\s+/g, " ").trim();
+  }
 
   constructor(private opts: GptLiveOptions) {
     this.transport = opts.transport || "webrtc";
@@ -156,7 +198,7 @@ export class GptLiveSession {
         const os = require("os");
         logPath = `${os.homedir()}/Dropbox/chad/hyo-live.log`;
       } catch {}
-      liveLog(`=== call start (${this.transport}) voice=${this.opts.voice} history=${this.opts.history.length} instructions=${this.opts.instructions.length}ch`);
+      liveLog(`=== call start (${this.transport}) voice=${JSON.stringify(this.opts.voice)} history=${this.opts.history.length} instructions=${this.opts.instructions.length}ch`);
     } else {
       logPath = null;
     }
@@ -169,6 +211,8 @@ export class GptLiveSession {
       if (seg.speaker === "user") this.latestUserText = seg.text;
     });
     this.grouper.on("segment.closed", ({ segment }) => {
+      // A closed user turn goes to the record; what's "open" is only what's still being said.
+      if (segment.speaker === "user") this.latestUserText = "";
       const text = segment.text.replace(/\s+/g, " ").trim();
       if (!/[\p{L}\p{N}]/u.test(text)) return;
       const side: LiveSide = segment.speaker === "user" ? "user" : "agent";
@@ -176,19 +220,21 @@ export class GptLiveSession {
       this.opts.onTurn(side, text);
     });
 
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
+    if (!this.opts.headless) {
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+    }
     if (this.transport === "webrtc") await this.startWebRTC();
     else await this.startWebSocket();
 
     this.speakTimer = window.setInterval(() => {
-      if (this.closed || !this.started) return;
+      if (this.closed || !this.isReady()) return;
       const speaking = performance.now() - this.lastVoiceAt < SPEAKING_HOLD_MS;
       this.setState(speaking ? "speaking" : "listening");
     }, 100);
@@ -245,8 +291,20 @@ export class GptLiveSession {
         this.ctx.createMediaStreamSource(remote).connect(this.agentAnalyser);
       }
     };
+    pc.oniceconnectionstatechange = () => {
+      if ((pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") && !this.mediaUp) {
+        this.mediaUp = true;
+        liveLog(`   media ${pc.iceConnectionState}`);
+        this.becomeReady();
+      }
+    };
     pc.onconnectionstatechange = () => {
-      if (!this.closed && (pc.connectionState === "failed" || pc.connectionState === "disconnected")) {
+      if (pc.connectionState === "connected" && !this.mediaUp) {
+        this.mediaUp = true;
+        liveLog("   media connected");
+        this.becomeReady();
+      }
+      if (!this.closed && !this.closing && (pc.connectionState === "failed" || pc.connectionState === "disconnected")) {
         this.opts.onError(`GPT-Live call ${pc.connectionState}`);
         this.teardown();
       }
@@ -258,13 +316,16 @@ export class GptLiveSession {
     dc.onmessage = (e) => {
       try {
         this.handle(JSON.parse(String(e.data)));
-      } catch {}
+      } catch (err) {
+        liveLog(`!! event handling failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     };
     dc.onclose = () => {
-      if (!this.closed) {
-        this.opts.onError("GPT-Live call ended before the session finalised");
-        this.teardown();
-      }
+      if (this.closed) return;
+      // Hanging up: the channel closing is the end we asked for, not a drop.
+      if (!this.closing) this.opts.onError("GPT-Live call ended before the session finalised");
+      this.closed = true;
+      this.teardown();
     };
 
     const offer = await pc.createOffer();
@@ -306,6 +367,8 @@ export class GptLiveSession {
       if (this.closed) return;
       const mic = this.muted ? 0 : rmsOf(this.micAnalyser);
       const agent = rmsOf(this.agentAnalyser);
+      if (mic * LEVEL_GAIN > USER_SPEECH_LEVEL) this.lastUserSpeechAt = performance.now();
+      this.pumpThinking();
       if (agent > SPEAKING_RMS) this.lastVoiceAt = performance.now();
       this.opts.onLevel("user", Math.min(1, mic * LEVEL_GAIN));
       this.opts.onLevel("agent", Math.min(1, agent * LEVEL_GAIN));
@@ -356,19 +419,29 @@ export class GptLiveSession {
     this.ws.on("message", (data: any) => {
       try {
         this.handle(JSON.parse(String(data)));
-      } catch {}
+      } catch (err) {
+        liveLog(`!! event handling failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     });
     this.ws.on("error", (e: any) => {
       this.opts.onError(e?.message || "GPT-Live connection error");
     });
     this.ws.on("close", (code: number, reason: any) => {
-      if (!this.closed) {
+      if (!this.closed && !this.closing) {
         this.opts.onError(
           `GPT-Live call ended (${code}${reason ? ": " + String(reason) : ""})`
         );
       }
       this.teardown();
     });
+
+    if (this.opts.headless) {
+      this.stopHeadless = this.opts.headless.start((b64) => {
+        if (!this.started || this.muted || this.closed) return;
+        this.send({ type: "session.input_audio.append", audio: b64 });
+      });
+      return;
+    }
 
     this.ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
     this.source = this.ctx.createMediaStreamSource(this.stream!);
@@ -384,10 +457,10 @@ export class GptLiveSession {
         i16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
         sum += s * s;
       }
-      this.opts.onLevel(
-        "user",
-        Math.min(1, Math.sqrt(sum / Math.max(1, f32.length)) * LEVEL_GAIN)
-      );
+      const userLevel = Math.min(1, Math.sqrt(sum / Math.max(1, f32.length)) * LEVEL_GAIN);
+      if (userLevel > USER_SPEECH_LEVEL) this.lastUserSpeechAt = performance.now();
+      this.opts.onLevel("user", userLevel);
+      this.pumpThinking();
       this.send({
         type: "session.input_audio.append",
         audio: Buffer.from(i16.buffer).toString("base64"),
@@ -402,6 +475,10 @@ export class GptLiveSession {
   }
 
   private playPcm(b64: string): void {
+    if (this.opts.headless) {
+      this.opts.headless.onOutput?.(b64);
+      return;
+    }
     if (!this.ctx || this.closed) return;
     const bytes = Buffer.from(b64, "base64");
     const i16 = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
@@ -434,13 +511,23 @@ export class GptLiveSession {
     if (ev.type !== "session.output_audio.delta") {
       liveLog(`<- ${ev.type} ${JSON.stringify(ev).slice(0, 300)}`);
     }
-    this.grouper?.push(ev);
+    // stop() closes the grouper (flushing the last turns into the record),
+    // and a closed grouper throws on push. Hanging up used to throw here on
+    // the server's session.closed, so the call was never marked closed and
+    // the channel shutting looked like a dropped call ("ended before the
+    // session finalised"). Only feed it while it's open.
+    if (this.grouper && !this.closing) {
+      try {
+        this.grouper.push(ev);
+      } catch (e) {
+        liveLog(`!! transcript grouper: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
     switch (ev.type) {
       case "session.started":
         this.started = true;
-        this.setState("listening");
-        liveLog(`   session id=${ev.session?.id} voice=${ev.session?.audio?.output?.voice}`);
-        if (this.opts.greet) this.greet();
+        liveLog(`   session id=${ev.session?.id} voice=${JSON.stringify(ev.session?.audio?.output?.voice)}`);
+        this.becomeReady();
         return;
       case "session.output_audio.delta":
         if (this.transport === "ws") this.playPcm(ev.delta);
@@ -451,9 +538,14 @@ export class GptLiveSession {
           this.opts.onFirstSpeech?.();
         }
         return;
+      case "session.input_transcript.delta":
+        this.lastUserSpeechAt = performance.now();
+        return;
       case "session.delegation.created": {
-        // The event carries no text; the user's latest spoken turn is the
-        // request (docs: assemble from recent transcript + app state).
+        // The event carries no text. Pass what the user is still saying (if
+        // anything); their finished turns are in the call record, and
+        // LiveCall builds the request from both (docs: "use transcript
+        // events and application state to work out what the user wants").
         const text = this.latestUserText.replace(/\s+/g, " ").trim();
         this.opts.onDelegation(ev.delegation?.id, text);
         return;
@@ -462,17 +554,18 @@ export class GptLiveSession {
       case "session.thinking.appended":
       case "session.instructions.appended":
         if (ev.client_event_id) this.pendingCommentary.delete(ev.client_event_id);
-        // Docs ("Greet the caller"): once the greeting instruction is in, a
-        // short commentary append is what actually prompts it to begin. The
-        // instruction alone left the voice silent until the user spoke.
-        if (ev.type === "session.instructions.appended" && ev.client_event_id === this.greetEventId) {
-          this.greetEventId = null;
-          this.sendGreetingPrompt();
+        if (ev.type === "session.thinking.appended" && ev.client_event_id && ev.client_event_id === this.thinkInFlight) {
+          this.thinkInFlight = null;
+          this.pumpThinking();
         }
         return;
       case "error": {
         const id = ev.error?.client_event_id;
         const msg = ev.error?.message || "GPT-Live error";
+        if (id && id === this.thinkInFlight) {
+          this.thinkInFlight = null;
+          this.pumpThinking();
+        }
         if (id && this.pendingCommentary.has(id)) {
           this.pendingCommentary.delete(id);
           this.opts.onError(`the result couldn't be given to the voice — ${msg}`);
@@ -494,45 +587,20 @@ export class GptLiveSession {
   }
 
   /**
-   * Docs, "Greet before the caller speaks": one instructions append, wait for
-   * its acknowledgment, then a short commentary append to prompt it to begin.
-   * Audio keeps running throughout.
+   * The call is live once the session has started and (on WebRTC) the media
+   * path is connected, so the chime only plays when it can really hear.
    */
-  private greet(): void {
-    this.greetEventId = nextEventId("greet");
-    this.send({
-      type: "session.instructions.append",
-      event_id: this.greetEventId,
-      delegation_id: null,
-      content:
-        "The call has just connected. Start with a short greeting in your own words — vary it: the time of day, a quick how-are-you, or what they'd like to do. Always use the user's name in it (it's in your instructions). One line, then stop and listen.",
-    });
-    // If the acknowledgment never comes, prompt anyway rather than sit silent.
-    this.greetNudgeTimer = window.setTimeout(() => {
-      if (this.greetEventId && !this.spokenYet) {
-        this.greetEventId = null;
-        this.sendGreetingPrompt();
-      }
-    }, 3000);
+  private isReady(): boolean {
+    return this.started && (this.transport === "ws" || this.mediaUp);
   }
 
-  private sendGreetingPrompt(): void {
-    if (this.greetNudgeTimer) {
-      clearTimeout(this.greetNudgeTimer);
-      this.greetNudgeTimer = null;
+  private becomeReady(): void {
+    if (this.closed || this.closing || !this.isReady()) return;
+    if (this.state === "connecting") {
+      liveLog("   ready: listening");
+      this.setState("listening");
     }
-    if (this.spokenYet) return;
-    // Not a script: the nudge is the situation, and the instruction above
-    // leaves the wording to the model. Tested three times silently — three
-    // different natural greetings, each about 2 s after connecting.
-    const hour = new Date().getHours();
-    const tod = hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening";
-    this.send({
-      type: "session.commentary.append",
-      event_id: nextEventId("greetsay"),
-      delegation_id: null,
-      content: `The user has just joined the call. It's ${tod}. Greet them by name.`,
-    });
+    this.pumpThinking();
   }
 
   // ---------------------------------------------------------------------------
@@ -548,14 +616,33 @@ export class GptLiveSession {
     }
   }
 
-  /** Give the voice something to know without saying it (progress, situation). */
+  /**
+   * Give the voice something to know without saying it (progress, a
+   * permission answered on screen). Split into pieces under the append cap,
+   * never cut, and paced (see SPEECH_QUIET_MS).
+   */
   appendThinking(text: string, delegationId: string | null = null): void {
-    this.send({
-      type: "session.thinking.append",
-      event_id: nextEventId("note"),
-      content: text.slice(0, MAX_APPEND_CHARS),
-      delegation_id: delegationId,
-    });
+    for (const piece of splitForAppend(text)) {
+      this.thinkQueue.push({ event_id: nextEventId("note"), content: piece, delegation_id: delegationId });
+    }
+    this.pumpThinking();
+  }
+
+  /** Send the next silent note if none is in flight and the user isn't speaking. */
+  private pumpThinking(): void {
+    if (!this.started || this.closing || this.closed || this.thinkInFlight || !this.thinkQueue.length) return;
+    if (performance.now() - this.lastUserSpeechAt < SPEECH_QUIET_MS) return;
+    const next = this.thinkQueue.shift()!;
+    this.thinkInFlight = next.event_id;
+    this.send({ type: "session.thinking.append", ...next });
+    if (this.thinkTimer) clearTimeout(this.thinkTimer);
+    this.thinkTimer = window.setTimeout(() => {
+      // No acknowledgement: don't stall the queue for ever.
+      if (this.thinkInFlight === next.event_id) {
+        this.thinkInFlight = null;
+        this.pumpThinking();
+      }
+    }, THINK_ACK_TIMEOUT_MS);
   }
 
   setMuted(muted: boolean): void {
@@ -589,11 +676,16 @@ export class GptLiveSession {
   }
 
   private teardown(): void {
-    for (const t of [this.speakTimer, this.levelTimer, this.closeTimer, this.greetNudgeTimer]) if (t) clearTimeout(t);
+    for (const t of [this.speakTimer, this.levelTimer, this.closeTimer, this.thinkTimer]) if (t) clearTimeout(t);
     this.speakTimer = null;
     this.levelTimer = null;
     this.closeTimer = null;
-    this.greetNudgeTimer = null;
+    this.thinkTimer = null;
+    this.thinkQueue = [];
+    try {
+      this.stopHeadless?.();
+    } catch {}
+    this.stopHeadless = null;
     try {
       this.grouper?.close();
     } catch {}
@@ -660,7 +752,7 @@ export class GptLiveSession {
  * WebSocket session with no microphone, has it say one line, plays the audio,
  * and closes. Desktop only. Resolves when playback ends.
  */
-export async function playVoiceSample(apiKey: string, voice: string): Promise<void> {
+export async function playVoiceSample(apiKey: string, voice: string | { id: string }): Promise<void> {
   if (!Platform.isDesktop) throw new Error("Samples play on desktop only.");
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const WS = require("ws");
@@ -762,22 +854,52 @@ export async function playVoiceSample(apiKey: string, voice: string): Promise<vo
   });
 }
 
-/** Break text into ≤ MAX_APPEND_CHARS pieces on sentence boundaries. */
-function splitForAppend(text: string): string[] {
+/**
+ * Break text into pieces of at most MAX_APPEND_CHARS, on sentence (then
+ * word) boundaries. Nothing is dropped: a sentence longer than a piece is
+ * split on words, and a word longer than a piece is split hard.
+ */
+export function splitForAppend(text: string, max: number = MAX_APPEND_CHARS): string[] {
   const t = text.trim();
   if (!t) return [];
-  if (t.length <= MAX_APPEND_CHARS) return [t];
+  if (t.length <= max) return [t];
+  const units: string[] = [];
+  for (const sentence of t.split(/(?<=[.!?])\s+/)) {
+    if (sentence.length <= max) {
+      units.push(sentence);
+      continue;
+    }
+    let cur = "";
+    for (const word of sentence.split(/\s+/)) {
+      let w = word;
+      while (w.length > max) {
+        if (cur) {
+          units.push(cur);
+          cur = "";
+        }
+        units.push(w.slice(0, max));
+        w = w.slice(max);
+      }
+      if (cur && (cur + " " + w).length > max) {
+        units.push(cur);
+        cur = w;
+      } else {
+        cur = cur ? `${cur} ${w}` : w;
+      }
+    }
+    if (cur) units.push(cur);
+  }
   const out: string[] = [];
   let cur = "";
-  for (const sentence of t.split(/(?<=[.!?])\s+/)) {
-    if ((cur + " " + sentence).trim().length > MAX_APPEND_CHARS && cur) {
-      out.push(cur.trim());
-      cur = sentence;
+  for (const u of units) {
+    if (cur && (cur + " " + u).length > max) {
+      out.push(cur);
+      cur = u;
     } else {
-      cur = (cur + " " + sentence).trim();
+      cur = cur ? `${cur} ${u}` : u;
     }
   }
-  if (cur.trim()) out.push(cur.trim());
+  if (cur) out.push(cur);
   return out;
 }
 
@@ -825,12 +947,30 @@ export function readAgentIdentity(agent: string): AgentIdentity | null {
   }
 }
 
+/** About you is bounded so it can never crowd the instructions (16,384-token cap). */
+export const MAX_ABOUT_YOU_CHARS = 6000;
+
+export interface LiveInstructionExtras {
+  /** The description a custom voice was made from (OpenAI's custom voices guide: keep it in the instructions). */
+  voiceDescription?: string;
+  /** Settings → Voice → About you: typed text, or the chosen note read at call start. */
+  aboutYou?: string;
+}
+
 /**
  * The voice's instructions, in the shape OpenAI's prompting guide gives:
  * who it is (from the agent file), the personality box, the situation, then
- * the three labelled policies. Everything procedural stays with Claude.
+ * the three labelled policies with the `Generate <|SpawnThinking|>` wording
+ * the guide requires for gpt-live-1. Everything procedural stays with Claude.
+ * About you and a custom voice's description are the only additions, both
+ * here at the start (docs: "Put any context the model needs from the start
+ * in `input`" / instructions), never appended after go-live.
  */
-export function buildLiveInstructions(personality: string, identity: AgentIdentity | null = null): string {
+export function buildLiveInstructions(
+  personality: string,
+  identity: AgentIdentity | null = null,
+  extras: LiveInstructionExtras = {}
+): string {
   const now = new Date();
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "the user's local time";
   const when = now.toLocaleString(undefined, {
@@ -844,10 +984,13 @@ export function buildLiveInstructions(personality: string, identity: AgentIdenti
     ? `You are ${identity.name}${identity.description ? `, ${identity.description.replace(/\.$/, "")}` : ""}. You are on a call with the user.`
     : "You are the user's agent, on a call with them.";
   const manner = (personality || "").trim() || DEFAULT_VOICE_PERSONALITY;
+  const voice = (extras.voiceDescription || "").trim();
+  let about = (extras.aboutYou || "").trim();
+  if (about.length > MAX_ABOUT_YOU_CHARS) about = about.slice(0, MAX_ABOUT_YOU_CHARS).replace(/\s+\S*$/, "") + " …";
   return `${whoLine}
-${manner}
-
-Situation: It is ${when} (${tz}). The user is at their computer in Obsidian. Anything long or detailed the backend produces appears on their screen, so refer to it rather than reading it out.
+${manner}${voice ? `\nYour speaking voice: ${voice}` : ""}
+${about ? `\nAbout the user (what they have told you about themselves):\n${about}\n` : ""}
+Situation: It is ${when} (${tz}). The user is at their computer in Obsidian, with the chat open beside the call. The call opens with a short chime; don't greet them, wait for them to speak first. Anything long or detailed the backend produces appears in the chat, so refer to it rather than reading it out.
 
 Backchannel policy: Use moderate backchannels. Acknowledge naturally without competing with the main response.
 
@@ -860,18 +1003,19 @@ Backend tools:
 - Real work: drafting, editing, research, changing files, running jobs.
 - Looking anything up.
 
-Delegate to the backend when:
+Generate <|SpawnThinking|> when:
 - The request needs any of those, or careful reasoning.
 - The user asks for specifics: names, dates, numbers, what's on their list.
 - A correction changes work already requested.
 
-Do not delegate to the backend when:
+Do not generate <|SpawnThinking|> when:
 - You can answer from the conversation or a result you already have.
 - You need a brief clarification to understand the request.
+- The user is only answering you or agreeing ("done", "yes", "go ahead") while work is already running.
 
-Delegate before giving an answer that depends on backend work.
-Do not guess the result while waiting. If asked how it's going, say it's still with the backend.
-When a result says something is on screen, tell the user it's on screen rather than reading it out.`;
+Generate <|SpawnThinking|> before giving an answer that depends on backend work.
+Do not guess the result while waiting. If asked how it's going, say it's still being worked on.
+When a result says something is on screen, tell the user it's in the chat rather than reading it out.`;
 }
 
 const MAX_HISTORY_CHARS = 20000; // history cap is 8,192 tokens; the live model's context is small
@@ -879,48 +1023,38 @@ const MAX_HISTORY_ITEMS = 60; // API cap is 128
 
 /**
  * The open Hyo conversation as text-only history, most recent kept, trimmed
- * to the API's limits. Assistant turns lose their [SCREEN] detail.
+ * to the API's limits. Earlier calls come in as what was said on them;
+ * hand-off prompts are skipped (the call's own turns hold the request), and
+ * Claude's replies keep only their spoken part ([SCREEN] detail stays in the chat).
  */
-export function buildLiveHistory(messages: Message[]): GptLiveHistoryItem[] {
+export function buildLiveHistory(
+  messages: Array<Pick<Message, "role" | "content" | "displayText" | "isCompaction" | "handoff"> & { voiceCall?: VoiceCallRecord }>
+): GptLiveHistoryItem[] {
+  // Flatten to (role, text) in thread order, then keep the newest that fit.
+  const flat: GptLiveHistoryItem[] = [];
+  for (const m of messages) {
+    if (m.voiceCall) {
+      for (const t of m.voiceCall.turns) flat.push({ role: t.side === "user" ? "user" : "assistant", text: t.text });
+      continue;
+    }
+    if (m.isCompaction || (m.role !== "user" && m.role !== "assistant")) continue;
+    if (m.handoff) continue;
+    const text =
+      m.role === "user" ? m.displayText || m.content || "" : plainForVoice(parseVoiceResponse(m.content || "").spoken);
+    if (text.trim()) flat.push({ role: m.role, text: text.trim() });
+  }
   const items: GptLiveHistoryItem[] = [];
   let total = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.isCompaction || (m.role !== "user" && m.role !== "assistant")) continue;
-    // Hand-off pointers and Claude's replies to them are already in the
-    // history as the spoken turns around them — skip the duplicates.
-    if (m.handoff) continue;
-    if (m.role === "assistant" && !m.voice && messages[i - 1]?.handoff) continue;
-    let text =
-      m.role === "user"
-        ? m.displayText || m.content || ""
-        : parseVoiceResponse(m.content || "").spoken;
-    text = text.trim();
-    if (!text) continue;
+  for (let i = flat.length - 1; i >= 0; i--) {
+    let text = flat[i].text;
     if (total + text.length > MAX_HISTORY_CHARS) {
       const room = MAX_HISTORY_CHARS - total;
       if (room < 200) break;
       text = "…" + text.slice(text.length - room);
     }
-    items.push({ role: m.role, text });
+    items.push({ role: flat[i].role, text });
     total += text.length;
     if (items.length >= MAX_HISTORY_ITEMS || total >= MAX_HISTORY_CHARS) break;
   }
   return items.reverse();
-}
-
-/** Plain words for a tool call, for the voice's silent progress notes. */
-export function describeToolForVoice(name: string, input: any): string {
-  const n = (name || "").toLowerCase();
-  if (n === "agent" || n === "task") {
-    const d = String(input?.description || "").trim();
-    return d ? `running a sub-agent: ${d}` : "running a sub-agent";
-  }
-  if (n.includes("calendar")) return "checking the calendar";
-  if (n.includes("gmail") || n.includes("mail")) return "checking email";
-  if (n === "websearch" || n === "webfetch" || n.includes("search")) return "searching";
-  if (n === "read" || n === "grep" || n === "glob" || n === "ls") return "looking through files";
-  if (n === "edit" || n === "write" || n === "multiedit") return "changing a file";
-  if (n === "bash") return "running a command";
-  return "working";
 }

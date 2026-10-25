@@ -7,7 +7,7 @@ import React, { useEffect, useRef } from "react";
  * sets how fast it turns and how far it blooms. Quiet: the full family,
  * slow. Working: slower still. Connecting: dim.
  *
- * Shared by desktop and mobile. Draws on a canvas at device pixel ratio.
+ * Shared by desktop and mobile; drawn small in the call bar. Draws on a canvas at device pixel ratio.
  * Chosen by Ev on 11 Sep 2026 from the mock-ups in chad/assets
  * (hyo-voice-orb-colours.html → "Aurora"; hyo-voice-aurora-light.html → A/B).
  */
@@ -17,7 +17,7 @@ export interface VoiceOrbProps {
   level: number;
   working: boolean;
   connecting: boolean;
-  size?: number; // css px, default 220
+  size?: number; // css px, default 220 (the call bar uses 40)
 }
 
 const AURORA = ["#16c47f", "#7c3aed", "#ff0260"];
@@ -46,6 +46,7 @@ export function VoiceOrb({ side, level, working, connecting, size = 220 }: Voice
     canvas.height = H;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    const k = size / 220;
 
     let raf = 0;
     let t = 0;
@@ -90,7 +91,9 @@ export function VoiceOrb({ side, level, working, connecting, size = 220 }: Voice
       ctx.fillStyle = base;
       ctx.fillRect(0, 0, W, H);
       // Colour clouds turning inside.
-      ctx.filter = `blur(${18 * dpr}px)`;
+      // Blur and outline scale with the orb, so the small call-bar orb keeps
+      // its colour clouds instead of washing out.
+      ctx.filter = `blur(${Math.max(1.5, 18 * k) * dpr}px)`;
       cols.forEach((c, i) => {
         const a = t / (60 / sp) + i * 2.1;
         const x = cx + Math.cos(a) * r * 0.45;
@@ -115,9 +118,9 @@ export function VoiceOrb({ side, level, working, connecting, size = 220 }: Voice
       ctx.restore();
 
       ctx.strokeStyle = "rgba(255,255,255,0.35)";
-      ctx.lineWidth = 1.5 * dpr;
+      ctx.lineWidth = Math.max(0.75, 1.5 * k) * dpr;
       ctx.beginPath();
-      ctx.arc(cx, cy, r - dpr, 0, Math.PI * 2);
+      ctx.arc(cx, cy, r - dpr * k, 0, Math.PI * 2);
       ctx.stroke();
       ctx.globalAlpha = 1;
 

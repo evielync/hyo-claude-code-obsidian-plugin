@@ -1,4 +1,6 @@
-import { Plugin, WorkspaceLeaf, Platform, Notice } from "obsidian";
+import { resolveLiveVoice } from "./voice/live-voice";
+import { aboutYouFromNote } from "./voice/voice-call";
+import { Plugin, WorkspaceLeaf, Platform, Notice, TFile } from "obsidian";
 
 // Node built-ins are desktop-only. Deferred behind a Platform check so this
 // module loads on mobile (where `require` of a Node built-in throws). Every
@@ -215,8 +217,12 @@ export default class HyoPlugin extends Plugin {
         getLiveVoice: () => ({
           engine: this.settings.voiceEngine || "elevenlabs",
           openAiApiKey: this.settings.openAiApiKey || "",
-          voice: this.settings.gptLiveVoice || "marin",
+          ...(() => {
+            const v = resolveLiveVoice(this.settings.gptLiveVoice, this.settings.gptLiveCustomVoices);
+            return { voice: v.voice, voiceDescription: v.description };
+          })(),
           personality: this.settings.voicePersonality || "",
+          getAboutYou: () => this.readAboutYou(),
         }),
         // Write the Mac's own tailnet address into the vault's settings. It
         // syncs to the phone, which then connects automatically — nothing to
@@ -279,12 +285,30 @@ export default class HyoPlugin extends Plugin {
     });
   }
 
+  /**
+   * Settings → Voice → About you, read fresh for each call: the chosen note
+   * (without its frontmatter) if there is one, else the typed text.
+   */
+  async readAboutYou(): Promise<string> {
+    const notePath = (this.settings.voiceAboutYouNote || "").trim();
+    if (notePath) {
+      const f = this.app.vault.getAbstractFileByPath(notePath.endsWith(".md") ? notePath : `${notePath}.md`);
+      if (f instanceof TFile) return aboutYouFromNote(await this.app.vault.cachedRead(f));
+    }
+    return this.settings.voiceAboutYou || "";
+  }
+
   async loadSettings() {
     this.settings = Object.assign(
       {},
       DEFAULT_SETTINGS,
       await this.loadData()
     );
+    // The voice engine is GPT-Live (or the older ElevenLabs loop). A build
+    // that tried OpenAI Realtime saved "realtime" here; that runs as GPT-Live.
+    if (this.settings.voiceEngine !== "elevenlabs" && this.settings.voiceEngine !== "gpt-live") {
+      this.settings.voiceEngine = "gpt-live";
+    }
     // Reset stale shorthand model IDs to the default (Sonnet)
     const staleShorthands = ["opus", "sonnet", "haiku"];
     if (staleShorthands.includes(this.settings.model)) {

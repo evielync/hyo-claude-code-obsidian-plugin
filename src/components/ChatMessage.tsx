@@ -15,8 +15,6 @@ interface ChatMessageProps {
   onRecover?: () => void;
   onPermissionResponse?: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
   onQuestionAnswer?: (questionId: string, answers: Record<string, string>) => void;
-  /** Claude's reply to a live-call hand-off: the voice spoke it, so show only the work. */
-  hideProse?: boolean;
   /** Runs the Claude update from the "needs an update" card. */
   onClaudeUpdate?: ClaudeUpdateRunner;
   /** Runs the sign-in from the "sign in again" card. */
@@ -25,22 +23,13 @@ interface ChatMessageProps {
   isLast?: boolean;
 }
 
-export function ChatMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, hideProse, onClaudeUpdate, onClaudeSignIn, isLast }: ChatMessageProps) {
+export function ChatMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, onClaudeUpdate, onClaudeSignIn, isLast }: ChatMessageProps) {
   if (message.isCompaction) {
     return <CompactionMessage message={message} />;
   }
-  // Spoken on a live call: same bubbles, with a small "voice" mark.
-  if (message.voice) {
-    return (
-      <div className="hyo-voice-turn">
-        {message.role === "user" ? (
-          <UserMessage message={message} />
-        ) : (
-          <AssistantMessage message={message} />
-        )}
-      </div>
-    );
-  }
+  // What was said on a call stays in the call's transcript (behind the
+  // "Voice chat" line); the chat shows the work, as Grok Bot does.
+  if (message.handoff) return null;
   if (message.role === "user") {
     return <UserMessage message={message} />;
   }
@@ -51,7 +40,6 @@ export function ChatMessage({ message, onRecover, onPermissionResponse, onQuesti
         onRecover={onRecover}
         onPermissionResponse={onPermissionResponse}
         onQuestionAnswer={onQuestionAnswer}
-        hideProse={hideProse}
         onClaudeUpdate={onClaudeUpdate}
         onClaudeSignIn={onClaudeSignIn}
         isLast={isLast}
@@ -79,12 +67,10 @@ function UserMessage({ message }: { message: Message }) {
   // displayText holds exactly what the user typed; attachments holds file names.
   // Fall back to raw content for messages sent before this change.
   const fileChips = (message.attachments || []).filter((a) => a.type === "file");
-  // A live-call hand-off shows as a pointer; the spoken request sits just
-  // above it as a voice turn.
-  const displayText = message.handoff ? "↗ Handed to Claude" : message.displayText ?? message.content;
+  const displayText = message.displayText ?? message.content;
 
   return (
-    <div className={`hyo-message hyo-message-user${message.handoff ? " hyo-handoff" : ""}`}>
+    <div className="hyo-message hyo-message-user">
       <div className="hyo-message-content">
         {fileChips.length > 0 && (
           <div className="hyo-message-file-chips">
@@ -157,12 +143,11 @@ function isThinkingBlockErrorContent(text: string): boolean {
   return THINKING_BLOCK_ERROR_RE.test(text);
 }
 
-function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, hideProse, onClaudeUpdate, onClaudeSignIn, isLast }: {
+function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, onClaudeUpdate, onClaudeSignIn, isLast }: {
   message: Message;
   onRecover?: () => void;
   onPermissionResponse?: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
   onQuestionAnswer?: (questionId: string, answers: Record<string, string>) => void;
-  hideProse?: boolean;
   onClaudeUpdate?: ClaudeUpdateRunner;
   onClaudeSignIn?: ClaudeSignInRunner;
   isLast?: boolean;
@@ -170,8 +155,7 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
   const blocks = message.orderedBlocks || [];
   const toolCalls = message.toolCalls || [];
   const showAllTools = useShowAllToolCalls();
-  const wrapClass = `hyo-message hyo-message-assistant${hideProse ? " hyo-handoff-reply" : ""}`;
-  const spokenNote = hideProse ? <div className="hyo-spoken-note">Spoken on the call</div> : null;
+  const wrapClass = "hyo-message hyo-message-assistant";
 
   // Detect the thinking-block API error from the message content so we can
   // surface the recovery button. The error arrives as plain text in either
@@ -230,8 +214,7 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
     return (
       <div className={wrapClass}>
         <div className="hyo-message-content">
-          {spokenNote}
-          {!hideProse && !isUpdateError(message.content) && <MarkdownBlock content={message.content} />}
+          {!isUpdateError(message.content) && <MarkdownBlock content={message.content} />}
           {updateCard}
         </div>
         {showRecover && onRecover && <RecoverBanner onRecover={onRecover} />}
@@ -247,7 +230,6 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
   return (
     <div className={wrapClass}>
       <div className="hyo-message-content">
-        {spokenNote}
         {blocks.map((block, i) => {
           if (block.type === "thinking") {
             // Empty when the model omits thinking summaries (Opus 4.7+ /
@@ -262,13 +244,13 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
             );
           }
           if (block.type === "text") {
-            if (hideProse || block.isSkillOutput || skillTurnIndices.has(block.turnIndex)) return null;
+            if (block.isSkillOutput || skillTurnIndices.has(block.turnIndex)) return null;
             if (isUpdateError(block.content || "")) return null;
             return <MarkdownBlock key={i} content={block.content || ""} />;
           }
           if (block.type === "tool") {
             return renderToolBlock(blocks, i, toolCalls, HIDDEN_TOOLS, showAllTools,
-              (b) => b.type === "thinking" ? !!b.content?.trim() : !(hideProse || b.isSkillOutput || skillTurnIndices.has(b.turnIndex) || isUpdateError(b.content || "")));
+              (b) => b.type === "thinking" ? !!b.content?.trim() : !(b.isSkillOutput || skillTurnIndices.has(b.turnIndex) || isUpdateError(b.content || "")));
           }
           return null;
         })}
