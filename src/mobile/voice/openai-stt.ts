@@ -15,7 +15,8 @@ const STT_MODEL = "gpt-4o-transcribe";
 export async function openAiSpeechToText(
   apiKey: string,
   audioData: ArrayBuffer,
-  mimeType: string = "audio/webm"
+  mimeType: string = "audio/webm",
+  timeoutMs: number = STT_TIMEOUT_MS
 ): Promise<string> {
   const boundary = "----HyoVoiceBoundary" + Date.now();
   const parts: Uint8Array[] = [];
@@ -72,7 +73,7 @@ export async function openAiSpeechToText(
 
   let timer: ReturnType<typeof setTimeout>;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(STT_TIMEOUT_ERROR)), STT_TIMEOUT_MS);
+    timer = setTimeout(() => reject(new Error(STT_TIMEOUT_ERROR)), timeoutMs);
   });
 
   try {

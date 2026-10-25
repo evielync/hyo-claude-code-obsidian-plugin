@@ -9,6 +9,7 @@ import type { BoardTask } from "../task-state";
 import type { TaskMeta } from "../../settings";
 import type { useSessionManager } from "../hooks/useSessionManager";
 import { useVoiceMode } from "../hooks/useVoiceMode";
+import { RecordingStore } from "../voice/recording-store";
 import { parseVoiceResponse } from "../voice/voice-persona";
 import { HANDOFF_NOTE } from "../../voice/voice-persona";
 import { buildLiveHistory } from "../../voice/gpt-live";
@@ -321,7 +322,18 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
   // Walkie-talkie (ElevenLabs) calls keep the same one-line record.
   const elCallRef = useRef<VoiceCallRecord | null>(null);
 
+  // Dictations are saved here as they're recorded, so none is ever lost.
+  const recordingStore = useMemo(
+    () =>
+      new RecordingStore(
+        app.vault.adapter,
+        plugin.manifest.dir || `${app.vault.configDir}/plugins/${plugin.manifest.id}`
+      ),
+    [app, plugin.manifest.dir, plugin.manifest.id]
+  );
+
   const voiceMode = useVoiceMode({
+    store: recordingStore,
     apiKey: plugin.settings.elevenLabsApiKey,
     stt: { provider: isLiveEngine ? "openai" : "elevenlabs", apiKey: dictationKey },
     voiceId: plugin.settings.voiceId,

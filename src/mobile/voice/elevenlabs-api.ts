@@ -4,12 +4,19 @@ const TTS_MODEL = "eleven_flash_v2_5";
 const STT_MODEL = "scribe_v2";
 const MAX_TTS_CHARS = 4000;
 
-// Hard ceiling on how long we'll wait for a transcription before giving up.
-// Obsidian's `requestUrl` has no built-in timeout, so on a flaky mobile
-// connection a single hung request would otherwise leave the mic stuck in the
-// disabled "thinking" state forever — voice dead for the rest of the session.
-// A typical 10s note transcribes in a few seconds; 30s means genuinely stuck.
+// How long we'll wait for a transcription before giving up. Obsidian's
+// `requestUrl` has no built-in timeout, so on a flaky mobile connection a hung
+// request would otherwise leave the mic stuck in "thinking" forever. The wait
+// grows with the audio: a short note gets 30 seconds, and every second of
+// recording adds a second and a half on top, up to five minutes. Long
+// recordings are split into pieces before they get here (see useVoiceMode), so
+// no single request carries more than a couple of minutes of audio.
 export const STT_TIMEOUT_MS = 30000;
+const STT_TIMEOUT_MAX_MS = 300000;
+
+export function sttTimeoutFor(durationMs: number): number {
+  return Math.min(STT_TIMEOUT_MAX_MS, STT_TIMEOUT_MS + Math.max(0, durationMs) * 1.5);
+}
 export const STT_TIMEOUT_ERROR = "hyo-stt-timeout";
 
 export interface ElevenLabsVoice {
@@ -121,7 +128,8 @@ export async function textToSpeech(
 export async function speechToText(
   apiKey: string,
   audioData: ArrayBuffer,
-  mimeType: string = "audio/webm"
+  mimeType: string = "audio/webm",
+  timeoutMs: number = STT_TIMEOUT_MS
 ): Promise<string> {
   const boundary = "----HyoVoiceBoundary" + Date.now();
 
@@ -183,7 +191,7 @@ export async function speechToText(
 
   let timer: ReturnType<typeof setTimeout>;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(STT_TIMEOUT_ERROR)), STT_TIMEOUT_MS);
+    timer = setTimeout(() => reject(new Error(STT_TIMEOUT_ERROR)), timeoutMs);
   });
 
   try {
