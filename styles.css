@@ -1208,13 +1208,19 @@ button.hyo-ask-send:disabled {
   animation: hyo-cs-drop-in .24s cubic-bezier(.2, .8, .2, 1);
 }
 .hyo-cs-sheet-history { height: calc(100% - 24px); max-height: calc(100% - 24px); }
+/* Desktop Open: as tall as it needs, up to as tall as History, so it shows
+   as many rows as fit; past that the list scrolls and New stays below it. */
+.hyo-cs-sheet-open { max-height: calc(100% - 24px); }
 .hyo-cs-overlay-bottom .hyo-cs-sheet {
   border-radius: 22px 22px 0 0;
   padding-top: 0;
   box-shadow: 0 -8px 30px rgba(0, 0, 0, .12);
   animation: hyo-cs-rise-in .3s cubic-bezier(.2, .8, .2, 1);
 }
-.hyo-cs-overlay-bottom .hyo-cs-sheet-open { max-height: 78%; }
+/* Phone: Open is as tall as History (a size the sheet has, not one it
+   works out from its rows: WebKit squeezed a content-sized sheet down to
+   about three rows). The list scrolls inside; New stays at the bottom. */
+.hyo-cs-overlay-bottom .hyo-cs-sheet-open { height: 92%; max-height: 92%; }
 .hyo-cs-overlay-bottom .hyo-cs-sheet-history { height: 92%; max-height: 92%; }
 .hyo-cs-closing .hyo-cs-scrim { animation: hyo-cs-fade-out .18s ease-in forwards; }
 .hyo-cs-closing .hyo-cs-sheet { animation: hyo-cs-drop-out .18s ease-in forwards; }
@@ -1288,7 +1294,7 @@ button.hyo-ask-send:disabled {
 
 /* The Open side. */
 .hyo-cs-view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-.hyo-cs-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.hyo-cs-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .hyo-cs-row-wrap { position: relative; overflow: hidden; }
 .hyo-cs-row-del {
   position: absolute;
