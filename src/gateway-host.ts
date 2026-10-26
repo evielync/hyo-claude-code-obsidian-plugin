@@ -424,8 +424,8 @@ function searchSessions(cwd: string, query: string): Record<string, string> {
 
 // ---- History for the phone, a page at a time --------------------------------
 // A long conversation is megabytes of transcript (one of Ev's: 720 lines,
-// 6.3 MB) and used to go to the phone in one WebSocket message, which could
-// take longer than the phone would wait. The Mac parses the transcript with
+// 6.3 MB); sent as one WebSocket message it can take longer to arrive than
+// the phone waits. So the Mac parses the transcript with
 // the same parser the desktop uses and sends the newest messages first, a
 // bounded page at a time; the phone asks for older pages as it scrolls up.
 // Long tool output and thinking are shortened on the way: the phone shows
