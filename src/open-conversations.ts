@@ -31,6 +31,10 @@ export interface OpenEntry {
   title: string;
   /** Pinned: always open, listed first, and can't be closed until it's unpinned. */
   pinned?: boolean;
+  /** Sent to the phone only: the conversation's last line, for its Open row. Never saved. */
+  peek?: string;
+  /** Sent to the phone only: when it was last active (epoch ms). Never saved. */
+  lastActive?: number;
 }
 
 /** A pinned conversation, read from the shared session metadata. */
@@ -55,9 +59,18 @@ function clean(entries: unknown): OpenEntry[] {
   return out;
 }
 
-/** An open list as it arrives over the wire, checked. */
+/** An open list as it arrives over the wire, checked (with the Mac's peek and last-active time). */
 export function parseEntries(raw: unknown): OpenEntry[] {
-  return clean(raw);
+  const byId = new Map<string, any>();
+  if (Array.isArray(raw)) for (const e of raw as any[]) if (e && typeof e.id === "string") byId.set(e.id, e);
+  return clean(raw).map((e) => {
+    const r = byId.get(e.id);
+    return {
+      ...e,
+      ...(typeof r?.peek === "string" && r.peek ? { peek: r.peek } : {}),
+      ...(typeof r?.lastActive === "number" && isFinite(r.lastActive) ? { lastActive: r.lastActive } : {}),
+    };
+  });
 }
 
 /** Add a conversation at the end, or refresh its title if it's already open. */
@@ -505,8 +518,8 @@ export interface OpenListSink {
   send: (obj: unknown) => void;
 }
 
-/** Each phone socket's subscription to the store. */
-const phoneSubs = new Map<object, () => void>();
+/** Each phone socket's subscription to the store, and a way to send it the list again. */
+const phoneSubs = new Map<object, { off: () => void; push: () => void }>();
 
 /**
  * A phone message about the open list. Subscribes the socket on first
@@ -514,24 +527,39 @@ const phoneSubs = new Map<object, () => void>();
  * acknowledged to the phone that made it with its number. Returns false for
  * a message that isn't about the open list.
  */
-export function gatewayOpenList(store: OpenConversationsStore, m: any, ws: object, sink: OpenListSink): boolean {
+export function gatewayOpenList(
+  store: OpenConversationsStore,
+  m: any,
+  ws: object,
+  sink: OpenListSink,
+  // What the phone's rows show besides the title (its last line, when it was last active).
+  decorate: (entries: OpenEntry[]) => OpenEntry[] = (e) => e
+): boolean {
   const type = m?.type;
   if (typeof type !== "string" || !type.startsWith("open_")) return false;
+  const shown = (entries: OpenEntry[]): OpenEntry[] => {
+    try {
+      return decorate(entries);
+    } catch (e) {
+      console.error("[hyo] Couldn't add the last lines to the open list:", e);
+      return entries;
+    }
+  };
   if (!phoneSubs.has(ws)) {
     const off = store.subscribe((entries, origin: any) => {
       sink.send({
         type: "open_list",
-        entries,
+        entries: shown(entries),
         ...(origin && origin.ws === ws && typeof origin.opId === "number" ? { ack: origin.opId } : {}),
       });
     });
-    phoneSubs.set(ws, off);
+    phoneSubs.set(ws, { off, push: () => sink.send({ type: "open_list", entries: shown(store.list()) }) });
   }
   const origin = { ws, opId: typeof m.opId === "number" ? m.opId : undefined };
   const title = typeof m.title === "string" ? m.title : "";
   switch (type) {
     case "open_list":
-      sink.send({ type: "open_list", entries: store.list(), ...(typeof m.requestId === "number" ? { sync: m.requestId } : {}) });
+      sink.send({ type: "open_list", entries: shown(store.list()), ...(typeof m.requestId === "number" ? { sync: m.requestId } : {}) });
       return true;
     case "open_add":
       if (typeof m.id === "string") store.open({ id: m.id, title }, origin);
@@ -551,12 +579,23 @@ export function gatewayOpenList(store: OpenConversationsStore, m: any, ws: objec
 
 /** The phone's socket closed: stop pushing to it. */
 export function gatewayOpenListGone(ws: object): void {
-  phoneSubs.get(ws)?.();
+  phoneSubs.get(ws)?.off();
   phoneSubs.delete(ws);
+}
+
+/** Send every phone the list again (a turn ended, so a row's last line moved on). */
+export function gatewayOpenListRefresh(): void {
+  for (const p of phoneSubs.values()) {
+    try {
+      p.push();
+    } catch (e) {
+      console.error("[hyo] Couldn't refresh the phone's open list:", e);
+    }
+  }
 }
 
 /** The gateway stopped: drop every phone's subscription. */
 export function gatewayOpenListReset(): void {
-  for (const off of phoneSubs.values()) off();
+  for (const p of phoneSubs.values()) p.off();
   phoneSubs.clear();
 }

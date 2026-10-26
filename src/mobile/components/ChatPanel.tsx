@@ -120,20 +120,20 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     activeLoading,
     activeLoadError,
     retryLoad,
+    setDraft,
+    activeClosedElsewhere,
+    openHints,
+    loadOlder,
+    activeHasOlder,
+    activeLoadingOlder,
+    activeOlderError,
   } = sessionManager;
 
-  // Closing a tab stops its Claude process, and its background jobs with it.
-  const closeTabSafely = useCallback(
-    (tabId: string) => {
-      const running = tabJobs(tabId);
-      if (running.length > 0) {
-        const what = running.length === 1 ? `"${running[0].title}" is` : `${running.length} background jobs are`;
-        if (!window.confirm(`${what} still running in this conversation. Closing it stops ${running.length === 1 ? "it" : "them"}. Close anyway?`)) return;
-      }
-      closeTab(tabId);
-    },
-    [tabJobs, closeTab]
-  );
+  // Closing a conversation only takes it off the Open list. Its Claude
+  // process lives on the Mac: a turn or background job still running
+  // carries on, and is in History when it's done.
+  const closeTabSafely = closeTab;
+  void tabJobs;
 
   // "Update Claude" from the phone: the gateway Mac runs the update, then
   // this tab's message goes again. Only offered while connected to a gateway;
@@ -149,6 +149,18 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     setGatewayStatus(client.getStatus());
     return client.onStatusChange(setGatewayStatus);
   }, [plugin.settings.gatewayUrl]);
+  // The Mac out of reach for more than a moment: said plainly, so a reply
+  // that stopped mid-way doesn't look like Claude giving up. (A blip of a
+  // second or two, like the phone waking, isn't worth a banner.)
+  const [macAway, setMacAway] = useState(false);
+  useEffect(() => {
+    if (!plugin.settings.gatewayUrl || gatewayStatus === "connected") {
+      setMacAway(false);
+      return;
+    }
+    const t = window.setTimeout(() => setMacAway(true), 3000);
+    return () => window.clearTimeout(t);
+  }, [gatewayStatus, plugin.settings.gatewayUrl]);
   const runClaudeUpdate = useMemo<ClaudeUpdateRunner | undefined>(() => {
     const url = plugin.settings.gatewayUrl;
     if (!url || gatewayStatus !== "connected") return undefined;
@@ -203,8 +215,8 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
   );
 
   const boardTasks = useMemo(
-    () => buildTaskList(tabs, pastSessions, taskMeta),
-    [tabs, pastSessions, taskMeta]
+    () => buildTaskList(tabs, pastSessions, taskMeta, Date.now(), openHints),
+    [tabs, pastSessions, taskMeta, openHints]
   );
   const tabIds = useMemo(() => tabs.map((t) => t.id), [tabs]);
   const connectionLabel =
@@ -218,6 +230,11 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
 
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
   const inputValue = inputValues[activeTabId] ?? "";
+  // Which tabs have unsent text: a conversation closed on the Mac stays open
+  // here while its box has text (see setDraft).
+  useEffect(() => {
+    for (const [tabId, text] of Object.entries(inputValues)) setDraft(tabId, text);
+  }, [inputValues, setDraft]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // The transcript sheet for a tapped call line.
   const [openCall, setOpenCall] = useState<VoiceCallRecord | null>(null);
@@ -1036,6 +1053,10 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           onQuestionAnswer={sendQuestionAnswer}
           onClaudeUpdate={runClaudeUpdate}
           onOpenCall={setOpenCall}
+          hasOlder={activeHasOlder}
+          loadingOlder={activeLoadingOlder}
+          olderError={activeOlderError}
+          onLoadOlder={() => loadOlder(activeTabId)}
           onRecover={() => {
             const result = recoverSession(activeTabId);
             if (result.success) {
@@ -1085,6 +1106,17 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
       )}
 
       <BackgroundJobs jobs={activeJobs} />
+
+      {macAway && (
+        <div className="hyo-mac-away" role="status">
+          Can't reach your Mac right now. Anything running there carries on; Hyo reconnects by itself, and what you send waits until then.
+        </div>
+      )}
+      {activeClosedElsewhere && (
+        <div className="hyo-closed-elsewhere">
+          Closed on your Mac. It stays open here while there's text in the box; send it and it opens everywhere again.
+        </div>
+      )}
 
       {!inVoiceView && (
         <ConversationSwitcher

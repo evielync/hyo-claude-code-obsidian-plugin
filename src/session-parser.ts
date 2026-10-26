@@ -522,30 +522,52 @@ export function loadSessionModel(cwd: string, sessionId: string): string | null 
   return resumeModel(model, contextTokens);
 }
 
-export function loadSessionHistory(cwd: string, sessionId: string): HistoryMessage[] {
-  const dir = getProjectDir(cwd);
-  const filePath = path.join(dir, `${sessionId}.jsonl`);
+/**
+ * How many complete lines a conversation's transcript has (0 if none). A
+ * turn under way is caught up from where this said it began, so history read
+ * for someone opening it mid-turn stops there (see session-owner.ts).
+ */
+export function transcriptLineCount(cwd: string, sessionId: string): number | null {
+  try {
+    const buf: Buffer = fs.readFileSync(path.join(getProjectDir(cwd), `${sessionId}.jsonl`));
+    let n = 0;
+    for (let i = 0; i < buf.length; i++) if (buf[i] === 10) n++;
+    return n;
+  } catch (e: any) {
+    return e?.code === "ENOENT" ? 0 : null;
+  }
+}
+
+/** The transcript's lines, parsed, up to (not including) line `untilLine` when given. */
+export function readTranscriptEntries(cwd: string, sessionId: string, untilLine?: number | null): any[] {
+  const filePath = path.join(getProjectDir(cwd), `${sessionId}.jsonl`);
+  const entries: any[] = [];
+  let text: string;
   try {
     if (!fs.existsSync(filePath)) return [];
+    text = fs.readFileSync(filePath, "utf8");
   } catch {
     return [];
   }
-
-  const entries: any[] = [];
-  try {
-    const text = fs.readFileSync(filePath, "utf8");
-    for (const line of text.split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        entries.push(JSON.parse(line));
-      } catch {
-        /* skip a malformed line */
-      }
+  let lines = text.split("\n");
+  if (typeof untilLine === "number" && untilLine >= 0) lines = lines.slice(0, untilLine);
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      entries.push(JSON.parse(line));
+    } catch {
+      /* skip a malformed line */
     }
-  } catch {
-    return [];
   }
-  return parseSessionEntries(entries);
+  return entries;
+}
+
+/**
+ * A conversation's history as chat messages. `untilLine` stops it where a
+ * turn still under way began; that turn is caught up live instead.
+ */
+export function loadSessionHistory(cwd: string, sessionId: string, untilLine?: number | null): HistoryMessage[] {
+  return parseSessionEntries(readTranscriptEntries(cwd, sessionId, untilLine));
 }
 
 /** A session's parsed jsonl lines, as chat messages. */

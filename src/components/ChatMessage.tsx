@@ -70,7 +70,7 @@ function UserMessage({ message }: { message: Message }) {
   const displayText = message.displayText ?? message.content;
 
   return (
-    <div className="hyo-message hyo-message-user">
+    <div className={`hyo-message hyo-message-user${message.queuedId ? " is-queued" : ""}`}>
       <div className="hyo-message-content">
         {fileChips.length > 0 && (
           <div className="hyo-message-file-chips">
@@ -87,6 +87,7 @@ function UserMessage({ message }: { message: Message }) {
         )}
         {displayText && <div className="hyo-message-text">{displayText}</div>}
       </div>
+      {message.queuedId && <div className="hyo-message-queued">Queued: sends when the current reply finishes</div>}
     </div>
   );
 }

@@ -28,6 +28,10 @@ export interface Message {
   // A reply Claude started itself, with nobody sending anything: a
   // background job finished and it's reporting back.
   selfStarted?: boolean;
+  // Waiting for the turn under way to finish (sent here or on another device).
+  queuedId?: string;
+  // The id this message went to the conversation's owner with (session-owner.ts).
+  sendId?: string;
   attachments?: { type: string; name: string; preview?: string }[];
   // Older builds (0.6.x) put each spoken turn in the thread. Kept only so
   // old in-memory messages type-check; calls are `voiceCall` records now.

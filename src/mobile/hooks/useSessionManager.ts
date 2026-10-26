@@ -1,9 +1,10 @@
 import { debug } from "../debug";
 import { addOutgoing, startQueued } from "../../send-queue";
+import { turnStarted, queued as queuedElsewhere, permissionAnswered, replayBase, queueDropped, hasQueued } from "../../live-sync";
 import { newStreamState, processContentBlocks, buildSnapshot, endTurn, startsTurnOfItsOwn, openReply, isInjectedContext, type StreamState } from "../../reply-stream";
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { GatewayTransport } from "../gateway-transport";
-import { MAIN_CHAT_WIRE_ID } from "../../main-chat-owner";
+import { MAIN_CHAT_WIRE_ID } from "../../session-owner";
 import { VOICE_PERSONA } from "../voice/voice-persona";
 import type {
   Message,
@@ -20,7 +21,7 @@ import { generateConversationTitle } from "../title-generator";
 import { parseClaudeUpdateError } from "../../models";
 import { applyJobEvent, hasRunningJobs, jobAsking, jobList, maySwapProcess, IdleGate, type JobMap, type BackgroundJob } from "../../background-jobs";
 import { appendedPrompt, withMainChatReminder, withMainChat, mainFirst, canCloseTab, canReorder, startupActive, MAIN_CHAT_TITLE } from "../../main-chat";
-import { GatewayClient } from "../gateway-client";
+import { GatewayClient, HISTORY_TIMEOUT_MS } from "../gateway-client";
 import { PendingOps, reconcileTabs, syncChanges, syncedSid, type OpenEntry } from "../../open-conversations";
 
 // Re-export for convenience
@@ -61,6 +62,15 @@ export interface TabSession {
   jobs?: JobMap;
   // Its history is on its way from the Mac ("Loading conversation…").
   loading?: boolean;
+  // Where the loaded history starts among the conversation's messages: more
+  // than 0 means there are older messages to load when scrolling up.
+  historyOffset?: number;
+  // Older messages are on their way.
+  loadingOlder?: boolean;
+  // Why the older messages couldn't be loaded.
+  olderError?: string;
+  // When a turn last started or ended here (epoch ms), for its Open row.
+  lastActivity?: number;
   // Why its history couldn't be loaded, in plain words (shown with a retry).
   loadError?: string;
 }
@@ -158,14 +168,22 @@ export function useSessionManager(options: SessionManagerOptions) {
   // They show in the chat at once and go to Claude when the turn ends (see
   // send-queue.ts). turnRunningRef is set the moment a turn starts, so two
   // sends in the same tick can't both start one.
-  const queuedSendsRef = useRef<Record<string, { id: string; content: string | any[]; meta?: any }[]>>({});
+  // The Mac holds them now (session-owner.ts): they go to it at once and it
+  // starts each when the turn before ends, on every device alike.
   const turnRunningRef = useRef<Record<string, boolean>>({});
-  const sendMessageRef = useRef<(content: string | any[], meta?: any, opts?: { tabId?: string; fromQueue?: string }) => void>(() => {});
-  /** The turn on this tab ended: send the next waiting message, if any. */
+  // Messages this phone sent, by the id they went to the Mac with.
+  const localSendsRef = useRef(new Set<string>());
+  // The turn under way on each tab was started here (only that view nudges
+  // after a compaction or names the conversation, so it happens once).
+  const ownTurnRef = useRef<Record<string, boolean>>({});
+  // Tabs with unsent text in their message box: one closed on the Mac stays
+  // open here until the box is empty (see isBusy).
+  const draftsRef = useRef(new Set<string>());
+  // Tabs whose history has been asked for and not yet answered.
+  const requestedRef = useRef(new Set<string>());
+  /** The turn on this tab ended. */
   const turnEnded = (tabId: string) => {
     turnRunningRef.current[tabId] = false;
-    const next = queuedSendsRef.current[tabId]?.shift();
-    if (next) setTimeout(() => sendMessageRef.current(next.content, next.meta, { tabId, fromQueue: next.id }), 0);
   };
   // The voice engine the desktop is set to (ChatPanel learns it from the
   // gateway). GPT-Live tabs get the backend persona, ElevenLabs the spoken one.
@@ -242,7 +260,7 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   const makeProcessEvent = useCallback(
     (tabId: string) => {
-      return (event: any) => {
+      const handle = (event: any): void => {
         if (event.type === "stream_event") {
           const evt = event.event || event;
           if (evt.type !== "content_block_delta") {
@@ -256,37 +274,59 @@ export function useSessionManager(options: SessionManagerOptions) {
           );
         }
 
-        // The main chat, shared with the Mac and other views (main-chat-owner.ts).
-        if (event.type === "hyo_user_message" || event.type === "hyo_busy") {
+        // The conversation is shared live with other views (session-owner.ts):
+        // a turn started anywhere, a message waiting, an answer given
+        // elsewhere, or catching up on a turn already under way.
+        const onTab = (fn: (t: TabSession) => TabSession) => setState((prev) => ({ ...prev, tabs: prev.tabs.map((t) => (t.id === tabId ? fn(t) : t)) }));
+        if (event.type === "hyo_user_message" && event.silent) {
+          // Claude was asked to carry on after a compaction: same reply, no message.
           turnRunningRef.current[tabId] = true;
-          streamStatesRef.current[tabId] = newStreamState();
-          const reply: Message = { role: "assistant", content: "", thinking: "", toolCalls: [], orderedBlocks: [], streaming: true };
-          const said: Message[] = event.type === "hyo_user_message" && event.text ? [{ role: "user", content: event.text, displayText: event.text }] : [];
-          setState((prev) => ({
-            ...prev,
-            tabs: prev.tabs.map((t) =>
-              t.id === tabId ? { ...t, messages: openReply([...t.messages, ...said], reply), generating: true } : t
-            ),
-          }));
+          const ss0 = streamStatesRef.current[tabId];
+          if (ss0) ss0.turnDone = false;
+          updateTabLastAssistant(tabId, () => ({ streaming: true }));
+          onTab((t) => ({ ...t, generating: true }));
+          return;
+        }
+        if (event.type === "hyo_user_message") {
+          const own = !!event.qid && localSendsRef.current.has(event.qid);
+          const cur = stateRef.current.tabs.find((t) => t.id === tabId);
+          const shown = !!event.qid && !!cur?.messages.some((m) => m.sendId === event.qid && !m.queuedId);
+          ownTurnRef.current[tabId] = own;
+          turnRunningRef.current[tabId] = true;
+          // A message this view just sent already has its reply slot and
+          // stream state; anything else starts a fresh one.
+          if (!shown) streamStatesRef.current[tabId] = newStreamState();
+          onTab((t) => ({ ...t, messages: turnStarted(t.messages, event).messages, generating: true, lastActivity: Date.now() }));
+          return;
+        }
+        if (event.type === "hyo_queued") {
+          onTab((t) => ({ ...t, messages: queuedElsewhere(t.messages, event) }));
           return;
         }
         if (event.type === "hyo_permission_answered") {
-          const resolved = event.behavior === "deny" ? ("denied" as const) : ("allowed" as const);
-          setState((prev) => ({
-            ...prev,
-            tabs: prev.tabs.map((t) =>
-              t.id !== tabId
-                ? t
-                : {
-                    ...t,
-                    messages: t.messages.map((m) =>
-                      m.permissionRequests?.some((r) => r.requestId === event.requestId)
-                        ? { ...m, permissionRequests: m.permissionRequests.map((r) => (r.requestId === event.requestId ? { ...r, resolved } : r)) }
-                        : m
-                    ),
-                  }
-            ),
-          }));
+          onTab((t) => ({ ...t, messages: permissionAnswered(t.messages, event) }));
+          return;
+        }
+        if (event.type === "hyo_queue_dropped") {
+          onTab((t) => ({ ...t, messages: queueDropped(t.messages, event.qids || [], event.reason) }));
+          return;
+        }
+        if (event.type === "hyo_replay") {
+          // Opening the conversation mid-turn (or coming back to it): the
+          // turn's reply is rebuilt from its events so far, then carries on live.
+          const turn = event.turn;
+          if (turn) {
+            ownTurnRef.current[tabId] = !!turn.qid && localSendsRef.current.has(turn.qid);
+            turnRunningRef.current[tabId] = true;
+            streamStatesRef.current[tabId] = newStreamState();
+            onTab((t) => ({ ...t, messages: replayBase(t.messages, turn), generating: true }));
+            for (const e of turn.events || []) handle(e);
+          }
+          for (const q of event.queued || []) onTab((t) => ({ ...t, messages: queuedElsewhere(t.messages, q) }));
+          if ((event.asks || []).length) {
+            if (!streamStatesRef.current[tabId]) streamStatesRef.current[tabId] = { ...newStreamState(), turnDone: true };
+            for (const e of event.asks) handle(e);
+          }
           return;
         }
         if (event.type === "hyo_owner_refused") {
@@ -469,12 +509,9 @@ export function useSessionManager(options: SessionManagerOptions) {
         if (event.type === "result") {
           // A sub-agent's own result never ends the chat's turn.
           if (event.isSidechain || event.parent_tool_use_id) return;
-          if (compactNudgeRef.current[tabId]) {
+          if (compactNudgeRef.current[tabId] && ownTurnRef.current[tabId] === true) {
             compactNudgeRef.current[tabId] = false;
-            transportsRef.current[tabId]?.sendUserMessage(
-              "Please continue where you left off before the compaction.",
-              optionsRef.current.askFirst
-            );
+            transportsRef.current[tabId]?.sendUserMessage("Please continue where you left off before the compaction.", optionsRef.current.askFirst, { silent: true });
             return;
           }
           endTurn(ss, event);
@@ -489,6 +526,7 @@ export function useSessionManager(options: SessionManagerOptions) {
                 ? {
                     ...tab,
                     generating: false,
+                    lastActivity: Date.now(),
                     ...(contextWindow ? { contextWindow } : {}),
                     ...(prev.activeTabId !== tabId
                       ? { hasUnseenReply: true }
@@ -501,7 +539,8 @@ export function useSessionManager(options: SessionManagerOptions) {
           turnEnded(tabId);
 
           // Auto-generate title after first response
-          if (options.autoGenerateTitles) {
+          // Named once, by the view whose message started the conversation.
+          if (options.autoGenerateTitles && ownTurnRef.current[tabId]) {
             const currentTab = stateRef.current.tabs.find((t) => t.id === tabId);
             if (currentTab && !currentTab.isMain && currentTab.messages.length >= 2) {
               const firstUser = currentTab.messages.find((m) => m.role === "user" && !m.isCompaction);
@@ -557,6 +596,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         // reply below, and the one before it stays as it was.
         if (startsTurnOfItsOwn(ss, event)) {
           turnRunningRef.current[tabId] = true;
+          ownTurnRef.current[tabId] = false;
           const reply: Message = {
             role: "assistant",
             content: "",
@@ -734,6 +774,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           return;
         }
       };
+      return handle;
     },
     [updateTabLastAssistant]
   );
@@ -919,24 +960,101 @@ export function useSessionManager(options: SessionManagerOptions) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.tabs]);
 
+  /**
+   * The tab's connection to its conversation on the Mac: subscribed (by the
+   * tab's id; the main chat's shared id) to the Mac's one process for it.
+   * Registered before anything is asked for, so nothing the Mac sends for
+   * the tab is missed.
+   */
+  function ensureTransport(tabId: string): GatewayTransport {
+    const have = transportsRef.current[tabId];
+    const currentTab = stateRef.current.tabs.find((t) => t.id === tabId);
+    if (have) {
+      if (currentTab?.cliSessionId && !currentTab.isMain) have.setSessionId(currentTab.cliSessionId);
+      return have;
+    }
+    transportPromptRef.current[tabId] = promptFor(currentTab);
+    if (!streamStatesRef.current[tabId]) streamStatesRef.current[tabId] = { ...newStreamState(), turnDone: true };
+    const transport = new GatewayTransport({
+      gatewayUrl: optionsRef.current.gatewayUrl,
+      // The main chat joins the Mac's one process for it, by its shared id.
+      tabId: currentTab?.isMain ? MAIN_CHAT_WIRE_ID : tabId,
+      // The tab's own model: a reopened conversation carries on with the
+      // one it was built on (and its context window), not the default. The
+      // Mac only uses it if the phone is the one starting the process.
+      model: currentTab?.model || optionsRef.current.model,
+      agent: optionsRef.current.agent,
+      ...sessionSpawn(currentTab?.cliSessionId ?? null, currentTab?.sessionPending),
+      appendSystemPrompt: promptFor(currentTab),
+      onMessage: makeProcessEvent(tabId),
+      onError: (error) => console.error("[hyo] Gateway error:", error),
+      onClose: (code) => {
+        if (transportsRef.current[tabId] !== transport) return;
+        const wasGenerating = stateRef.current.tabs.find((t) => t.id === tabId)?.generating;
+        // Its background agents ended with it.
+        if (jobsRunning(tabId)) setJobs(tabId, {});
+        setState((prev) => ({
+          ...prev,
+          tabs: prev.tabs.map((tab) => (tab.id === tabId ? { ...tab, generating: false } : tab)),
+        }));
+        turnEnded(tabId);
+        updateTabLastAssistant(tabId, () => ({ streaming: false }));
+        // If the CLI process exited with an error while generating, say so.
+        if (code !== 0 && code !== null && wasGenerating) {
+          const errorMsg: Message = {
+            role: "assistant",
+            content: `_Claude process exited unexpectedly (code ${code}). Send your message again to carry on, or start a new conversation._`,
+            thinking: "",
+            toolCalls: [],
+            orderedBlocks: [],
+            streaming: false,
+          };
+          setState((prev) => ({
+            ...prev,
+            tabs: prev.tabs.map((tab) => (tab.id === tabId ? { ...tab, messages: [...tab.messages, errorMsg] } : tab)),
+          }));
+        }
+      },
+    });
+    transport.spawn();
+    transportsRef.current[tabId] = transport;
+    return transport;
+  }
+
   const sendMessage = useCallback(
     (
       content: string | any[],
       meta?: { displayText?: string; attachedFileNames?: string[]; isCompaction?: boolean; handoff?: boolean },
-      opts?: { tabId?: string; fromQueue?: string }
+      opts?: { tabId?: string }
     ) => {
       const tabId = opts?.tabId ?? stateRef.current.activeTabId;
-      const wasGenerating =
-        !opts?.fromQueue &&
-        (!!turnRunningRef.current[tabId] ||
-          !!stateRef.current.tabs.find((t) => t.id === tabId)?.generating ||
-          (queuedSendsRef.current[tabId]?.length ?? 0) > 0);
+      let tab = stateRef.current.tabs.find((t) => t.id === tabId);
+      if (!tab) return;
+      const wasGenerating = !!turnRunningRef.current[tabId] || !!tab.generating || hasQueued(tab.messages);
+
+      // A new conversation gets its id now, so its one process on the Mac
+      // (and every view of it) is keyed by it from the first message.
+      if (!tab.isMain && !tab.cliSessionId) {
+        const minted = genId();
+        tab = { ...tab, cliSessionId: minted, sessionPending: true };
+        const patched = tab;
+        stateRef.current = { ...stateRef.current, tabs: stateRef.current.tabs.map((t) => (t.id === tabId ? patched : t)) };
+        setState((prev) => ({ ...prev, tabs: prev.tabs.map((t) => (t.id === tabId ? { ...t, cliSessionId: minted, sessionPending: true } : t)) }));
+      }
+      // Closed on the Mac while it was being typed in: sending opens it
+      // everywhere again.
+      const sid = tab.cliSessionId;
+      if (sid && !tab.isMain && sid !== mainSid() && syncedRef.current.get(tabId) === sid && remoteRef.current && !remoteRef.current.some((e) => e.id === sid)) {
+        tellMac.open(sid, tab.title);
+      }
 
       // For display, use the typed text; for arrays (image messages) use displayText or placeholder
       const displayContent = typeof content === "string"
         ? (meta?.displayText ?? content)
         : (meta?.displayText ?? "");
 
+      const qid = genId();
+      localSendsRef.current.add(qid);
       const userMsg: Message = {
         role: "user",
         content: displayContent,
@@ -944,6 +1062,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         attachments: meta?.attachedFileNames?.map((name) => ({ type: "file", name })),
         isCompaction: meta?.isCompaction,
         handoff: meta?.handoff,
+        sendId: qid,
       };
       const assistantMsg: Message = {
         role: "assistant",
@@ -955,151 +1074,41 @@ export function useSessionManager(options: SessionManagerOptions) {
         isCompaction: meta?.isCompaction,
       };
 
-      // Claude is mid-turn: show it now, send it when the turn ends.
-      if (wasGenerating && !meta?.isCompaction) {
-        const qid = genId();
-        (queuedSendsRef.current[tabId] ||= []).push({ id: qid, content, meta });
-        setState((prev) => ({
-          ...prev,
-          tabs: prev.tabs.map((tab) =>
-            tab.id === tabId ? { ...tab, messages: addOutgoing(tab.messages, userMsg, assistantMsg, true, qid) } : tab
-          ),
-        }));
-        scrollRef.current.nearBottom = true;
-        return;
+      // Claude is mid-turn: show it now, marked queued; the Mac sends it
+      // when the turn ends, and every other view shows it waiting too.
+      const queuedNow = wasGenerating && !meta?.isCompaction;
+      if (!queuedNow) {
+        turnRunningRef.current[tabId] = true;
+        ownTurnRef.current[tabId] = true;
+        streamStatesRef.current[tabId] = newStreamState();
       }
-      turnRunningRef.current[tabId] = true;
-
-      streamStatesRef.current[tabId] = newStreamState();
-
       setState((prev) => ({
         ...prev,
-        tabs: prev.tabs.map((tab) => {
-          if (tab.id !== tabId) return tab;
+        tabs: prev.tabs.map((t) => {
+          if (t.id !== tabId) return t;
           const titleText = meta?.displayText ?? (typeof content === "string" ? content : "");
           const title =
-            tab.messages.length === 0 && tab.title === "New conversation"
+            t.messages.length === 0 && t.title === "New conversation"
               ? titleText.slice(0, 40) + (titleText.length > 40 ? "..." : "")
-              : tab.title;
+              : t.title;
+          if (queuedNow) return { ...t, title, messages: addOutgoing(t.messages, userMsg, assistantMsg, true, qid) };
           // Compaction: don't add a user message — just the streaming assistant marker
-          const newMessages = meta?.isCompaction
-            ? [...tab.messages, assistantMsg]
-            : opts?.fromQueue
-            ? startQueued(tab.messages, opts.fromQueue, assistantMsg)
-            : [...tab.messages, userMsg, assistantMsg];
-          return {
-            ...tab,
-            title,
-            messages: newMessages,
-            generating: true,
-          };
+          const newMessages = meta?.isCompaction ? [...t.messages, assistantMsg] : [...t.messages, userMsg, assistantMsg];
+          return { ...t, title, messages: newMessages, generating: true, lastActivity: Date.now() };
         }),
       }));
       scrollRef.current.nearBottom = true;
 
-      // Voice mode changed the persona since this process started: swap it
-      // between turns. A turn still running keeps going.
-      {
-        const t = stateRef.current.tabs.find((x) => x.id === tabId);
-        const running = transportsRef.current[tabId];
-        // Background agents live in that process: the swap waits for the
-        // first send after they finish.
-        if (
-          running &&
-          maySwapProcess({
-            running: running.isRunning(),
-            midTurn: wasGenerating,
-            jobs: jobsRef.current[tabId],
-            promptChanged: transportPromptRef.current[tabId] !== promptFor(t),
-          })
-        ) {
-          try {
-            running.stop();
-          } catch {}
-          delete transportsRef.current[tabId];
-        }
-      }
-
-      if (
-        !transportsRef.current[tabId] ||
-        !transportsRef.current[tabId].isRunning()
-      ) {
-        const currentTab = stateRef.current.tabs.find(
-          (t) => t.id === tabId
-        );
-        transportPromptRef.current[tabId] = promptFor(currentTab);
-        const cliSessionId = currentTab?.cliSessionId;
-
-        const transport = new GatewayTransport({
-          gatewayUrl: options.gatewayUrl,
-          // The main chat joins the Mac's one process for it, by its shared id.
-          ...(currentTab?.isMain ? { tabId: MAIN_CHAT_WIRE_ID } : {}),
-          // The tab's own model: a reopened conversation carries on with the
-          // one it was built on (and its context window), not the default.
-          model: currentTab?.model || options.model,
-          agent: options.agent,
-          ...(currentTab?.isMain ? {} : { tabId }),
-          // A conversation that began as a call starts with --session-id on
-          // the id Hyo gave it; anything Claude has written is resumed.
-          ...sessionSpawn(cliSessionId ?? null, currentTab?.sessionPending),
-          // Voice mode is a fresh conversation, so the persona is fixed for the
-          // tab's life — inject it at spawn (and on any respawn, since it's sent
-          // per-prompt). Text tabs send nothing and behave exactly as before.
-          appendSystemPrompt: promptFor(currentTab),
-          onMessage: makeProcessEvent(tabId),
-          onError: (error) => console.error("[hyo] Gateway error:", error),
-          onClose: (code) => {
-            const wasGenerating = stateRef.current.tabs.find(
-              (t) => t.id === tabId
-            )?.generating;
-            // Its background agents ended with it.
-            if (jobsRunning(tabId)) setJobs(tabId, {});
-            setState((prev) => ({
-              ...prev,
-              tabs: prev.tabs.map((tab) =>
-                tab.id === tabId ? { ...tab, generating: false } : tab
-              ),
-            }));
-            turnEnded(tabId);
-            updateTabLastAssistant(tabId, () => ({ streaming: false }));
-            // If the CLI process exited with an error while generating, show
-            // an error message
-            if (code !== 0 && code !== null && wasGenerating) {
-              const errorMsg: Message = {
-                role: "assistant",
-                content: `_Claude process exited unexpectedly (code ${code}). Start a new conversation to continue._`,
-                thinking: "",
-                toolCalls: [],
-                orderedBlocks: [],
-                streaming: false,
-              };
-              setState((prev) => ({
-                ...prev,
-                tabs: prev.tabs.map((tab) =>
-                  tab.id === tabId
-                    ? { ...tab, messages: [...tab.messages, errorMsg] }
-                    : tab
-                ),
-              }));
-            }
-            delete transportsRef.current[tabId];
-          },
-        });
-        transport.spawn();
-        transportsRef.current[tabId] = transport;
-      }
-
+      // Voice mode changes the persona, which goes with every message; the
+      // Mac swaps the process between turns when it differs.
+      transportPromptRef.current[tabId] = promptFor(tab);
+      const transport = ensureTransport(tabId);
+      transport.setAppendSystemPrompt(promptFor(tab));
       // The main chat's reminder rides on every message (never shown).
-      const isMain = !!stateRef.current.tabs.find((t) => t.id === tabId)?.isMain;
-      transportsRef.current[tabId].sendUserMessage(
-        isMain && !meta?.isCompaction ? withMainChatReminder(content) : content,
-        options.askFirst
-      );
+      transport.sendUserMessage(tab.isMain && !meta?.isCompaction ? withMainChatReminder(content) : content, options.askFirst, { qid });
     },
     [options, makeProcessEvent, updateTabLastAssistant]
   );
-
-  sendMessageRef.current = sendMessage;
 
   const sendPermissionResponse = useCallback(
     (requestId: string, behavior: "allow" | "allow_always" | "deny") => {
@@ -1265,44 +1274,83 @@ export function useSessionManager(options: SessionManagerOptions) {
     setState((prev) => ({ tabs: [...prev.tabs, tab], activeTabId: tab.id }));
     // Opened on the Mac too (not the main chat, which is always there).
     if (pastSession.id !== mainSid()) tellMac.open(pastSession.id, tab.title);
-
-    backfill(tab.id, pastSession.id);
+    // Its history is fetched by the loader below, once the tab exists.
   }, [options.gatewayUrl]);
 
+  /** History messages from the Mac, as chat messages. */
+  const toChat = (history: { messages: any[] }): Message[] =>
+    history.messages.map((m: any) => {
+      // Hand-offs from a live call carry the marker in the prompt itself.
+      const handoff = m.role === "user" && typeof m.content === "string" && m.content.includes(HANDOFF_MARKER);
+      return {
+        role: m.role,
+        content: m.content,
+        thinking: m.thinking || "",
+        toolCalls: m.toolCalls || [],
+        orderedBlocks: m.orderedBlocks || [],
+        streaming: false,
+        handoff: handoff || undefined,
+        displayText: handoff ? handoffRequestText(m.content) : m.displayText,
+      };
+    });
+
   /**
-   * Fill an open tab with its conversation's history from the gateway. The
-   * tab shows it's loading until then; if the Mac can't be reached, or
-   * doesn't answer in time, it says so with a retry instead.
+   * One page of history with its voice calls threaded in where they started.
+   * A call belongs to the page its position falls in (the newest page also
+   * takes the ones after the last message).
+   */
+  const withCalls = (messages: Message[], calls: VoiceCallRecord[], offset: number, total: number): Message[] => {
+    const end = offset + messages.length;
+    const mine = (calls || []).filter((c) => c.after >= offset && (c.after < end || end >= total));
+    return threadCalls(
+      messages,
+      mine.map((c) => ({ ...c, after: c.after - offset })),
+      (call) => ({ role: "system" as const, content: "", streaming: false, voiceCall: mine.find((c) => c.id === call.id) || call })
+    );
+  };
+
+  /** A request to the Mac that settles no matter what: its answer, its error, or ours after `ms`. */
+  function settleWithin<T>(p: Promise<T>, ms: number, why: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(why)), ms);
+      p.then(
+        (v) => {
+          clearTimeout(timer);
+          resolve(v);
+        },
+        (e) => {
+          clearTimeout(timer);
+          reject(e);
+        }
+      );
+    });
+  }
+
+  /**
+   * Fill an open tab with its conversation's history from the Mac: the newest
+   * page first (older pages load when scrolling up). Asking for it also
+   * subscribes the tab to the conversation, so a turn under way arrives right
+   * after, live. The tab shows it's loading until then; if the Mac can't be
+   * reached, or doesn't answer in time, it says so with a retry instead. It
+   * always settles: the client's own timeout, and a second one here.
    */
   function backfill(id: string, sessionId: string) {
     const url = optionsRef.current.gatewayUrl;
+    if (!url) return;
+    requestedRef.current.add(id);
     setState((prev) => ({
       ...prev,
       tabs: prev.tabs.map((t) => (t.id === id ? { ...t, loading: true, loadError: undefined } : t)),
     }));
-    loadSessionHistory(url, sessionId)
+    // Listening before asking, so nothing the Mac sends right after is missed.
+    const transport = ensureTransport(id);
+    settleWithin(
+      loadSessionHistory(url, sessionId, { tabId: transport.wireId }),
+      HISTORY_TIMEOUT_MS + 5000,
+      "Your Mac didn't send it in time."
+    )
       .then((history) => {
-        const claudeMessages: Message[] = history.messages.map((m) => {
-          // Hand-offs from a live call carry the marker in the prompt itself.
-          const handoff = m.role === "user" && m.content.includes(HANDOFF_MARKER);
-          return {
-            role: m.role,
-            content: m.content,
-            thinking: m.thinking || "",
-            toolCalls: m.toolCalls || [],
-            orderedBlocks: m.orderedBlocks || [],
-            streaming: false,
-            handoff: handoff || undefined,
-            displayText: handoff ? handoffRequestText(m.content) : m.displayText,
-          };
-        });
-        // Each voice call goes back in as its one line, where it started.
-        const messages = threadCalls(claudeMessages, history.voiceCalls || [], (call) => ({
-          role: "system" as const,
-          content: "",
-          streaming: false,
-          voiceCall: call,
-        }));
+        const messages = withCalls(toChat(history), history.voiceCalls || [], history.offset, history.total);
         // Continue on the model the conversation was actually built with, rather
         // than the hardcoded mobile default. Resuming must not silently switch
         // models mid-conversation — and forcing a long conversation onto a
@@ -1314,7 +1362,7 @@ export function useSessionManager(options: SessionManagerOptions) {
             if (t.id !== id) return t;
             // Only if nothing has been said in it yet on this phone.
             if (t.messages.length > 0) return { ...t, loading: false, loadError: undefined };
-            return { ...t, messages, model: inheritedModel, loading: false, loadError: undefined };
+            return { ...t, messages, model: inheritedModel, loading: false, loadError: undefined, historyOffset: history.offset };
           }),
         }));
       })
@@ -1325,18 +1373,60 @@ export function useSessionManager(options: SessionManagerOptions) {
           ...prev,
           tabs: prev.tabs.map((t) => (t.id === id ? { ...t, loading: false, loadError: cause } : t)),
         }));
-      });
+      })
+      .finally(() => requestedRef.current.delete(id));
   }
 
   /** Try loading a conversation's history again (after it failed). */
   const retryLoad = useCallback((tabId: string) => {
     const t = stateRef.current.tabs.find((x) => x.id === tabId);
-    if (t?.cliSessionId) backfill(t.id, t.cliSessionId);
+    if (t?.cliSessionId && !requestedRef.current.has(tabId)) backfill(t.id, t.cliSessionId);
   }, []);
 
+  /** Scrolled to the top: load the page of messages before the ones shown. */
+  const loadOlder = useCallback((tabId: string) => {
+    const t = stateRef.current.tabs.find((x) => x.id === tabId);
+    const url = optionsRef.current.gatewayUrl;
+    if (!t?.cliSessionId || !url || t.loadingOlder || !t.historyOffset || t.historyOffset <= 0) return;
+    const before = t.historyOffset;
+    setState((prev) => ({ ...prev, tabs: prev.tabs.map((x) => (x.id === tabId ? { ...x, loadingOlder: true, olderError: undefined } : x)) }));
+    settleWithin(
+      loadSessionHistory(url, t.cliSessionId, { before }),
+      HISTORY_TIMEOUT_MS + 5000,
+      "Your Mac didn't send the earlier messages in time."
+    )
+      .then((page) => {
+        const older = withCalls(toChat(page), page.voiceCalls || [], page.offset, page.total);
+        setState((prev) => ({
+          ...prev,
+          tabs: prev.tabs.map((x) =>
+            x.id !== tabId || x.historyOffset !== before
+              ? x
+              : { ...x, messages: [...older, ...x.messages], historyOffset: page.offset, loadingOlder: false }
+          ),
+        }));
+      })
+      .catch((e: any) => {
+        const cause = e?.message || String(e);
+        console.error("[hyo] Couldn't load earlier messages:", cause);
+        setState((prev) => ({ ...prev, tabs: prev.tabs.map((x) => (x.id === tabId ? { ...x, loadingOlder: false, olderError: cause } : x)) }));
+      });
+  }, []);
+
+  // Every tab waiting for its history has a request out for it. Tabs come
+  // from several places (opening from History, the Mac's list, the main
+  // chat, the desk restored at startup); asking here, after they exist, means
+  // none is ever left on "Loading conversation…" with nothing asked.
+  useEffect(() => {
+    if (!options.gatewayUrl) return;
+    for (const t of state.tabs) {
+      if (t.loading && t.cliSessionId && !requestedRef.current.has(t.id)) backfill(t.id, t.cliSessionId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.tabs, options.gatewayUrl]);
   // Close a list's busy tabs only once their work is done.
   const isBusy = (t: TabSession) =>
-    t.generating || jobsRunning(t.id) || !!turnRunningRef.current[t.id] || (queuedSendsRef.current[t.id]?.length ?? 0) > 0;
+    t.generating || jobsRunning(t.id) || !!turnRunningRef.current[t.id] || hasQueued(t.messages) || draftsRef.current.has(t.id);
 
   const blankTab = (): TabSession => ({
     id: genId(),
@@ -1375,16 +1465,16 @@ export function useSessionManager(options: SessionManagerOptions) {
       const tabs = r.tabs.filter((t) => t.isMain || t.cliSessionId || t.messages.length > 0);
       return { tabs, activeTabId: startupActive(tabs, startup.activeId) || tabs[tabs.length - 1].id };
     });
-    // The updater has run by the next tick: let go of closed tabs' processes
-    // and load the history of the ones just opened.
+    // The updater has run by the next tick: stop hearing closed tabs. (The
+    // ones just opened load their history from the loader effect.)
     setTimeout(() => {
       for (const t of done.closed) {
         transportsRef.current[t.id]?.stop();
         delete transportsRef.current[t.id];
         delete streamStatesRef.current[t.id];
         delete jobsRef.current[t.id];
+        draftsRef.current.delete(t.id);
       }
-      for (const t of done.opened) if (t.cliSessionId) backfill(t.id, t.cliSessionId);
     }, 0);
   };
   const applyOpenListRef = useRef(applyOpenList);
@@ -1475,35 +1565,17 @@ export function useSessionManager(options: SessionManagerOptions) {
   }, [state.tabs, state.activeTabId, restoreKey, options.gatewayUrl]);
 
   // The main chat listens from the moment it's open: what's said on the Mac
-  // shows here as it happens, and a turn already running is picked up.
+  // shows here as it happens, and a turn already running is picked up. (With
+  // history to load, asking for it subscribes it; otherwise it attaches now.)
   useEffect(() => {
     if (!options.gatewayUrl) return;
     for (const t of state.tabs) {
       if (!t.isMain || transportsRef.current[t.id]) continue;
-      if (!streamStatesRef.current[t.id]) streamStatesRef.current[t.id] = { ...newStreamState(), turnDone: true };
-      const transport = new GatewayTransport({
-        gatewayUrl: options.gatewayUrl,
-        tabId: MAIN_CHAT_WIRE_ID,
-        ...sessionSpawn(t.cliSessionId ?? null, t.sessionPending),
-        appendSystemPrompt: promptFor(t),
-        model: t.model || options.model,
-        agent: options.agent,
-        onMessage: makeProcessEvent(t.id),
-        onError: (error) => console.error("[hyo] Gateway error:", error),
-        onClose: () => {
-          setState((prev) => ({ ...prev, tabs: prev.tabs.map((x) => (x.id === t.id ? { ...x, generating: false } : x)) }));
-          turnEnded(t.id);
-          updateTabLastAssistant(t.id, () => ({ streaming: false }));
-        },
-      });
-      transport.spawn();
-      transport.attach();
-      transportPromptRef.current[t.id] = promptFor(t);
-      transportsRef.current[t.id] = transport;
+      const transport = ensureTransport(t.id);
+      if (!t.loading) transport.attach();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.tabs, options.gatewayUrl]);
-
   // ---- The main chat --------------------------------------------------------
   // Same as desktop: a pinned first tab carrying the one long conversation
   // (the id comes from the synced settings), and what Hyo opens to when
@@ -1542,10 +1614,8 @@ export function useSessionManager(options: SessionManagerOptions) {
       }
       return { tabs: mainFirst(tabs), activeTabId };
     });
-    // setState's updater has run by the next tick; then read its history.
-    setTimeout(() => {
-      if (filled) backfill(filled.id, filled.sid);
-    }, 0);
+    // Its history (if it has any) is fetched by the loader effect.
+    void filled;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [options.mainChat, options.gatewayUrl]);
 
@@ -1629,13 +1699,12 @@ export function useSessionManager(options: SessionManagerOptions) {
     (tabId: string): boolean => {
       // The Mac's old process is stopped so the next send starts the updated
       // Claude. Background jobs running in it would stop too, so that waits.
+      // The tab keeps hearing the conversation throughout.
       const restart = () => {
-        const existing = transportsRef.current[tabId];
-        if (existing) {
-          try {
-            existing.stop();
-          } catch {}
-          delete transportsRef.current[tabId];
+        try {
+          transportsRef.current[tabId]?.restartProcess();
+        } catch (e) {
+          console.error("[hyo] Couldn't ask the Mac to restart Claude:", e);
         }
       };
 
@@ -1701,6 +1770,41 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
 
+  /**
+   * The message box of a tab has text in it (or not). A conversation closed
+   * on the Mac stays open here while its box has text, so nothing typed is
+   * lost; once the box is empty, the close goes ahead. Sending reopens it
+   * everywhere instead.
+   */
+  const setDraft = useCallback((tabId: string, text: string) => {
+    const has = !!text && !!text.trim();
+    if (has === draftsRef.current.has(tabId)) return;
+    if (has) draftsRef.current.add(tabId);
+    else {
+      draftsRef.current.delete(tabId);
+      if (remoteRef.current) applyOpenListRef.current(remoteRef.current);
+    }
+  }, []);
+
+  // The conversation in view was closed on the Mac, and stays here only
+  // because there's text in its box.
+  const activeSid = activeTab && !activeTab.isMain ? activeTab.cliSessionId : null;
+  const activeClosedElsewhere =
+    !!activeSid &&
+    activeSid !== mainSid() &&
+    !!openList &&
+    syncedRef.current.get(activeTab!.id) === activeSid &&
+    !openList.some((e) => e.id === activeSid) &&
+    !pendingRef.current.blocksClose(activeSid);
+
+  // What each open conversation's row shows when this phone hasn't loaded it
+  // yet: its last line and when it was last active, from the Mac.
+  const openHints = useMemo(() => {
+    const m: Record<string, { peek?: string; lastActive?: number }> = {};
+    for (const e of openList || []) if (e.peek || e.lastActive) m[e.id] = { peek: e.peek, lastActive: e.lastActive };
+    return m;
+  }, [openList]);
+
   /** Background jobs still running in a tab (closing it would stop them). */
   const tabJobs = useCallback((tabId: string): BackgroundJob[] => jobList(jobsRef.current[tabId]), []);
 
@@ -1712,6 +1816,13 @@ export function useSessionManager(options: SessionManagerOptions) {
   );
 
   return {
+    setDraft,
+    activeClosedElsewhere,
+    openHints,
+    loadOlder,
+    activeHasOlder: (activeTab?.historyOffset ?? 0) > 0,
+    activeLoadingOlder: !!activeTab?.loadingOlder,
+    activeOlderError: activeTab?.olderError || null,
     pinnedSessionIds,
     activeLoading: !!activeTab?.loading,
     activeLoadError: activeTab?.loadError || null,

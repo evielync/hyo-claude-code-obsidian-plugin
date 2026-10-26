@@ -1,18 +1,21 @@
-// Hyo Gateway Host — desktop-only in-plugin port of the standalone
-// hyo-gateway.mjs script (~/Dropbox/chad/scripts/hyo-gateway/hyo-gateway.mjs).
+// Hyo Gateway Host — the desktop end of mobile access.
 //
-// Lets the Obsidian plugin host the mobile WebSocket gateway itself instead
-// of requiring Ev to run a standalone Node script. Same wire protocol as the
-// original script: the phone is a thin client, every request carries a
-// `tabId`, and the gateway maps tabId -> a live `claude` subprocess,
-// multiplexing its stream-json output back over the socket tagged by tabId.
+// The phone is a thin client over one WebSocket. Every conversation it has
+// open is subscribed (by the phone's tab id) to the Mac's one Claude
+// process for that conversation, the same one the desktop panels use
+// (session-owner.ts), and its events come back tagged with the tab id.
+// Conversations, history, the open list, agents and skills all come from
+// the Working directory, which can differ from the vault; the vault only
+// names the phone's address.
 //
 // RPCs (client -> server), all JSON:
 //   { type:'list_sessions' }
-//   { type:'get_history',  sessionId }
+//   { type:'get_history',  sessionId, requestId?, tabId?, before? }   (a page; tabId subscribes)
+//   { type:'attach',       tabId, sessionId }
+//   { type:'restart',      tabId }
 //   { type:'rename',       sessionId, title }
 //   { type:'set_task_meta', sessionId, patch }
-//   { type:'prompt',       tabId, text, sessionId?, resume?, agent?, model? }
+//   { type:'prompt',       tabId, text, content?, qid?, sessionId?, askFirst?, agent?, model?, appendSystemPrompt? }
 //   { type:'reattach',     tabIds:[...] }
 //   { type:'permission_response', tabId, requestId, behavior, toolName?, updatedInput? }
 //   { type:'interrupt',    tabId }
@@ -27,10 +30,10 @@
 //   { type:'open_replace', oldId, id, title, opId }
 //   { type:'ping' }
 // Server -> client:
-//   { type:'open_list', entries:[{ id, title, pinned? }], sync?, ack? }
+//   { type:'open_list', entries:[{ id, title, pinned?, peek?, lastActive? }], sync?, ack? }
 //   { type:'stream', tabId, event }
 //   { type:'sessions', sessions:[...] }
-//   { type:'history', sessionId, lines:[...] }
+//   { type:'history', sessionId, requestId, paged:true, messages, offset, total, model, voiceCalls }
 //   { type:'renamed', sessionId, title }
 //   { type:'task_meta_set', sessionId }
 //   { type:'title', requestId, title }
@@ -40,12 +43,22 @@
 
 import { Platform, Notice } from "obsidian";
 import { debug } from "./debug";
-import { getProjectDir, saveCustomTitle, setTaskMeta, saveVoiceCall, getVoiceCalls } from "./session-parser";
+import { getProjectDir, saveCustomTitle, setTaskMeta, saveVoiceCall, getVoiceCalls, readTranscriptEntries, parseSessionEntries, type HistoryMessage } from "./session-parser";
+import { transcriptModel, resumeModel } from "./models";
 import { callOnlySessions } from "./voice/voice-call";
 import { buildLiveInstructions, readAgentIdentity } from "./voice/gpt-live";
-import { applyJobEvent, hasRunningJobs, type JobMap } from "./background-jobs";
-import { mainChatOwner, gatewayMainChat, gatewayClientGone, MAIN_CHAT_WIRE_ID } from "./main-chat-owner";
-import { openConversations, gatewayOpenList, gatewayOpenListGone, gatewayOpenListReset } from "./open-conversations";
+import {
+  mainChatOwner,
+  findSessionOwner,
+  gatewaySession,
+  gatewayAttach,
+  gatewaySessionGone,
+  gatewaySessionReset,
+  restartIdleOwners,
+  onTurnEnded,
+  type GatewaySessionContext,
+} from "./session-owner";
+import { openConversations, gatewayOpenList, gatewayOpenListGone, gatewayOpenListReset, gatewayOpenListRefresh, type OpenEntry } from "./open-conversations";
 import type * as FsType from "fs";
 import type * as PathType from "path";
 import type * as OsType from "os";
@@ -122,99 +135,17 @@ export interface GatewayStatus {
   detail?: string;
 }
 
-interface TabState {
-  proc: ChildProcess;
-  buffer: string;
-  detach: boolean;
-  client: WsSocket | null;
-  outbox: unknown[];
-  pendingToolInput: Map<string, Record<string, unknown>>;
-  graceTimer: ReturnType<typeof setTimeout> | null;
-  lastActivity: number;
-  // True from a user prompt until the CLI's `result` event. A working tab is
-  // never grace-killed on disconnect — pocketing the phone mid-task must not
-  // stop the task. The grace window starts when the work finishes instead.
-  generating: boolean;
-  // Background agents running in this process. They count as work the same
-  // way: the process (and they) must outlive a pocketed phone.
-  jobs: JobMap;
-}
-
-interface SpawnTabOptions {
-  sessionId?: string;
-  resume?: boolean;
-  askFirst?: boolean;
-  model?: string;
-  agent?: string;
-  thinkingTokens?: number;
-  detach?: boolean;
-  appendSystemPrompt?: string;
-}
-
 // ---- Module-level state (survives across prompts, cleaned up on stop) -----
 let wss: WsServer | null = null;
-let sweeper: ReturnType<typeof setInterval> | null = null;
 let activeConfig: Required<GatewayHostConfig> | null = null;
 let activeEnv: NodeJS.ProcessEnv | null = null;
-const tabs = new Map<string, TabState>();
-
-const GRACE_MS = 180000; // 3 min — window for a mobile blip to reconnect
-const IDLE_MAX_MS = 1800000; // 30 min — abandoned-tab idle ceiling
-const SWEEP_MS = 30000; // idle check cadence
-const MAX_OUTBOX = 5000; // cap buffered events / tab
-
-const nowMs = () => Date.now();
-
+let offTurnEnded: (() => void) | null = null;
 function sendTo(ws: WsSocket | null | undefined, obj: unknown): void {
   try {
     if (ws && ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
   } catch {
     // socket gone — nothing to do
   }
-}
-
-function emitToTab(state: TabState, obj: unknown): void {
-  if (state.client && state.client.readyState === state.client.OPEN) {
-    try {
-      state.client.send(JSON.stringify(obj));
-      return;
-    } catch {
-      // fall through to buffering
-    }
-  }
-  if (state.detach) return;
-  state.outbox.push(obj);
-  if (state.outbox.length > MAX_OUTBOX) {
-    state.outbox.splice(0, state.outbox.length - MAX_OUTBOX);
-  }
-}
-
-function attachClient(state: TabState, ws: WsSocket): void {
-  state.client = ws;
-  state.lastActivity = nowMs();
-  if (state.graceTimer) {
-    clearTimeout(state.graceTimer);
-    state.graceTimer = null;
-  }
-  const pending = state.outbox;
-  state.outbox = [];
-  for (const obj of pending) sendTo(ws, obj);
-}
-
-function killTab(tabId: string, why: string): void {
-  const state = tabs.get(tabId);
-  if (!state) return;
-  if (state.graceTimer) {
-    clearTimeout(state.graceTimer);
-    state.graceTimer = null;
-  }
-  try {
-    if (state.proc && !state.proc.killed) state.proc.kill("SIGTERM");
-  } catch {
-    // already dead
-  }
-  tabs.delete(tabId);
-  debug(`[hyo][gateway] reap tab=${tabId} (${why})`);
 }
 
 // ---- History: read Claude Code's own session files -------------------------
@@ -491,20 +422,112 @@ function searchSessions(cwd: string, query: string): Record<string, string> {
   return hits;
 }
 
-function getHistoryLines(cwd: string, sessionId: string) {
-  const dir = getProjectDir(cwd);
-  const full = path.join(dir, `${sessionId}.jsonl`);
-  if (!fs.existsSync(full)) return [];
-  const out: any[] = [];
-  for (const line of fs.readFileSync(full, "utf8").split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      out.push(JSON.parse(line));
-    } catch {
-      // skip malformed line
-    }
+// ---- History for the phone, a page at a time --------------------------------
+// A long conversation is megabytes of transcript (one of Ev's: 720 lines,
+// 6.3 MB) and used to go to the phone in one WebSocket message, which could
+// take longer than the phone would wait. The Mac parses the transcript with
+// the same parser the desktop uses and sends the newest messages first, a
+// bounded page at a time; the phone asks for older pages as it scrolls up.
+// Long tool output and thinking are shortened on the way: the phone shows
+// them folded, and the full text stays in the transcript.
+const PAGE_BYTES = 300_000;
+const PAGE_MAX_MESSAGES = 80;
+const PHONE_TEXT_MAX = 4000;
+
+function shorten(text: unknown, max: number): unknown {
+  if (typeof text !== "string" || text.length <= max) return text;
+  return text.slice(0, max) + "\n… (shortened for your phone; the full text is on your Mac)";
+}
+
+function shortenInput(input: any): any {
+  if (!input || typeof input !== "object") return input;
+  let size = 0;
+  try {
+    size = JSON.stringify(input).length;
+  } catch {
+    return {};
   }
+  if (size <= PHONE_TEXT_MAX * 2) return input;
+  const out: any = Array.isArray(input) ? [] : {};
+  for (const [k, v] of Object.entries(input)) out[k] = typeof v === "string" ? shorten(v, PHONE_TEXT_MAX) : v;
   return out;
+}
+
+/** One message made light enough for the phone. */
+export function forPhone(m: HistoryMessage): HistoryMessage {
+  return {
+    ...m,
+    thinking: m.thinking ? (shorten(m.thinking, PHONE_TEXT_MAX * 2) as string) : m.thinking,
+    toolCalls: m.toolCalls?.map((t) => ({ ...t, input: shortenInput(t.input), result: shorten(t.result, PHONE_TEXT_MAX) as string | null })),
+    orderedBlocks: m.orderedBlocks?.map((b) => (b.type === "thinking" ? { ...b, content: shorten(b.content, PHONE_TEXT_MAX * 2) as string } : b)),
+  };
+}
+
+export interface HistoryPage {
+  messages: HistoryMessage[];
+  /** Index of the first message in the whole conversation. */
+  offset: number;
+  total: number;
+  model: string | null;
+}
+
+/**
+ * The page of a conversation ending before message `before` (the newest
+ * page when it's left out), cut where a turn still under way began
+ * (`untilLine`), so that turn arrives live instead.
+ */
+export function historyPage(cwd: string, sessionId: string, opts: { before?: number; untilLine?: number | null; maxBytes?: number } = {}): HistoryPage {
+  const entries = readTranscriptEntries(cwd, sessionId, opts.untilLine ?? null);
+  const all = parseSessionEntries(entries);
+  const { model, contextTokens } = transcriptModel(entries);
+  const total = all.length;
+  const end = typeof opts.before === "number" ? Math.max(0, Math.min(total, opts.before)) : total;
+  const budget = opts.maxBytes ?? PAGE_BYTES;
+  const page: HistoryMessage[] = [];
+  let bytes = 0;
+  let start = end;
+  while (start > 0 && page.length < PAGE_MAX_MESSAGES) {
+    const m = forPhone(all[start - 1]);
+    const size = JSON.stringify(m).length;
+    if (page.length > 0 && bytes + size > budget) break;
+    page.unshift(m);
+    bytes += size;
+    start--;
+  }
+  return { messages: page, offset: start, total, model: resumeModel(model, contextTokens) };
+}
+
+/** Where a turn under way began in this conversation's transcript, if one is. */
+function turnCut(cwd: string, sessionId: string): number | null {
+  const own = findSessionOwner(cwd, sessionId);
+  if (own) return own.turnStartLine;
+  const main = mainChatOwner(cwd);
+  return main && main.sessionId === sessionId ? main.turnStartLine : null;
+}
+
+// What an Open row on the phone shows besides the title: the last line and
+// when it was last active. Read from the transcript's tail, and kept until
+// the file changes.
+const peekCache = new Map<string, { mtime: number; size: number; peek: string; lastActive: number }>();
+
+function peekOf(cwd: string, sessionId: string): { peek?: string; lastActive?: number } {
+  const file = path.join(getProjectDir(cwd), `${sessionId}.jsonl`);
+  try {
+    const st = fs.statSync(file);
+    const hit = peekCache.get(file);
+    if (hit && hit.mtime === st.mtimeMs && hit.size === st.size) return { peek: hit.peek, lastActive: hit.lastActive };
+    const lm = lastMessage(file);
+    const v = { mtime: st.mtimeMs, size: st.size, peek: lm.snippet, lastActive: Math.round(st.mtimeMs) };
+    peekCache.set(file, v);
+    if (peekCache.size > 500) peekCache.delete(peekCache.keys().next().value as string);
+    return { peek: v.peek, lastActive: v.lastActive };
+  } catch {
+    return {};
+  }
+}
+
+function withPeeks(cwd: string, entries: OpenEntry[]): OpenEntry[] {
+  return entries.map((e) => ({ ...e, ...peekOf(cwd, e.id) }));
 }
 
 // ---- Agent listing (list_agents RPC) ---------------------------------------
@@ -626,138 +649,6 @@ function generateTitle(cliPath: string, env: NodeJS.ProcessEnv, userMessage: str
       resolve(null);
     });
   });
-}
-
-// ---- Tab spawn/write --------------------------------------------------------
-function spawnTab(
-  tabId: string,
-  ws: WsSocket | null,
-  config: Required<GatewayHostConfig>,
-  env: NodeJS.ProcessEnv,
-  opts: SpawnTabOptions = {},
-): TabState {
-  const { sessionId, resume, askFirst, model, agent, thinkingTokens, detach, appendSystemPrompt } = opts;
-  const ask = askFirst !== false;
-  const args = [
-    "--output-format",
-    "stream-json",
-    "--input-format",
-    "stream-json",
-    "--verbose",
-    "--model",
-    model || config.defaultModel,
-    "--max-thinking-tokens",
-    thinkingTokens ? String(thinkingTokens) : "31999",
-    "--no-chrome",
-  ];
-  // Only pass --agent when one is actually set. An empty string would become
-  // `--agent ""`, which the CLI rejects; leaving it off uses the CLI default.
-  const resolvedAgent = agent || config.defaultAgent;
-  if (resolvedAgent) args.push("--agent", resolvedAgent);
-  if (ask) {
-    // Ask-first drops desktop local settings, then loads the phone's own
-    // allowlist back on via --settings (non-destructive defaults + anything
-    // the user has "Always allow"ed on the device).
-    ensureMobileSettings();
-    args.push(
-      "--permission-mode", "default",
-      "--permission-prompt-tool", "stdio",
-      "--setting-sources", "user,project",
-      "--settings", mobileSettingsPath(),
-    );
-  } else {
-    args.push("--permission-mode", "bypassPermissions");
-  }
-  // A conversation that began as a voice call has an id but no transcript
-  // yet: Claude starts it with --session-id rather than resuming nothing.
-  const canResume = !!resume && !!sessionId && fs.existsSync(path.join(getProjectDir(config.getCwd()), `${sessionId}.jsonl`));
-  if (canResume) args.push("--resume", sessionId!);
-  else if (sessionId) args.push("--session-id", sessionId);
-  if (appendSystemPrompt) args.push("--append-system-prompt", appendSystemPrompt);
-
-  debug(`[hyo][gateway] spawn tab=${tabId} askFirst=${ask} ${resume ? "resume " + sessionId : "new"}${appendSystemPrompt ? " voice" : ""}`);
-  const spawnOpts: SpawnOptionsWithoutStdio = { cwd: config.getCwd(), env, stdio: ["pipe", "pipe", "pipe"] } as any;
-  const proc = spawn(config.cliPath, args, spawnOpts);
-
-  const state: TabState = {
-    proc,
-    buffer: "",
-    detach: !!detach,
-    client: ws || null,
-    outbox: [],
-    generating: false,
-    jobs: {},
-    pendingToolInput: new Map(),
-    graceTimer: null,
-    lastActivity: nowMs(),
-  };
-  tabs.set(tabId, state);
-
-  proc.stdout?.on("data", (chunk: Buffer) => {
-    state.lastActivity = nowMs();
-    state.buffer += chunk.toString();
-    const lines = state.buffer.split("\n");
-    state.buffer = lines.pop() || "";
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      let ev: any;
-      try {
-        ev = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (ev.type === "control_request" && ev.request?.subtype === "can_use_tool") {
-        state.pendingToolInput.set(ev.request_id, ev.request.input ?? {});
-      }
-      if (ev.type === "system") {
-        const next = applyJobEvent(state.jobs, ev);
-        if (next) {
-          state.jobs = next;
-          // The last background job finished with nobody watching.
-          if (!hasRunningJobs(next) && !state.generating) startGraceIfUnwatched(tabId, state);
-        }
-      }
-      // A sub-agent's own result isn't the turn ending.
-      if (ev.type === "result" && !ev.parent_tool_use_id) {
-        state.generating = false;
-        // The turn finished with nobody watching: the reply is saved, so the
-        // usual disconnect grace starts now rather than mid-work, unless
-        // background jobs are still running in this process.
-        if (!hasRunningJobs(state.jobs)) startGraceIfUnwatched(tabId, state);
-      }
-      emitToTab(state, { type: "stream", tabId, event: ev });
-    }
-  });
-  proc.stderr?.on("data", (c: Buffer) => {
-    const t = c.toString();
-    if (!t.includes("[debug]")) debug(`[hyo][gateway] tab=${tabId} stderr: ${t.slice(0, 200)}`);
-  });
-  proc.on("close", (code) => {
-    state.jobs = {};
-    emitToTab(state, { type: "gateway", subtype: "tab_closed", tabId, code });
-    if (state.graceTimer) {
-      clearTimeout(state.graceTimer);
-      state.graceTimer = null;
-    }
-    tabs.delete(tabId);
-  });
-  proc.on("error", (e: Error) => emitToTab(state, { type: "gateway", subtype: "error", tabId, error: e.message }));
-  return state;
-}
-
-/** No phone attached and nothing running: start the window for it to come back. */
-function startGraceIfUnwatched(tabId: string, state: TabState): void {
-  if (!state.client && !state.detach && !state.graceTimer) {
-    state.graceTimer = setTimeout(() => killTab(tabId, "grace expired"), GRACE_MS);
-  }
-}
-
-function writeStdin(tabId: string, obj: unknown): void {
-  const t = tabs.get(tabId);
-  if (t?.proc?.stdin?.writable) {
-    t.proc.stdin.write(JSON.stringify(obj) + "\n");
-    t.lastActivity = nowMs();
-  }
 }
 
 // ---- Tailscale exposure ------------------------------------------------------
@@ -1207,6 +1098,7 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
   debug(`[hyo][gateway] [${cid}] connected`);
   ctx.onClients?.(1);
   const send = (obj: unknown) => sendTo(ws, obj);
+  const sink = { send, isOpen: () => ws.readyState === ws.OPEN };
 
   ws.on("message", async (data: Buffer | string) => {
     const cfg = ctx.config();
@@ -1220,40 +1112,59 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
       return;
     }
     try {
-      // The main chat: the phone attaches to the Mac's one process for it
-      // instead of starting its own (main-chat-owner.ts).
-      const owner = mainChatOwner(cwd);
-      if (
-        owner &&
-        gatewayMainChat(owner, m, ws, { send }, (p) => ({
-          cliPath: cfg.cliPath,
-          cwd: cwd,
-          model: p.model || cfg.defaultModel,
-          permissionMode: p.askFirst === false ? "bypassPermissions" : "default",
-          agent: p.agent || cfg.defaultAgent,
-          sessionId: p.sessionId || null,
-          resume: !!p.resume,
-          appendSystemPrompt: p.appendSystemPrompt,
-        }))
-      ) {
-        return;
-      }
+      // Every conversation the phone has open attaches to the Mac's one
+      // process for it (session-owner.ts): prompts, answers, stop, reattach.
+      const sessionCtx: GatewaySessionContext = {
+        cwd,
+        mintId: () => randomUUID(),
+        allowOnPhone: addMobileAllow,
+        specFor: (p, sessionId) => {
+          // Ask-first drops the desktop's local settings and loads the
+          // phone's own allowlist back on, as the phone's processes always did.
+          const ask = p.askFirst !== false;
+          if (ask) ensureMobileSettings();
+          return {
+            cliPath: cfg.cliPath,
+            cwd,
+            model: p.model || cfg.defaultModel,
+            permissionMode: ask ? "default" : "bypassPermissions",
+            agent: p.agent || cfg.defaultAgent,
+            sessionId,
+            appendSystemPrompt: p.appendSystemPrompt,
+            adopt: true,
+            ...(ask ? { settingSources: "user,project", settingsPath: mobileSettingsPath() } : {}),
+          };
+        },
+      };
+      if (gatewaySession(m, ws, sink, sessionCtx)) return;
       // Which conversations are open, shared with the Mac's panels
-      // (open-conversations.ts). Pushed to the phone whenever it changes.
+      // (open-conversations.ts). Pushed to the phone whenever it changes,
+      // with each row's last line and when it was last active.
       const openList = openConversations(cwd);
-      if (openList && gatewayOpenList(openList, m, ws, { send })) return;
+      if (openList && gatewayOpenList(openList, m, ws, sink, (entries) => withPeeks(cwd, entries))) return;
       switch (m.type) {
         case "list_sessions":
           send({ type: "sessions", sessions: listSessions(cwd) });
           break;
-        case "get_history":
+        case "get_history": {
+          const sessionId = typeof m.sessionId === "string" ? m.sessionId : "";
+          const before = typeof m.before === "number" ? m.before : undefined;
+          const page = sessionId ? historyPage(cwd, sessionId, { before, untilLine: turnCut(cwd, sessionId) }) : { messages: [], offset: 0, total: 0, model: null };
           send({
             type: "history",
-            sessionId: m.sessionId,
-            lines: getHistoryLines(cwd, m.sessionId),
-            voiceCalls: getVoiceCalls(cwd, m.sessionId),
+            sessionId,
+            requestId: m.requestId,
+            paged: true,
+            ...page,
+            voiceCalls: getVoiceCalls(cwd, sessionId),
           });
+          // Opening it: the phone hears the conversation live from here on,
+          // starting with any turn under way (history stopped where it began).
+          if (typeof m.tabId === "string" && before === undefined && sessionId) {
+            gatewayAttach(sessionCtx, m.tabId, sessionId, ws, sink);
+          }
           break;
+        }
         case "search_sessions":
           send({ type: "search_results", query: m.query, hits: searchSessions(cwd, m.query) });
           break;
@@ -1279,93 +1190,6 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
           break;
         case "list_skills":
           send({ type: "skills", skills: listSkills(cwd) });
-          break;
-        case "reattach": {
-          const ids: string[] = Array.isArray(m.tabIds) ? m.tabIds : m.tabId ? [m.tabId] : [];
-          const attached: string[] = [],
-            gone: string[] = [];
-          for (const id of ids) {
-            if (id === MAIN_CHAT_WIRE_ID && owner) {
-              attached.push(id); // attached to the owner above
-              continue;
-            }
-            const state = tabs.get(id);
-            if (state) {
-              attachClient(state, ws);
-              attached.push(id);
-            } else gone.push(id);
-          }
-          debug(`[hyo][gateway] [${cid}] reattach — ${attached.length} live, ${gone.length} gone`);
-          send({ type: "gateway", subtype: "reattached", attached, gone });
-          break;
-        }
-        case "prompt": {
-          let state = tabs.get(m.tabId);
-          if (!state) {
-            // Per-prompt `agent`/`model` override the configured defaults —
-            // spawnTab falls back to config.defaultAgent/defaultModel only
-            // when the client doesn't send its own value.
-            state = spawnTab(m.tabId, ws, cfg, env, {
-              sessionId: m.sessionId,
-              resume: m.resume,
-              askFirst: m.askFirst,
-              model: m.model,
-              agent: m.agent,
-              thinkingTokens: m.thinkingTokens,
-              detach: m.detach,
-              appendSystemPrompt: m.appendSystemPrompt,
-            });
-          } else if (state.client !== ws) {
-            attachClient(state, ws);
-          }
-          // `content` is the client's full Anthropic block array — text plus
-          // any image/document blocks from attachments. The CLI's stream-json
-          // stdin accepts those blocks verbatim (verified 2026-09-12: a base64
-          // image block round-trips and the model describes the picture). A
-          // client that sends only `text` goes through the fallback.
-          const promptContent =
-            Array.isArray(m.content) && m.content.length > 0
-              ? m.content
-              : [{ type: "text", text: m.text }];
-          writeStdin(m.tabId, { type: "user", message: { role: "user", content: promptContent } });
-          state.generating = true;
-          break;
-        }
-        case "permission_response": {
-          const state = tabs.get(m.tabId);
-          const originalInput = state?.pendingToolInput.get(m.requestId) ?? {};
-          state?.pendingToolInput.delete(m.requestId);
-          const withInput = (base: Record<string, unknown>) => ({
-            ...base,
-            updatedInput: m.updatedInput ?? originalInput,
-          });
-
-          let response: Record<string, unknown>;
-          if (m.behavior === "deny") {
-            response = { behavior: "deny", message: "Denied by user", decisionClassification: "user_reject" };
-          } else if (m.behavior === "allow_always" && m.toolName) {
-            // Persist to the mobile allowlist (durable across sessions,
-            // device-only — never desktop rules). `session` destination
-            // makes it take effect immediately in the running process.
-            addMobileAllow(m.toolName);
-            response = withInput({
-              behavior: "allow",
-              decisionClassification: "user_permanent",
-              updatedPermissions: [
-                { type: "addRules", rules: [{ toolName: m.toolName }], behavior: "allow", destination: "session" },
-              ],
-            });
-          } else {
-            response = withInput({ behavior: "allow", decisionClassification: "user_temporary" });
-          }
-          writeStdin(m.tabId, { type: "control_response", response: { subtype: "success", request_id: m.requestId, response } });
-          break;
-        }
-        case "interrupt":
-          writeStdin(m.tabId, { type: "control_request", request_id: randomUUID(), request: { subtype: "interrupt" } });
-          break;
-        case "stop":
-          killTab(m.tabId, "client stop");
           break;
         case "generate_title": {
           const title = await generateTitle(cfg.cliPath, env, m.userMessage, m.assistantMessage);
@@ -1453,9 +1277,9 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
               );
               // Later spawns (the phone's resend) use the updated Claude.
               if (r.ok && r.cliPath) cfg.cliPath = r.cliPath;
-              // The main chat's shared process is still the old Claude:
-              // restart it once nothing is running in it.
-              if (r.ok) mainChatOwner(cwd)?.restart();
+              // Every idle conversation's process is still the old Claude:
+              // restart them now. A busy one swaps on its next message.
+              if (r.ok) restartIdleOwners();
               send({ type: "claude_update", requestId, phase: "done", ok: r.ok, error: r.error });
             } catch (e: any) {
               send({ type: "claude_update", requestId, phase: "done", ok: false, error: e?.message || String(e) });
@@ -1475,32 +1299,11 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
 
   ws.on("close", () => {
     ctx.onClients?.(-1);
-    const cfgNow = ctx.config();
-    if (cfgNow) gatewayClientGone(mainChatOwner(cfgNow.getCwd() || cfgNow.cwd), ws);
+    // The phone's conversations keep running on the Mac; their events wait
+    // a while for it to come back (session-owner.ts).
+    gatewaySessionGone(ws);
     gatewayOpenListGone(ws);
-    let inGrace = 0,
-      detached = 0,
-      working = 0;
-    for (const [tabId, state] of tabs) {
-      if (state.client !== ws) continue;
-      state.client = null;
-      if (state.detach) {
-        detached++;
-        continue;
-      }
-      // Mid-task tabs are left running: the disconnect grace only starts
-      // once the turn finishes (see the `result` handler). The 30-minute
-      // idle ceiling remains the backstop for a run that never finishes.
-      if (state.generating || hasRunningJobs(state.jobs)) {
-        working++;
-        continue;
-      }
-      if (!state.graceTimer) {
-        state.graceTimer = setTimeout(() => killTab(tabId, "grace expired"), GRACE_MS);
-      }
-      inGrace++;
-    }
-    debug(`[hyo][gateway] [${cid}] disconnected — ${working} still working, ${inGrace} in grace, ${detached} detached`);
+    debug(`[hyo][gateway] [${cid}] disconnected`);
   });
 }
 
@@ -1605,13 +1408,9 @@ export function startGatewayHost(config: GatewayHostConfig): void {
   // the toggle is the entire Mac-side setup — no Terminal command.
   setupTailscaleServe(resolved.port, vaultSlug(resolved.vault), resolved.onConnectUrl);
 
-  sweeper = setInterval(() => {
-    const now = nowMs();
-    for (const [tabId, state] of tabs) {
-      if (now - state.lastActivity > IDLE_MAX_MS) killTab(tabId, "idle ceiling");
-    }
-  }, SWEEP_MS);
-  if ((sweeper as any).unref) (sweeper as any).unref();
+  // A turn that ends moves an Open row's last line on: the phone hears it.
+  offTurnEnded?.();
+  offTurnEnded = onTurnEnded(() => gatewayOpenListRefresh());
 
   server.on("connection", (ws: WsSocket) =>
     attachGatewaySocket(ws, {
@@ -1753,13 +1552,9 @@ export async function checkMobileAccess(vaultPath: string, port: number): Promis
 export function stopGatewayHost(): void {
   if (Platform.isMobile) return;
 
-  if (sweeper) {
-    clearInterval(sweeper);
-    sweeper = null;
-  }
-  for (const tabId of Array.from(tabs.keys())) {
-    killTab(tabId, "gateway host stopped");
-  }
+  gatewaySessionReset();
+  offTurnEnded?.();
+  offTurnEnded = null;
   gatewayOpenListReset();
   if (wss) {
     try {

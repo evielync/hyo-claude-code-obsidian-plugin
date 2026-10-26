@@ -102,16 +102,32 @@ export interface SessionHistory {
   model: string | null;
   /** The conversation's voice calls, from the shared metadata. */
   voiceCalls: VoiceCallRecord[];
+  /** Where this page starts among all the conversation's messages (0: there's nothing older). */
+  offset: number;
+  /** How many messages the conversation has in all. */
+  total: number;
 }
 
 /**
- * A conversation's history from the gateway. Rejects when it can't be had
+ * A page of a conversation's history from the gateway: the newest part, or
+ * the part before message `before`. With `tabId`, opening it: the Mac starts
+ * sending that tab the conversation live too. Rejects when it can't be had
  * (not connected, or the Mac didn't answer in time), so the caller can say
  * so rather than showing an empty conversation.
  */
-export async function loadSessionHistory(gatewayUrl: string, sessionId: string): Promise<SessionHistory> {
-  const { lines, voiceCalls } = await GatewayClient.get(gatewayUrl).getHistory(sessionId);
-  return { messages: parseSessionLines(lines), model: extractSessionModel(lines), voiceCalls };
+export async function loadSessionHistory(
+  gatewayUrl: string,
+  sessionId: string,
+  opts: { tabId?: string; before?: number } = {}
+): Promise<SessionHistory> {
+  const reply = await GatewayClient.get(gatewayUrl).getHistory(sessionId, opts);
+  if (reply.messages) {
+    return { messages: reply.messages as HistoryMessage[], model: reply.model ?? null, voiceCalls: reply.voiceCalls as VoiceCallRecord[], offset: reply.offset, total: reply.total };
+  }
+  // A Mac from before paging sends the whole transcript.
+  const lines = reply.lines || [];
+  const messages = parseSessionLines(lines);
+  return { messages, model: extractSessionModel(lines), voiceCalls: reply.voiceCalls as VoiceCallRecord[], offset: 0, total: messages.length };
 }
 
 /** The model the conversation last ran on, from its main thread (a

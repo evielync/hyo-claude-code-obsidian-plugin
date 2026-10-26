@@ -20,8 +20,24 @@ export type ConnectionStatus =
 
 export type TabMessage =
   | { type: "stream"; event: any }
-  | { type: "closed"; code: number | null }
+  // The conversation's process ended. `subscribed`: this tab still hears the
+  // conversation (the next message starts a new process). `gone`: the Mac no
+  // longer has this tab (it was away too long, or the Mac restarted).
+  | { type: "closed"; code: number | null; subscribed?: boolean; gone?: boolean }
   | { type: "error"; error: string };
+
+/** A page of a conversation's history from the Mac (newest first when opened). */
+export interface HistoryReply {
+  /** Parsed messages (a paging Mac). */
+  messages?: any[];
+  /** Raw transcript lines (a Mac from before paging). */
+  lines?: any[];
+  voiceCalls: any[];
+  /** Index of the first message in the whole conversation. */
+  offset: number;
+  total: number;
+  model?: string | null;
+}
 
 export interface ClaudeUpdateResult {
   ok: boolean;
@@ -48,7 +64,7 @@ const RPC_TIMEOUT_MS = 35_000;
 // Opening a conversation waits on this, with "Loading conversation…" on
 // screen, so it's shorter than the other requests: long enough for a big
 // conversation over a slow connection, short enough not to leave a spinner.
-const HISTORY_TIMEOUT_MS = 30_000;
+export const HISTORY_TIMEOUT_MS = 30_000;
 const MAX_BACKOFF_MS = 30_000;
 const MAX_QUEUED_MESSAGES = 200;
 
@@ -80,9 +96,8 @@ export class GatewayClient {
   // engine/voice is set. Keyed by requestId.
   private liveSdpPending = new Map<string, PendingRPC<{ sdp: string }>>();
   private liveConfigPending = new Map<string, PendingRPC<{ engine: string; voice: string }>>();
-  // Several opens of one conversation (a retry, the main chat) can wait on the
-  // same answer, so each session id holds a list.
-  private historyPending = new Map<string, PendingRPC<{ lines: any[]; voiceCalls: any[] }>[]>();
+  // History requests, by request id (older Macs answer by session id only).
+  private historyPending = new Map<string, PendingRPC<HistoryReply> & { sessionId: string }>();
   // The shared open list (open-conversations.ts): pushed by the Mac whenever
   // it changes. Listeners also run after every reconnect.
   private openListeners = new Set<(entries: OpenEntry[], meta: { ack?: number; sync?: number }) => void>();
@@ -265,11 +280,9 @@ export class GatewayClient {
       p.reject(new Error("Gateway connection closed"));
     }
     this.searchQueue = [];
-    for (const list of this.historyPending.values()) {
-      for (const p of list) {
-        clearTimeout(p.timer);
-        p.reject(new Error("Gateway connection closed"));
-      }
+    for (const p of this.historyPending.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error("Gateway connection closed"));
     }
     this.historyPending.clear();
     this.openListeners.clear();
@@ -338,15 +351,24 @@ export class GatewayClient {
         return;
       }
       case "history": {
-        const waiting = this.historyPending.get(msg.sessionId);
-        if (waiting) {
-          this.historyPending.delete(msg.sessionId);
-          // voiceCalls: from a gateway that has them; older ones send none.
-          const result = { lines: msg.lines || [], voiceCalls: Array.isArray(msg.voiceCalls) ? msg.voiceCalls : [] };
-          for (const p of waiting) {
-            clearTimeout(p.timer);
-            p.resolve(result);
-          }
+        // voiceCalls: from a gateway that has them; older ones send none.
+        const result: HistoryReply = msg.paged
+          ? {
+              messages: Array.isArray(msg.messages) ? msg.messages : [],
+              voiceCalls: Array.isArray(msg.voiceCalls) ? msg.voiceCalls : [],
+              offset: typeof msg.offset === "number" ? msg.offset : 0,
+              total: typeof msg.total === "number" ? msg.total : 0,
+              model: typeof msg.model === "string" ? msg.model : null,
+            }
+          : { lines: msg.lines || [], voiceCalls: Array.isArray(msg.voiceCalls) ? msg.voiceCalls : [], offset: 0, total: 0 };
+        const byRequest = typeof msg.requestId === "string" ? this.historyPending.get(msg.requestId) : undefined;
+        const waiting = byRequest
+          ? [[msg.requestId, byRequest] as const]
+          : [...this.historyPending.entries()].filter(([, p]) => p.sessionId === msg.sessionId);
+        for (const [id, p] of waiting) {
+          this.historyPending.delete(id);
+          clearTimeout(p.timer);
+          p.resolve(result);
         }
         return;
       }
@@ -438,12 +460,12 @@ export class GatewayClient {
           // resumes it from the saved session id.
           const gone: string[] = Array.isArray(msg.gone) ? msg.gone : [];
           for (const tabId of gone) {
-            this.tabHandlers.get(tabId)?.({ type: "closed", code: null });
+            this.tabHandlers.get(tabId)?.({ type: "closed", code: null, gone: true });
           }
           return;
         }
         if (msg.subtype === "tab_closed" && msg.tabId) {
-          this.tabHandlers.get(msg.tabId)?.({ type: "closed", code: msg.code ?? null });
+          this.tabHandlers.get(msg.tabId)?.({ type: "closed", code: msg.code ?? null, subscribed: msg.subscribed === true });
           return;
         }
         if (msg.subtype === "error") {
@@ -473,8 +495,19 @@ export class GatewayClient {
   // plain text. Both go on the wire every time. The gateway prefers `content`
   // and falls back to `text`, so a phone running ahead of the Mac's gateway
   // still delivers the words instead of failing the send.
-  sendPrompt(tabId: string, text: string, sessionId?: string, resume?: boolean, askFirst?: boolean, appendSystemPrompt?: string, agent?: string, model?: string, content?: any[]): void {
-    this.send({ type: "prompt", tabId, text, content, sessionId, resume, askFirst, appendSystemPrompt, agent, model });
+  sendPrompt(
+    tabId: string,
+    text: string,
+    sessionId?: string,
+    resume?: boolean,
+    askFirst?: boolean,
+    appendSystemPrompt?: string,
+    agent?: string,
+    model?: string,
+    content?: any[],
+    extra: { qid?: string; silent?: boolean } = {}
+  ): void {
+    this.send({ type: "prompt", tabId, text, content, sessionId, resume, askFirst, appendSystemPrompt, agent, model, ...extra });
   }
 
   sendPermission(
@@ -491,9 +524,14 @@ export class GatewayClient {
     this.send({ type: "interrupt", tabId });
   }
 
-  /** Start receiving a tab's live events (the main chat, shared with the Mac). */
-  attach(tabId: string): void {
-    this.send({ type: "reattach", tabIds: [tabId] });
+  /** Start hearing a conversation live in this tab, caught up on any turn under way. */
+  attach(tabId: string, sessionId?: string | null): void {
+    this.send({ type: "attach", tabId, sessionId: sessionId || undefined });
+  }
+
+  /** Stop the conversation's process on the Mac so the next message starts a fresh one (once nothing runs in it). */
+  restart(tabId: string): void {
+    this.send({ type: "restart", tabId });
   }
 
   stop(tabId: string): void {
@@ -587,29 +625,28 @@ export class GatewayClient {
     });
   }
 
-  /** A conversation's transcript lines and its saved voice calls. */
-  getHistory(sessionId: string): Promise<{ lines: any[]; voiceCalls: any[] }> {
+  /**
+   * A page of a conversation's history and its saved voice calls: the newest
+   * part, or the part before message `before`. With `tabId` (opening it),
+   * the Mac also starts sending that tab the conversation live, beginning
+   * with any turn under way. Always settles: the answer, or an error naming
+   * why after HISTORY_TIMEOUT_MS.
+   */
+  getHistory(sessionId: string, opts: { tabId?: string; before?: number; timeoutMs?: number } = {}): Promise<HistoryReply> {
+    const requestId = `h_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     return new Promise((resolve, reject) => {
-      const entry: PendingRPC<{ lines: any[]; voiceCalls: any[] }> = {
-        resolve,
-        reject,
-        timer: setTimeout(() => {
-          const list = (this.historyPending.get(sessionId) || []).filter((p) => p !== entry);
-          if (list.length) this.historyPending.set(sessionId, list);
-          else this.historyPending.delete(sessionId);
-          reject(
-            new Error(
-              this.status === "connected"
-                ? "The Mac didn't send the conversation in time"
-                : "Not connected to the Mac"
-            )
-          );
-        }, HISTORY_TIMEOUT_MS),
-      };
-      const list = this.historyPending.get(sessionId);
-      if (list) list.push(entry);
-      else this.historyPending.set(sessionId, [entry]);
-      this.send({ type: "get_history", sessionId });
+      const timer = setTimeout(() => {
+        if (!this.historyPending.delete(requestId)) return;
+        reject(
+          new Error(
+            this.status === "connected"
+              ? "Your Mac didn't send it within 30 seconds."
+              : "Can't reach your Mac right now."
+          )
+        );
+      }, opts.timeoutMs ?? HISTORY_TIMEOUT_MS);
+      this.historyPending.set(requestId, { resolve, reject, timer, sessionId });
+      this.send({ type: "get_history", sessionId, requestId, tabId: opts.tabId, before: opts.before });
     });
   }
 

@@ -5,6 +5,7 @@ import { Platform } from "obsidian";
 // mobile-safe (GatewayTransport is used on mobile; this class isn't instantiated there).
 const spawn: typeof import("child_process").spawn = Platform.isMobile ? (undefined as any) : require("child_process").spawn;
 const randomUUID: typeof import("crypto").randomUUID = Platform.isMobile ? (undefined as any) : require("crypto").randomUUID;
+const nodePath: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
 import { isNative1M, baseModelId } from "./models";
 import { supportsEffortFlag, probeCliCapabilities } from "./cli-capabilities";
 
@@ -42,6 +43,12 @@ export interface TransportOptions {
    * rich/markdown.
    */
   appendSystemPrompt?: string;
+  /**
+   * Ask-first on the phone: the CLI reads only these settings sources
+   * (dropping the desktop's local rules) plus the phone's own allowlist.
+   */
+  settingSources?: string;
+  settingsPath?: string;
   onMessage: (msg: any) => void;
   onError: (error: string) => void;
   onClose: (code: number | null) => void;
@@ -93,6 +100,9 @@ export class ClaudeTransport {
       args.push("--agent", agent);
     }
 
+    if (this.options.settingSources) args.push("--setting-sources", this.options.settingSources);
+    if (this.options.settingsPath) args.push("--settings", this.options.settingsPath);
+
     // Voice conversation mode appends the voice persona to the system prompt so
     // Chad speaks for listening, not reading. Only present when conversation
     // mode is on — text mode keeps the default (rich markdown) behaviour.
@@ -131,19 +141,26 @@ export class ClaudeTransport {
     if (effort && !useEffortFlag) {
       env.CLAUDE_CODE_EFFORT_LEVEL = effort;
     }
-    env.PATH = [
-      "/usr/local/bin",
-      "/opt/homebrew/bin",
-      "/opt/homebrew/sbin",
-      process.env.HOME + "/.npm-global/bin",
-      process.env.HOME + "/.nvm/versions/node/v22.15.0/bin",
-      "/usr/bin",
-      "/bin",
-      "/usr/sbin",
-      "/sbin",
-      process.env.HOME + "/.bun/bin",
-      process.env.PATH || "",
-    ].join(":");
+    // The extra directories are Mac and Linux install locations. Windows keeps
+    // the PATH it inherited (it already covers npm and winget installs), and a
+    // ":" joined onto it would corrupt the whole variable there.
+    if (process.platform !== "win32") {
+      const home = process.env.HOME || "";
+      env.PATH = [
+        "/usr/local/bin",
+        "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
+        nodePath.join(home, ".local", "bin"),
+        nodePath.join(home, ".npm-global", "bin"),
+        nodePath.join(home, ".nvm", "versions", "node", "v22.15.0", "bin"),
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+        nodePath.join(home, ".bun", "bin"),
+        process.env.PATH || "",
+      ].join(nodePath.delimiter);
+    }
 
     debug("[hyo] Spawning CLI:", cliPath, args.join(" "));
     debug("[hyo] CWD:", cwd);
@@ -245,6 +262,9 @@ export class ClaudeTransport {
     behavior: "allow" | "allow_always" | "deny",
     toolName?: string,
     updatedInput?: Record<string, unknown>,
+    // Where an "always allow" rule is kept: the desktop's local settings, or
+    // only this process ("session", for the phone, which keeps its own list).
+    destination: string = "localSettings",
   ): void {
     if (!this.proc?.stdin?.writable) return;
 
@@ -280,7 +300,7 @@ export class ClaudeTransport {
             type: "addRules",
             rules: [{ toolName }],
             behavior: "allow",
-            destination: "localSettings",
+            destination,
           },
         ],
       };

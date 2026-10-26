@@ -15,6 +15,12 @@ interface ChatMessagesProps {
   onClaudeUpdate?: ClaudeUpdateRunner;
   /** Tapping a voice-call line opens its transcript. */
   onOpenCall?: (call: VoiceCallRecord) => void;
+  /** There are earlier messages on the Mac than the ones shown. */
+  hasOlder?: boolean;
+  loadingOlder?: boolean;
+  olderError?: string | null;
+  /** Load the page before the first message shown (scrolling to the top does it too). */
+  onLoadOlder?: () => void;
 }
 
 export function ChatMessages({
@@ -25,8 +31,26 @@ export function ChatMessages({
   onRecover,
   onClaudeUpdate,
   onOpenCall,
+  hasOlder,
+  loadingOlder,
+  olderError,
+  onLoadOlder,
 }: ChatMessagesProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const olderRef = useRef({ hasOlder, loadingOlder, onLoadOlder });
+  olderRef.current = { hasOlder, loadingOlder, onLoadOlder };
+
+  // Earlier messages arriving above: keep what she's reading where it was.
+  const before = useRef<{ first: Message | undefined; height: number; top: number }>({ first: undefined, height: 0, top: 0 });
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const prev = before.current;
+    if (prev.first && messages[0] !== prev.first && messages.includes(prev.first)) {
+      el.scrollTop = el.scrollHeight - prev.height + prev.top;
+    }
+    before.current = { first: messages[0], height: el.scrollHeight, top: el.scrollTop };
+  }, [messages]);
 
   // Where she was reading. Kept only while the list is on screen, so it
   // survives Hyo being hidden.
@@ -59,6 +83,10 @@ export function ChatMessages({
       const near = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
       scrollRef.current.nearBottom = near;
       saved.current = { top: el.scrollTop, atBottom: near };
+      before.current = { ...before.current, height: el.scrollHeight, top: el.scrollTop };
+      // Near the top with more on the Mac: fetch the page before.
+      const o = olderRef.current;
+      if (el.scrollTop < 80 && o.hasOlder && !o.loadingOlder) o.onLoadOlder?.();
     };
     el.addEventListener("scroll", onScroll);
     return () => el.removeEventListener("scroll", onScroll);
@@ -90,6 +118,23 @@ export function ChatMessages({
 
   return (
     <div className="hyo-messages" ref={containerRef}>
+      {(hasOlder || olderError) && (
+        <div className="hyo-older">
+          {loadingOlder ? (
+            <span className="hyo-older-loading" role="status">
+              <span className="hyo-convo-spinner" aria-hidden="true" /> Loading earlier messages…
+            </span>
+          ) : olderError ? (
+            <button className="hyo-older-btn" onClick={() => onLoadOlder?.()}>
+              Couldn't load earlier messages. {olderError.replace(/\.?$/, ".")} Try again
+            </button>
+          ) : (
+            <button className="hyo-older-btn" onClick={() => onLoadOlder?.()}>
+              Load earlier messages
+            </button>
+          )}
+        </div>
+      )}
       {messages.map((msg, i) => {
         // Streaming compaction: show "Compacting…" animation via StreamingMessage
         if (msg.streaming) {

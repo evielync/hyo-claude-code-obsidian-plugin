@@ -14,10 +14,10 @@ import { cleanupOldAttachments } from "./attachments";
 import { setDebug } from "./debug";
 import { probeCliCapabilities } from "./cli-capabilities";
 import { startGatewayHost, stopGatewayHost, GatewayStatus } from "./gateway-host";
-import { MainChatOwner, setMainChatOwnerFactory, shutdownMainChats, fileLock } from "./main-chat-owner";
+import { setSessionOwnerFactory, shutdownSessionOwners, fileLock } from "./session-owner";
 import { ClaudeTransport } from "./claude-transport";
 import { OpenConversationsStore, setOpenConversationsFactory, legacyDesk, OPEN_LIST_FILE } from "./open-conversations";
-import { getProjectDir, listPinned } from "./session-parser";
+import { getProjectDir, listPinned, hasTranscript, transcriptLineCount } from "./session-parser";
 import { CommandsManager } from "./commands";
 import { updateClaude, detectClaude } from "./cli-probe";
 import { compareVersions } from "./models";
@@ -49,29 +49,32 @@ export default class HyoPlugin extends Plugin {
 
   async onload() {
     await this.loadSettings();
-    // The main chat's one Claude process per vault, shared by every Hyo panel
-    // and the phone (see main-chat-owner.ts). Desktop only.
+    // One Claude process per conversation, shared by every Hyo panel and the
+    // phone (see session-owner.ts). The main chat is one of them. Desktop only.
     if (!Platform.isMobile) {
-      setMainChatOwnerFactory(
-        (cwd) =>
-          new MainChatOwner(
-            (spec, on) =>
-              new ClaudeTransport({
-                cliPath: spec.cliPath,
-                cwd: spec.cwd,
-                model: spec.model,
-                effort: spec.effort,
-                permissionMode: spec.permissionMode,
-                agent: spec.agent,
-                sessionId: spec.sessionId || undefined,
-                resume: !!spec.resume,
-                maxOutputTokens: spec.maxOutputTokens,
-                appendSystemPrompt: spec.appendSystemPrompt,
-                ...on,
-              }),
-            fileLock(path.join(os.homedir(), ".hyo", `main-chat-${cwd.replace(/[^A-Za-z0-9]+/g, "-").slice(-80)}.lock`))
-          )
-      );
+      setSessionOwnerFactory({
+        make: (spec, on) =>
+          new ClaudeTransport({
+            cliPath: spec.cliPath,
+            cwd: spec.cwd,
+            model: spec.model,
+            effort: spec.effort,
+            permissionMode: spec.permissionMode,
+            agent: spec.agent,
+            sessionId: spec.sessionId || undefined,
+            // Carry on what Claude has written; a conversation with no
+            // transcript yet (new, or begun as a call) starts on its id.
+            resume: !!spec.sessionId && hasTranscript(spec.cwd, spec.sessionId),
+            maxOutputTokens: spec.maxOutputTokens,
+            appendSystemPrompt: spec.appendSystemPrompt,
+            settingSources: spec.settingSources,
+            settingsPath: spec.settingsPath,
+            ...on,
+          }),
+        mainLock: (cwd) =>
+          fileLock(path.join(os.homedir(), ".hyo", `main-chat-${cwd.replace(/[^A-Za-z0-9]+/g, "-").slice(-80)}.lock`)),
+        transcriptLines: (cwd, sessionId) => transcriptLineCount(cwd, sessionId),
+      });
       // The open conversations, shared by every Hyo panel and the phone (see
       // open-conversations.ts). Saved next to the session metadata.
       setOpenConversationsFactory((cwd) => {
@@ -344,9 +347,10 @@ export default class HyoPlugin extends Plugin {
   onunload() {
     if (!Platform.isMobile) {
       try { stopGatewayHost(); } catch { /* ignore */ }
-      // Obsidian is closing: the main chat's process (and any background
-      // jobs in it) ends with it. Known limitation.
-      try { shutdownMainChats(); } catch { /* ignore */ }
+      // Obsidian is closing: every conversation's process (and any
+      // background jobs in them) ends with it. Known limitation.
+      try { shutdownSessionOwners(); } catch { /* ignore */ }
+      setSessionOwnerFactory(null);
       setOpenConversationsFactory(null);
     }
     // Unmount React and clean up child processes for all Hyo leaves

@@ -79,9 +79,28 @@ export class GatewayTransport {
     this.client = GatewayClient.get(options.gatewayUrl);
   }
 
-  /** Ask the gateway for this tab's live events now, before anything is sent. */
+  /** The id the Mac knows this conversation's tab by. */
+  get wireId(): string {
+    return this.tabId;
+  }
+
+  /**
+   * Hear the conversation live now, before anything is sent: the Mac
+   * subscribes this tab to its one process for the conversation and catches
+   * it up on any turn under way.
+   */
   attach(): void {
-    this.client.attach(this.tabId);
+    this.client.attach(this.tabId, this.options.sessionId);
+  }
+
+  /** The persona sent with each message (voice mode changes it). */
+  setAppendSystemPrompt(prompt: string | undefined): void {
+    this.options.appendSystemPrompt = prompt;
+  }
+
+  /** The conversation id this tab sends with (a new conversation's is minted on the phone). */
+  setSessionId(sessionId: string): void {
+    this.options.sessionId = sessionId;
   }
 
   spawn(): void {
@@ -101,8 +120,16 @@ export class GatewayTransport {
         }
         this.options.onMessage(ev);
       } else if (msg.type === "closed") {
-        this.running = false;
+        // The conversation's process ended, but this tab still hears the
+        // conversation (the next message starts a new one).
+        if (msg.subscribed) {
+          this.options.onClose(msg.code);
+          return;
+        }
         this.options.onClose(msg.code);
+        // The Mac had let this tab go (away too long, or the Mac restarted):
+        // hear it again, caught up on anything under way.
+        if (msg.gone && this.running) this.attach();
       } else if (msg.type === "error") {
         this.options.onError(msg.error);
       }
@@ -111,7 +138,7 @@ export class GatewayTransport {
     debug("[hyo-gateway] Tab registered:", this.tabId);
   }
 
-  sendUserMessage(content: string | any[], askFirst?: boolean): void {
+  sendUserMessage(content: string | any[], askFirst?: boolean, extra: { qid?: string; silent?: boolean } = {}): void {
     const blocks = typeof content === "string" ? undefined : content;
     const text = typeof content === "string" ? content : flattenContentBlocks(content);
     // sessionId/resume are consulted by the gateway whenever it has no live
@@ -120,7 +147,12 @@ export class GatewayTransport {
     // current from the CLI's own init event, so a respawn resumes the same
     // session rather than starting a fresh one. askFirst likewise reflects
     // the live "Ask First" toggle at send time rather than being fixed at spawn.
-    this.client.sendPrompt(this.tabId, text, this.options.sessionId, this.options.resume, askFirst, this.options.appendSystemPrompt, this.options.agent, this.options.model, blocks);
+    this.client.sendPrompt(this.tabId, text, this.options.sessionId, this.options.resume, askFirst, this.options.appendSystemPrompt, this.options.agent, this.options.model, blocks, extra);
+  }
+
+  /** Ask the Mac for a fresh process on the next message (once nothing runs in it). */
+  restartProcess(): void {
+    this.client.restart(this.tabId);
   }
 
   sendPermissionResponse(
@@ -136,6 +168,7 @@ export class GatewayTransport {
     this.client.interrupt(this.tabId);
   }
 
+  /** Stop hearing the conversation. Never stops its process or a turn on the Mac. */
   stop(): void {
     this.running = false;
     this.client.stop(this.tabId);

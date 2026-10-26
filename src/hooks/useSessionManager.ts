@@ -1,11 +1,14 @@
 import { debug } from "../debug";
 import { addOutgoing, startQueued } from "../send-queue";
+import { turnStarted, queued as queuedElsewhere, permissionAnswered, replayBase, queueDropped, hasQueued } from "../live-sync";
 import { newStreamState, processContentBlocks, buildSnapshot, endTurn, startsTurnOfItsOwn, openReply, isInjectedContext, type StreamState } from "../reply-stream";
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { ClaudeTransport, normalizeModelId } from "../claude-transport";
-import { MainChatTransport, mainChatOwner } from "../main-chat-owner";
+import { normalizeModelId } from "../claude-transport";
+import { OwnerTransport, mainChatOwner, sessionOwner, findSessionOwner } from "../session-owner";
 
-type TabProc = ClaudeTransport | MainChatTransport;
+// Every tab's Claude connection: a subscription to the Mac's one process for
+// its conversation, shared with other panels and the phone (session-owner.ts).
+type TabProc = OwnerTransport;
 import { VOICE_PERSONA, LIVE_BACKEND_PERSONA, HANDOFF_MARKER } from "../voice/voice-persona";
 import type {
   Message,
@@ -20,7 +23,7 @@ import { repairSession, isThinkingBlockApiError, type RepairResult } from "../se
 import { generateConversationTitle } from "../title-generator";
 import { Platform } from "obsidian";
 import { parseClaudeUpdateError, isClaudeAuthError } from "../models";
-import { applyJobEvent, hasRunningJobs, jobAsking, jobList, IdleGate, maySwapProcess, type JobMap, type BackgroundJob } from "../background-jobs";
+import { applyJobEvent, hasRunningJobs, jobAsking, jobList, IdleGate, type JobMap, type BackgroundJob } from "../background-jobs";
 import { appendedPrompt, withMainChatReminder, withMainChat, mainFirst, canCloseTab, canReorder, startupActive, MAIN_CHAT_TITLE } from "../main-chat";
 import { openConversations, reconcileTabs, syncChanges, syncedSid, type OpenEntry } from "../open-conversations";
 // Node built-in; deferred so this module loads on mobile.
@@ -68,6 +71,12 @@ export interface TabSession {
   isMain?: boolean;
   // Background agents running in this tab's Claude process, by task id.
   jobs?: JobMap;
+  // The owner's turn count when this tab's history was read from disk. If a
+  // turn started or ended since, the history is read again before the tab
+  // subscribes, so nothing is missed or shown twice.
+  historySeq?: number;
+  // When a turn last started or ended here (epoch ms), for its Open row.
+  lastActivity?: number;
 }
 
 interface SessionState {
@@ -186,14 +195,20 @@ export function useSessionManager(options: SessionManagerOptions) {
   // They show in the chat at once and go to Claude when the turn ends (see
   // send-queue.ts). turnRunningRef is set the moment a turn starts, so two
   // sends in the same tick can't both start one.
-  const queuedSendsRef = useRef<Record<string, { id: string; content: string | any[]; meta?: any }[]>>({});
+  // The owner holds them now (session-owner.ts): they go to it at once and
+  // it starts each when the turn before ends, on every device alike.
   const turnRunningRef = useRef<Record<string, boolean>>({});
-  const sendMessageRef = useRef<(content: string | any[], meta?: any, opts?: { tabId?: string; fromQueue?: string }) => void>(() => {});
-  /** The turn on this tab ended: send the next waiting message, if any. */
+  // Messages this panel sent, by the id they went to the owner with.
+  const localSendsRef = useRef(new Set<string>());
+  // The turn under way on each tab was started here (only that panel nudges
+  // after a compaction or names the conversation, so it happens once).
+  const ownTurnRef = useRef<Record<string, boolean>>({});
+  // Tabs with unsent text in their message box: one closed on another device
+  // stays open here until the box is empty (see isBusy).
+  const draftsRef = useRef(new Set<string>());
+  /** The turn on this tab ended. */
   const turnEnded = (tabId: string) => {
     turnRunningRef.current[tabId] = false;
-    const next = queuedSendsRef.current[tabId]?.shift();
-    if (next) setTimeout(() => sendMessageRef.current(next.content, next.meta, { tabId, fromQueue: next.id }), 0);
   };
   // The system prompt each tab's process was spawned with. Voice mode changes
   // it; the process is swapped on the next send between turns, never by
@@ -261,7 +276,7 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   const makeProcessEvent = useCallback(
     (tabId: string) => {
-      return (event: any) => {
+      const handle = (event: any): void => {
         if (event.type === "stream_event") {
           const evt = event.event || event;
           if (evt.type !== "content_block_delta") {
@@ -275,39 +290,59 @@ export function useSessionManager(options: SessionManagerOptions) {
           );
         }
 
-        // The main chat, shared with other views (main-chat-owner.ts).
-        if (event.type === "hyo_user_message" || event.type === "hyo_busy") {
-          // Said from another view (the phone, another panel), or a turn
-          // already under way when this one joined: show it, and a reply.
+        // The conversation is shared live with other views (session-owner.ts):
+        // a turn started anywhere, a message waiting, an answer given
+        // elsewhere, or catching up on a turn already under way.
+        const onTab = (fn: (t: TabSession) => TabSession) => setState((prev) => ({ ...prev, tabs: prev.tabs.map((t) => (t.id === tabId ? fn(t) : t)) }));
+        if (event.type === "hyo_user_message" && event.silent) {
+          // Claude was asked to carry on after a compaction: same reply, no message.
           turnRunningRef.current[tabId] = true;
-          streamStatesRef.current[tabId] = newStreamState();
-          const reply: Message = { role: "assistant", content: "", thinking: "", toolCalls: [], orderedBlocks: [], streaming: true };
-          const said: Message[] = event.type === "hyo_user_message" && event.text ? [{ role: "user", content: event.text, displayText: event.text }] : [];
-          setState((prev) => ({
-            ...prev,
-            tabs: prev.tabs.map((t) =>
-              t.id === tabId ? { ...t, messages: openReply([...t.messages, ...said], reply), generating: true } : t
-            ),
-          }));
+          const ss0 = streamStatesRef.current[tabId];
+          if (ss0) ss0.turnDone = false;
+          updateTabLastAssistant(tabId, () => ({ streaming: true }));
+          onTab((t) => ({ ...t, generating: true }));
+          return;
+        }
+        if (event.type === "hyo_user_message") {
+          const own = !!event.qid && localSendsRef.current.has(event.qid);
+          const cur = stateRef.current.tabs.find((t) => t.id === tabId);
+          const shown = !!event.qid && !!cur?.messages.some((m) => m.sendId === event.qid && !m.queuedId);
+          ownTurnRef.current[tabId] = own;
+          turnRunningRef.current[tabId] = true;
+          // A message this view just sent already has its reply slot and
+          // stream state; anything else starts a fresh one.
+          if (!shown) streamStatesRef.current[tabId] = newStreamState();
+          onTab((t) => ({ ...t, messages: turnStarted(t.messages, event).messages, generating: true, lastActivity: Date.now() }));
+          return;
+        }
+        if (event.type === "hyo_queued") {
+          onTab((t) => ({ ...t, messages: queuedElsewhere(t.messages, event) }));
           return;
         }
         if (event.type === "hyo_permission_answered") {
-          const resolved = event.behavior === "deny" ? ("denied" as const) : ("allowed" as const);
-          setState((prev) => ({
-            ...prev,
-            tabs: prev.tabs.map((t) =>
-              t.id !== tabId
-                ? t
-                : {
-                    ...t,
-                    messages: t.messages.map((m) =>
-                      m.permissionRequests?.some((r) => r.requestId === event.requestId)
-                        ? { ...m, permissionRequests: m.permissionRequests.map((r) => (r.requestId === event.requestId ? { ...r, resolved } : r)) }
-                        : m
-                    ),
-                  }
-            ),
-          }));
+          onTab((t) => ({ ...t, messages: permissionAnswered(t.messages, event) }));
+          return;
+        }
+        if (event.type === "hyo_queue_dropped") {
+          onTab((t) => ({ ...t, messages: queueDropped(t.messages, event.qids || [], event.reason) }));
+          return;
+        }
+        if (event.type === "hyo_replay") {
+          // Opening the conversation mid-turn (or coming back to it): the
+          // turn's reply is rebuilt from its events so far, then carries on live.
+          const turn = event.turn;
+          if (turn) {
+            ownTurnRef.current[tabId] = !!turn.qid && localSendsRef.current.has(turn.qid);
+            turnRunningRef.current[tabId] = true;
+            streamStatesRef.current[tabId] = newStreamState();
+            onTab((t) => ({ ...t, messages: replayBase(t.messages, turn), generating: true }));
+            for (const e of turn.events || []) handle(e);
+          }
+          for (const q of event.queued || []) onTab((t) => ({ ...t, messages: queuedElsewhere(t.messages, q) }));
+          if ((event.asks || []).length) {
+            if (!streamStatesRef.current[tabId]) streamStatesRef.current[tabId] = { ...newStreamState(), turnDone: true };
+            for (const e of event.asks) handle(e);
+          }
           return;
         }
         if (event.type === "hyo_owner_refused") {
@@ -498,11 +533,9 @@ export function useSessionManager(options: SessionManagerOptions) {
           if (event.isSidechain || event.parent_tool_use_id) return;
           // Compacted and stopped without carrying on: ask it to continue,
           // into the same reply.
-          if (compactNudgeRef.current[tabId]) {
+          if (compactNudgeRef.current[tabId] && ownTurnRef.current[tabId] === true) {
             compactNudgeRef.current[tabId] = false;
-            transportsRef.current[tabId]?.sendUserMessage(
-              "Please continue where you left off before the compaction."
-            );
+            transportsRef.current[tabId]?.sendUserMessage("Please continue where you left off before the compaction.", { silent: true });
             return;
           }
           endTurn(ss, event);
@@ -533,6 +566,7 @@ export function useSessionManager(options: SessionManagerOptions) {
                 ? {
                     ...tab,
                     generating: false,
+                    lastActivity: Date.now(),
                     ...(contextWindow ? { contextWindow } : {}),
                     // Task mode: a turn that finished on a tab the user isn't
                     // looking at is a result waiting for them.
@@ -547,7 +581,8 @@ export function useSessionManager(options: SessionManagerOptions) {
           turnEnded(tabId);
 
           // Auto-generate title after first response
-          if (options.autoGenerateTitles) {
+          // Named once, by the view whose message started the conversation.
+          if (options.autoGenerateTitles && ownTurnRef.current[tabId]) {
             const currentTab = stateRef.current.tabs.find((t) => t.id === tabId);
             if (currentTab && !currentTab.isMain && currentTab.messages.length >= 2) {
               const msgs = currentTab.messages;
@@ -620,6 +655,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         // reply below, and the one before it stays as it was.
         if (startsTurnOfItsOwn(ss, event)) {
           turnRunningRef.current[tabId] = true;
+          ownTurnRef.current[tabId] = false;
           const reply: Message = {
             role: "assistant",
             content: "",
@@ -812,6 +848,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           return;
         }
       };
+      return handle;
     },
     [updateTabLastAssistant]
   );
@@ -1018,69 +1055,79 @@ export function useSessionManager(options: SessionManagerOptions) {
   }, []);
 
   /**
-   * Let go of a tab's process so the next message starts a fresh one. The
-   * main chat's shared process is restarted in its owner (only when nothing
-   * is running there), and this view joins again.
+   * Let go of a tab's process so the next message starts a fresh one (only
+   * when nothing is running in it), and of this tab's subscription; the tab
+   * subscribes again straight away (see the effect below).
    */
   function restartTransport(tabId: string): void {
     const existing = transportsRef.current[tabId];
     if (!existing) return;
     try {
-      if (existing instanceof MainChatTransport) existing.restartProcess();
+      existing.restartProcess();
       existing.stop();
-    } catch {}
+    } catch (e) {
+      console.error("[hyo] Couldn't restart the conversation's Claude process:", e);
+    }
     delete transportsRef.current[tabId];
   }
 
-  /** The tab's Claude connection: its own process, or the main chat's shared one. */
-  function openTransport(tabId: string): TabProc {
-    const currentTab = stateRef.current.tabs.find(
-      (t) => t.id === tabId
-    );
-    const cliSessionId = currentTab?.cliSessionId;
+  /** What the tab's process is started with, read when a message goes. */
+  const specFor = (tabId: string) => () => {
+    const currentTab = stateRef.current.tabs.find((t) => t.id === tabId);
     transportPromptRef.current[tabId] = promptFor(currentTab);
-
-    const spec = {
-      cliPath: cliPathRef.current || options.cliPath,
-      cwd: options.cwd,
-      model: currentTab?.model || options.model,
-      effort: currentTab?.effort || options.effort,
-      permissionMode: currentTab?.permissionMode || options.permissionMode,
+    return {
+      cliPath: cliPathRef.current || optionsRef.current.cliPath,
+      cwd: optionsRef.current.cwd,
+      model: currentTab?.model || optionsRef.current.model,
+      effort: currentTab?.effort || optionsRef.current.effort,
+      permissionMode: currentTab?.permissionMode || optionsRef.current.permissionMode,
       agent: currentTab?.agent || "",
-      // A conversation that began as a call starts with --session-id on
-      // the id Hyo gave it; anything Claude has written is resumed.
-      ...sessionSpawn(
-        cliSessionId ?? null,
-        currentTab?.sessionPending || (!!cliSessionId && !hasTranscript(options.cwd, cliSessionId))
-      ),
-      maxOutputTokens: options.maxOutputTokens,
+      // The owner carries on what Claude has written (--resume) and starts a
+      // conversation with no transcript yet on its id (--session-id).
+      sessionId: currentTab?.cliSessionId ?? null,
+      maxOutputTokens: optionsRef.current.maxOutputTokens,
       // The main chat's delegation instructions, then the voice persona
       // when a call is on. ElevenLabs: Claude IS the voice, so it gets the
       // full spoken persona. GPT-Live: a separate model talks; Claude is
-      // the backend it hands to. A change respawns between turns (above)
-      // and --resumes.
+      // the backend it hands to. A change swaps the process between turns
+      // and --resumes (the owner does it once nothing is running).
       appendSystemPrompt: promptFor(currentTab),
     };
+  };
+
+  /**
+   * Subscribe a tab to its conversation's owner: the Mac's one process for
+   * it, shared with other panels and the phone. Returns null (and says why
+   * in the chat) if there's no owner to be had.
+   */
+  function openTransport(tabId: string, sid?: string | null): TabProc | null {
+    const currentTab = stateRef.current.tabs.find((t) => t.id === tabId);
+    const sessionId = sid ?? currentTab?.cliSessionId ?? null;
+    const isMain = !!currentTab?.isMain;
+    const owner = isMain ? mainChatOwner(options.cwd) : sessionId ? sessionOwner(options.cwd, sessionId) : null;
+    if (!owner) {
+      console.error("[hyo] No conversation owner for tab", tabId, "(the plugin hasn't set one up)");
+      updateTabLastAssistant(tabId, () => ({
+        streaming: false,
+        content: "_Hyo couldn't start Claude for this conversation: the plugin didn't finish loading. Close and reopen Hyo, or restart Obsidian._",
+      }));
+      setState((prev) => ({ ...prev, tabs: prev.tabs.map((t) => (t.id === tabId ? { ...t, generating: false } : t)) }));
+      turnEnded(tabId);
+      return null;
+    }
     const handlers = {
       onMessage: makeProcessEvent(tabId),
       onError: (error: string) => console.error("[hyo] CLI error:", error),
       onClose: (code: number | null) => {
-        // Hyo stopped this process on purpose (sign-in, update, agent or
-        // voice switch, closed tab) and has already let go of it. Its exit
-        // arrives late, often after a replacement process is running, so
-        // it must not touch the tab: no crash message, no ending the new
-        // turn, and no deleting the replacement from transportsRef.
+        // The conversation's process ended. The tab stays subscribed: the
+        // next message starts a new one, and other views keep hearing it.
         if (transportsRef.current[tabId] !== transport) return;
-        const wasGenerating = stateRef.current.tabs.find(
-          (t) => t.id === tabId
-        )?.generating;
+        const wasGenerating = stateRef.current.tabs.find((t) => t.id === tabId)?.generating;
         // Its background agents ended with it.
         if (jobsRunning(tabId)) setJobs(tabId, {});
         setState((prev) => ({
           ...prev,
-          tabs: prev.tabs.map((tab) =>
-            tab.id === tabId ? { ...tab, generating: false } : tab
-          ),
+          tabs: prev.tabs.map((tab) => (tab.id === tabId ? { ...tab, generating: false } : tab)),
         }));
         turnEnded(tabId);
         updateTabLastAssistant(tabId, () => ({ streaming: false }));
@@ -1088,7 +1135,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         if (code !== 0 && code !== null && wasGenerating) {
           const errorMsg: Message = {
             role: "assistant",
-            content: `_Claude process exited unexpectedly (code ${code}). Start a new conversation to continue._`,
+            content: `_Claude process exited unexpectedly (code ${code}). Send your message again to carry on, or start a new conversation._`,
             thinking: "",
             toolCalls: [],
             orderedBlocks: [],
@@ -1096,26 +1143,16 @@ export function useSessionManager(options: SessionManagerOptions) {
           };
           setState((prev) => ({
             ...prev,
-            tabs: prev.tabs.map((tab) =>
-              tab.id === tabId
-                ? { ...tab, messages: [...tab.messages, errorMsg] }
-                : tab
-            ),
+            tabs: prev.tabs.map((tab) => (tab.id === tabId ? { ...tab, messages: [...tab.messages, errorMsg] } : tab)),
           }));
         }
-        // The main chat stays subscribed: the next message starts a new
-        // process in the owner, and other views keep hearing it.
-        if (!(transport instanceof MainChatTransport)) delete transportsRef.current[tabId];
       },
     };
-    // The main chat never gets a process of its own: it joins the one
-    // the Mac's owner runs, shared with other panels and the phone.
-    const owner = currentTab?.isMain ? mainChatOwner(options.cwd) : null;
-    const transport: TabProc = owner
-      ? new MainChatTransport(owner, spec, handlers)
-      : new ClaudeTransport({ ...spec, ...handlers });
-    transport.spawn();
+    // Anything streaming in before this view sends opens a reply of its own.
+    if (!streamStatesRef.current[tabId]) streamStatesRef.current[tabId] = { ...newStreamState(), turnDone: true };
+    const transport: TabProc = new OwnerTransport(owner, specFor(tabId), handlers);
     transportsRef.current[tabId] = transport;
+    transport.spawn();
     return transport;
   }
 
@@ -1125,20 +1162,37 @@ export function useSessionManager(options: SessionManagerOptions) {
     (
       content: string | any[],
       meta?: { displayText?: string; attachedFileNames?: string[]; isCompaction?: boolean; handoff?: boolean },
-      opts?: { tabId?: string; fromQueue?: string }
+      opts?: { tabId?: string }
     ) => {
       const tabId = opts?.tabId ?? stateRef.current.activeTabId;
-      const wasGenerating =
-        !opts?.fromQueue &&
-        (!!turnRunningRef.current[tabId] ||
-          !!stateRef.current.tabs.find((t) => t.id === tabId)?.generating ||
-          (queuedSendsRef.current[tabId]?.length ?? 0) > 0);
+      let tab = stateRef.current.tabs.find((t) => t.id === tabId);
+      if (!tab) return;
+      const wasGenerating = !!turnRunningRef.current[tabId] || !!tab.generating || hasQueued(tab.messages);
+
+      // A new conversation gets its id now, so its one process (and every
+      // view of it) is keyed by it from the first message.
+      if (!tab.isMain && !tab.cliSessionId) {
+        const minted = genId();
+        tab = { ...tab, cliSessionId: minted, sessionPending: true };
+        const patched = tab;
+        stateRef.current = { ...stateRef.current, tabs: stateRef.current.tabs.map((t) => (t.id === tabId ? patched : t)) };
+        setState((prev) => ({ ...prev, tabs: prev.tabs.map((t) => (t.id === tabId ? { ...t, cliSessionId: minted, sessionPending: true } : t)) }));
+      }
+      // Closed on another device while it was being typed in: sending opens
+      // it everywhere again.
+      const sid = tab.cliSessionId;
+      if (sid && !tab.isMain && sid !== mainSid()) {
+        const store = openStore();
+        if (store && syncedRef.current.get(tabId) === sid && !store.list().some((e) => e.id === sid)) store.open({ id: sid, title: tab.title });
+      }
 
       // For display, use the typed text; for arrays (image messages) use displayText or placeholder
       const displayContent = typeof content === "string"
         ? (meta?.displayText ?? content)
         : (meta?.displayText ?? "");
 
+      const qid = genId();
+      localSendsRef.current.add(qid);
       const userMsg: Message = {
         role: "user",
         content: displayContent,
@@ -1146,6 +1200,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         attachments: meta?.attachedFileNames?.map((name) => ({ type: "file", name })),
         isCompaction: meta?.isCompaction,
         handoff: meta?.handoff,
+        sendId: qid,
       };
       const assistantMsg: Message = {
         role: "assistant",
@@ -1157,87 +1212,38 @@ export function useSessionManager(options: SessionManagerOptions) {
         isCompaction: meta?.isCompaction,
       };
 
-      // Claude is mid-turn: show it now, send it when the turn ends.
-      if (wasGenerating && !meta?.isCompaction) {
-        const qid = genId();
-        (queuedSendsRef.current[tabId] ||= []).push({ id: qid, content, meta });
-        setState((prev) => ({
-          ...prev,
-          tabs: prev.tabs.map((tab) =>
-            tab.id === tabId ? { ...tab, messages: addOutgoing(tab.messages, userMsg, assistantMsg, true, qid) } : tab
-          ),
-        }));
-        scrollRef.current.nearBottom = true;
-        return;
+      // Claude is mid-turn: show it now, marked queued; the owner sends it
+      // when the turn ends, and every other view shows it waiting too.
+      const queuedNow = wasGenerating && !meta?.isCompaction;
+      if (!queuedNow) {
+        turnRunningRef.current[tabId] = true;
+        ownTurnRef.current[tabId] = true;
+        streamStatesRef.current[tabId] = newStreamState();
       }
-      turnRunningRef.current[tabId] = true;
-
-      streamStatesRef.current[tabId] = newStreamState();
-
       setState((prev) => ({
         ...prev,
-        tabs: prev.tabs.map((tab) => {
-          if (tab.id !== tabId) return tab;
+        tabs: prev.tabs.map((t) => {
+          if (t.id !== tabId) return t;
           const titleText = meta?.displayText ?? (typeof content === "string" ? content : "");
           const title =
-            tab.messages.length === 0 && tab.title === "New conversation"
+            t.messages.length === 0 && t.title === "New conversation"
               ? titleText.slice(0, 40) + (titleText.length > 40 ? "..." : "")
-              : tab.title;
+              : t.title;
+          if (queuedNow) return { ...t, title, messages: addOutgoing(t.messages, userMsg, assistantMsg, true, qid) };
           // Compaction: don't add a user message — just the streaming assistant marker
-          const newMessages = meta?.isCompaction
-            ? [...tab.messages, assistantMsg]
-            : opts?.fromQueue
-            ? startQueued(tab.messages, opts.fromQueue, assistantMsg)
-            : [...tab.messages, userMsg, assistantMsg];
-          return {
-            ...tab,
-            title,
-            messages: newMessages,
-            generating: true,
-          };
+          const newMessages = meta?.isCompaction ? [...t.messages, assistantMsg] : [...t.messages, userMsg, assistantMsg];
+          return { ...t, title, messages: newMessages, generating: true, lastActivity: Date.now() };
         }),
       }));
       scrollRef.current.nearBottom = true;
 
-      // Voice mode changes the system prompt, which is fixed at spawn. Swap
-      // the process here, between turns — if a turn is still running (a
-      // hand-off carrying on after hang-up), keep it and swap next time.
-      {
-        const t = stateRef.current.tabs.find((x) => x.id === tabId);
-        const running = transportsRef.current[tabId];
-        // Background agents live in this process: stopping it would stop
-        // them, so the swap waits for the first send after they finish.
-        if (
-          running &&
-          maySwapProcess({
-            running: running.isRunning(),
-            midTurn: wasGenerating,
-            jobs: jobsRef.current[tabId],
-            promptChanged: transportPromptRef.current[tabId] !== promptFor(t),
-          })
-        ) {
-          running.stop();
-          delete transportsRef.current[tabId];
-        }
-      }
-
-      if (
-        !transportsRef.current[tabId] ||
-        !transportsRef.current[tabId].isRunning()
-      ) {
-        openTransport(tabId);
-      }
-
+      const transport = transportsRef.current[tabId] || openTransport(tabId, tab.cliSessionId);
+      if (!transport) return;
       // The main chat's reminder rides on every message (never shown).
-      const isMain = !!stateRef.current.tabs.find((t) => t.id === tabId)?.isMain;
-      transportsRef.current[tabId].sendUserMessage(
-        isMain && !meta?.isCompaction ? withMainChatReminder(content) : content
-      );
+      transport.sendUserMessage(tab.isMain && !meta?.isCompaction ? withMainChatReminder(content) : content, { qid });
     },
     [options, makeProcessEvent, updateTabLastAssistant]
   );
-
-  sendMessageRef.current = sendMessage;
 
   const sendPermissionResponse = useCallback(
     (requestId: string, behavior: "allow" | "allow_always" | "deny") => {
@@ -1381,11 +1387,15 @@ export function useSessionManager(options: SessionManagerOptions) {
     // Switching agents requires a fresh CLI process, which would stop any
     // background agents still working in this one: refused until they finish.
     if (jobsRunning(stateRef.current.activeTabId)) return false;
-    // Kill the current transport. Next sendMessage will respawn with the new
-    // --agent flag.
+    // A new conversation with the new --agent: this tab lets go of the old
+    // one (the main chat restarts its own process, once nothing runs in it).
     setState((prev) => {
       const tabId = prev.activeTabId;
-      restartTransport(tabId);
+      if (prev.tabs.find((t) => t.id === tabId)?.isMain) restartTransport(tabId);
+      else {
+        transportsRef.current[tabId]?.stop();
+        delete transportsRef.current[tabId];
+      }
       delete streamStatesRef.current[tabId];
       return {
         ...prev,
@@ -1427,11 +1437,15 @@ export function useSessionManager(options: SessionManagerOptions) {
     if (tab.cliSessionId && tab.cliSessionId !== mainSid()) openStore()?.open({ id: tab.cliSessionId, title: tab.title });
   }, [options.cwd, options.model, options.effort, options.permissionMode, options.defaultAgent]);
 
-  /** A tab holding a saved conversation, its history read back from disk. */
-  function sessionTab(pastSession: Pick<PastSession, "id" | "title" | "callOnly">): TabSession {
-    // Load conversation history from JSONL
-    const history = loadSessionHistory(options.cwd, pastSession.id);
-    const sessionModel = loadSessionModel(options.cwd, pastSession.id);
+  /**
+   * A conversation's history read back from disk, as chat messages. If a turn
+   * is under way in it, history stops where that turn began: the turn is
+   * caught up live when the tab subscribes (session-owner.ts).
+   */
+  function readHistory(sessionId: string, isMain?: boolean): { messages: Message[]; seq: number } {
+    const owner = isMain ? mainChatOwner(options.cwd) : findSessionOwner(options.cwd, sessionId);
+    const live = owner && (!isMain || owner.sessionId === sessionId) ? owner : null;
+    const history = loadSessionHistory(options.cwd, sessionId, live?.turnStartLine ?? null);
     const claudeMessages: Message[] = history.map((m) => ({
       role: m.role,
       content: m.content,
@@ -1448,19 +1462,26 @@ export function useSessionManager(options: SessionManagerOptions) {
           : undefined,
     }));
     // Each voice call goes back in as its one line, where the call started.
-    const messages: Message[] = threadCalls(claudeMessages, getVoiceCalls(options.cwd, pastSession.id), (call) => ({
+    const messages: Message[] = threadCalls(claudeMessages, getVoiceCalls(options.cwd, sessionId), (call) => ({
       role: "system",
       content: "",
       streaming: false,
       voiceCall: call,
     }));
+    return { messages, seq: live?.seq ?? 0 };
+  }
 
+  /** A tab holding a saved conversation, its history read back from disk. */
+  function sessionTab(pastSession: Pick<PastSession, "id" | "title" | "callOnly">, isMain?: boolean): TabSession {
+    const { messages, seq } = readHistory(pastSession.id, isMain);
+    const sessionModel = loadSessionModel(options.cwd, pastSession.id);
     return {
       id: genId(),
       cliSessionId: pastSession.id,
       sessionPending: !!pastSession.callOnly,
       title: pastSession.title,
       messages,
+      historySeq: seq,
       generating: false,
       // A reopened conversation carries on with the model it was last
       // running on. Effort and permission mode aren't recorded in the
@@ -1479,7 +1500,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     const sid = options.mainChatSessionId;
     const base =
       sid && hasTranscript(options.cwd, sid)
-        ? sessionTab({ id: sid, title: MAIN_CHAT_TITLE })
+        ? sessionTab({ id: sid, title: MAIN_CHAT_TITLE }, true)
         : blankTab();
     return { ...base, title: MAIN_CHAT_TITLE, isMain: true };
   };
@@ -1498,7 +1519,7 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   // Close a list's busy tabs only once their work is done.
   const isBusy = (t: TabSession) =>
-    t.generating || jobsRunning(t.id) || !!turnRunningRef.current[t.id] || (queuedSendsRef.current[t.id]?.length ?? 0) > 0;
+    t.generating || jobsRunning(t.id) || !!turnRunningRef.current[t.id] || hasQueued(t.messages) || draftsRef.current.has(t.id);
 
   /** Let go of what a tab closed by the list was running. */
   const dropTab = (tabId: string) => {
@@ -1605,18 +1626,42 @@ export function useSessionManager(options: SessionManagerOptions) {
     }
   }, [state.tabs, state.activeTabId, restoreKey]);
 
-  // The main chat listens from the moment it's open, so what's said on the
-  // phone or in another panel shows here as it happens.
+  // Which conversation each tab last subscribed to (its history is in step from then on).
+  const listenedRef = useRef(new Map<string, string>());
+  // Every open conversation listens from the moment it's open: what's said on
+  // the phone or in another panel shows here as it happens, and a turn
+  // already under way is caught up (session-owner.ts).
   useEffect(() => {
     for (const t of state.tabs) {
-      if (!t.isMain || transportsRef.current[t.id] || !mainChatOwner(options.cwd)) continue;
-      // Anything streaming in before this view sends opens a reply of its own.
-      if (!streamStatesRef.current[t.id]) streamStatesRef.current[t.id] = { ...newStreamState(), turnDone: true };
-      openTransport(t.id);
+      const have = transportsRef.current[t.id];
+      if (t.isMain) {
+        if (have || !mainChatOwner(options.cwd)) continue;
+        openTransport(t.id);
+        continue;
+      }
+      if (!t.cliSessionId) continue;
+      // Already listening to this conversation (a tab moved to a new one
+      // lets go of the old first).
+      if (have && have.owner.sessionId === t.cliSessionId && !have.owner.isReleased) continue;
+      if (have) {
+        have.stop();
+        delete transportsRef.current[t.id];
+      }
+      // A turn started or ended since this tab's history was read: read it
+      // again, stopping where any turn under way began, so the catch-up
+      // below neither misses nor repeats anything.
+      const owner = findSessionOwner(options.cwd, t.cliSessionId);
+      const first = listenedRef.current.get(t.id) !== t.cliSessionId;
+      listenedRef.current.set(t.id, t.cliSessionId);
+      if (first && owner && owner.seq !== (t.historySeq ?? 0) && !t.generating && !turnRunningRef.current[t.id]) {
+        const { messages, seq } = readHistory(t.cliSessionId);
+        const tabId = t.id;
+        setState((prev) => ({ ...prev, tabs: prev.tabs.map((x) => (x.id === tabId ? { ...x, messages, historySeq: seq } : x)) }));
+      }
+      openTransport(t.id, t.cliSessionId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.tabs]);
-
   // ---- The main chat --------------------------------------------------------
   // Settings → Main chat on: a pinned first tab carrying the one long
   // conversation, and what Hyo opens to when nothing else is open. Off: it
@@ -1802,6 +1847,33 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
 
+  /**
+   * The message box of a tab has text in it (or not). A conversation closed
+   * on another device stays open here while its box has text, so nothing
+   * typed is lost; once the box is empty, the close goes ahead. Sending
+   * reopens it everywhere instead.
+   */
+  const setDraft = useCallback((tabId: string, text: string) => {
+    const has = !!text && !!text.trim();
+    if (has === draftsRef.current.has(tabId)) return;
+    if (has) draftsRef.current.add(tabId);
+    else {
+      draftsRef.current.delete(tabId);
+      const store = openStore();
+      if (store && restoredRef.current) applyOpenListRef.current(store.list());
+    }
+  }, []);
+
+  // The conversation in view was closed on another device, and stays here
+  // only because there's text in its box.
+  const activeSid = activeTab && !activeTab.isMain ? activeTab.cliSessionId : null;
+  const activeClosedElsewhere =
+    !!activeSid &&
+    activeSid !== mainSid() &&
+    !!openList &&
+    syncedRef.current.get(activeTab!.id) === activeSid &&
+    !openList.some((e) => e.id === activeSid);
+
   /** Background jobs still running in a tab (closing it would stop them). */
   const tabJobs = useCallback((tabId: string): BackgroundJob[] => jobList(jobsRef.current[tabId]), []);
 
@@ -1813,6 +1885,8 @@ export function useSessionManager(options: SessionManagerOptions) {
   );
 
   return {
+    setDraft,
+    activeClosedElsewhere,
     pinnedSessionIds,
     tabs: state.tabs,
     activeJobs: jobList(activeTab?.jobs),

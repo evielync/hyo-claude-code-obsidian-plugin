@@ -169,21 +169,15 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     activeJobs,
     tabJobs,
     pinnedSessionIds,
+    setDraft,
+    activeClosedElsewhere,
   } = sessionManager;
 
-  // Closing a tab stops its Claude process, and any background jobs running
-  // in it with it. Say so first, and keep the tab unless she means it.
-  const closeTabSafely = useCallback(
-    (tabId: string) => {
-      const running = tabJobs(tabId);
-      if (running.length > 0) {
-        const what = running.length === 1 ? `"${running[0].title}" is` : `${running.length} background jobs are`;
-        if (!window.confirm(`${what} still running in this conversation. Closing it stops ${running.length === 1 ? "it" : "them"}. Close anyway?`)) return;
-      }
-      closeTab(tabId);
-    },
-    [tabJobs, closeTab]
-  );
+  // Closing a conversation only takes it off the Open list. Its Claude
+  // process lives on the Mac (session-owner.ts): a turn or background job
+  // still running carries on, and is in History when it's done.
+  const closeTabSafely = closeTab;
+  void tabJobs;
 
   // A different agent needs a fresh Claude process, which would stop the
   // background jobs still working in this one.
@@ -252,6 +246,11 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   activeAgentRef.current = activeAgent;
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
   const inputValue = inputValues[activeTabId] ?? "";
+  // Which tabs have unsent text: a conversation closed on another device
+  // stays open here while its box has text (see setDraft).
+  useEffect(() => {
+    for (const [tabId, text] of Object.entries(inputValues)) setDraft(tabId, text);
+  }, [inputValues, setDraft]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [attachedFilesMap, setAttachedFilesMap] = useState<Record<string, AttachedFile[]>>({});
   const attachedFiles = attachedFilesMap[activeTabId] ?? [];
@@ -1269,6 +1268,12 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
       )}
 
       <BackgroundJobs jobs={activeJobs} />
+
+      {activeClosedElsewhere && (
+        <div className="hyo-closed-elsewhere">
+          Closed on your other device. It stays open here while there's text in the box; send it and it opens everywhere again.
+        </div>
+      )}
 
       <div className="hyo-input-area">
         {/* Slash command menu — floats above input */}

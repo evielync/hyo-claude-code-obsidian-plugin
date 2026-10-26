@@ -109,23 +109,48 @@ function metaFor(
 // Assemble the task list: union of live tabs and past sessions, deduped on
 // cliSessionId (a task with an open tab must never also appear as a past
 // entry). Live state always wins. Sorted pinned-first, then by recency.
+/** What the Mac knows about an open conversation this device hasn't loaded: its last line and when it was last active. */
+export interface OpenHint {
+  peek?: string;
+  lastActive?: number;
+}
+
+function timeOf(v: unknown): number | null {
+  if (typeof v === "number" && isFinite(v) && v > 0) return v;
+  if (v instanceof Date) return isFinite(v.getTime()) ? v.getTime() : null;
+  if (typeof v === "string" && v) {
+    const t = Date.parse(v);
+    return isFinite(t) ? t : null;
+  }
+  return null;
+}
+
 export function buildTaskList(
   tabs: TabSession[],
   pastSessions: PastSession[],
   tasks: Record<string, TaskMeta>,
-  now: number = Date.now()
+  now: number = Date.now(),
+  hints: Record<string, OpenHint> = {}
 ): BoardTask[] {
   const byKey = new Map<string, BoardTask>();
+  const pastById = new Map(pastSessions.map((p) => [p.id, p]));
 
   for (const tab of tabs) {
     const meta = metaFor(tasks, tab.cliSessionId);
     const key = tab.cliSessionId || tab.id;
+    const past = tab.cliSessionId ? pastById.get(tab.cliSessionId) : undefined;
+    const hint = tab.cliSessionId ? hints[tab.cliSessionId] : undefined;
+    // The most recent of everything known about it: a turn here, the
+    // metadata, the Mac's word for it, the transcript's last write.
+    const times = [timeOf((tab as any).lastActivity), timeOf(meta.lastActive), timeOf(hint?.lastActive), timeOf(past?.date)].filter(
+      (t): t is number => t !== null
+    );
     byKey.set(key, {
       key,
       cliSessionId: tab.cliSessionId,
       tabId: tab.id,
       title: tab.title || meta.title || "Untitled",
-      peek: derivePeek(tab),
+      peek: derivePeek(tab) || hint?.peek || past?.lastSnippet || "",
       state: deriveTaskState({
         // Background jobs still running count as working, after the reply too.
         generating: tab.generating || Object.keys(tab.jobs || {}).length > 0,
@@ -135,7 +160,7 @@ export function buildTaskList(
       isOpen: true,
       pinned: !!meta.pinned,
       closed: !!meta.closed,
-      lastActive: meta.lastActive ? Date.parse(meta.lastActive) : now,
+      lastActive: times.length ? Math.max(...times) : now,
       live: tab,
       past: null,
     });
