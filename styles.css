@@ -1043,202 +1043,306 @@ button.hyo-ask-send:disabled {
   background: #b55555 !important;
 }
 
-/* Tab bar — acts as header, combines tabs + actions */
-.hyo-tabs {
+/* ── Conversation bar + panel ─────────────────────────────────────────────
+   The bar is one button for the conversation you're in (status dot, title,
+   how many are open, chevron) with New conversation beside it. The button
+   opens a panel over the view with two sides: Open (the conversations in
+   play) and History (everything else). Shared by desktop, where the bar caps
+   the view and the panel drops from the top, and the phone, where the bar
+   sits above the input and the panel is a bottom sheet (.is-mobile, below).
+   Nothing here appears or disappears on :hover: on iOS the first tap on
+   anything that reveals content on hover is spent as a hover. */
+.hyo-cs-bar {
   display: flex;
   flex: 0 0 auto;
-  align-items: flex-end;
-  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px 7px 10px;
   background: var(--background-secondary);
   border-bottom: 1px solid var(--background-modifier-border);
-  padding: 6px 8px 0 8px;
-  gap: 8px;
 }
-
-/* Left side — scrollable tabs */
-.hyo-tabs-left {
-  display: flex;
+.hyo-plugin .hyo-chat-panel button.hyo-cs-current {
   flex: 1;
   min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  gap: 2px;
-  scrollbar-width: none;
-}
-
-.hyo-tabs-left::-webkit-scrollbar {
-  display: none;
-  height: 0;
-}
-
-/* Right side — action buttons */
-.hyo-tabs-actions {
+  height: 34px;
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  padding-bottom: 6px;
-}
-
-/* Action button styling */
-.hyo-action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  color: var(--text-muted);
-  background: transparent;
-  border-radius: var(--radius-s);
-  transition: all 0.1s;
-}
-
-.hyo-action-btn:hover {
-  color: var(--text-normal);
-  background: var(--background-modifier-hover);
-}
-
-/* Individual tab */
-.hyo-tab {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  max-width: 200px;
-  padding: 6px 8px;
-  border-radius: 6px 6px 0 0;
-  cursor: pointer;
-  color: var(--text-muted);
-  font-size: 12px;
-  white-space: nowrap;
-  user-select: none;
-  transition: color 0.1s;
-}
-
-/* Drag to reorder — the tab being carried fades, and a caret marks the slot
-   it will drop into. */
-.hyo-tab-dragging {
-  opacity: 0.4;
-}
-
-.hyo-tab-drop-before::before,
-.hyo-tab-drop-after::after {
-  content: "";
-  position: absolute;
-  top: 4px;
-  bottom: 4px;
-  width: 2px;
-  border-radius: 1px;
-  background: var(--interactive-accent);
-  pointer-events: none;
-}
-
-.hyo-tab-drop-before::before {
-  left: -2px;
-}
-
-.hyo-tab-drop-after::after {
-  right: -2px;
-}
-
-.hyo-tab:hover {
-  color: var(--text-normal);
-  background: var(--background-modifier-hover);
-}
-
-.hyo-tab-active {
-  color: var(--text-normal);
+  gap: 8px;
+  padding: 0 10px 0 12px !important;
+  border-radius: 10px;
   background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-normal);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
 }
-
-.hyo-tab-active:hover {
-  background: var(--background-primary);
-}
-
-/* Tab title */
-.hyo-tab-title {
+.hyo-cs-current-title {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0;
+  white-space: nowrap;
 }
+.hyo-cs-count {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: 7px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.hyo-cs-count .hyo-cs-dot { width: 6px; height: 6px; }
+.hyo-cs-chevron { flex: none; display: inline-flex; color: var(--text-muted); }
 
-/* Close button — always reserves space, visible on hover/active */
-.hyo-tab-close {
-  flex-shrink: 0;
+/* Status dots: working pulses green, waiting on you is red, otherwise hollow. */
+.hyo-cs-dot {
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+.hyo-cs-dot-working {
+  background: var(--color-green, #4bb377);
+  animation: hyo-cs-pulse 1.6s ease-in-out infinite;
+}
+.hyo-cs-dot-waiting { background: #D64B3F; }
+.hyo-cs-dot-idle {
+  background: transparent;
+  border: 1.5px solid var(--background-modifier-border-hover, var(--text-faint));
+}
+@keyframes hyo-cs-pulse { 50% { transform: scale(.6); opacity: .6; } }
+
+.hyo-plugin .hyo-chat-panel button.hyo-cs-iconbtn {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  font-size: 14px;
-  line-height: 1;
-  color: var(--text-muted) !important;
-  opacity: 0;
-  transition: opacity 0.1s;
+  width: 34px;
+  height: 34px;
+  padding: 0 !important;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-muted);
+}
+/* On an iPad Obsidian pads bare buttons until a flex-shrunk icon collapses to
+   0px wide (measured svg:0x15). A floor the icon can't shrink past holds it. */
+.hyo-cs-bar button svg,
+.hyo-cs-sheet button svg,
+.hyo-cs-sheet .hyo-ts-search-field svg {
+  flex: 0 0 auto !important;
+  min-width: 14px !important;
+  min-height: 14px !important;
 }
 
-.hyo-tab-close:hover {
-  color: var(--text-normal);
-  background: var(--background-modifier-hover);
+/* The panel: a scrim over the whole view and a sheet from the bar's edge. */
+.hyo-cs-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
 }
-
-.hyo-tab:hover .hyo-tab-close,
-.hyo-tab-active .hyo-tab-close {
-  opacity: 1;
+.hyo-cs-overlay-bottom { justify-content: flex-end; }
+.hyo-cs-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(30, 24, 20, .28);
+  animation: hyo-cs-fade-in .2s ease-out;
 }
-
-/* Working — Claude is running. Green "go" dot with a calm scale pulse: alive,
-   but ambient (this is the constant background state, so it stays gentle). */
-.hyo-tab-dot {
-  width: 5px;
+.theme-dark .hyo-cs-scrim { background: rgba(0, 0, 0, .45); }
+.hyo-cs-sheet {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: calc(100% - 40px);
+  background: var(--background-primary);
+  border-radius: 0 0 16px 16px;
+  padding-top: 10px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .14);
+  animation: hyo-cs-drop-in .24s cubic-bezier(.2, .8, .2, 1);
+}
+.hyo-cs-sheet-history { height: calc(100% - 24px); max-height: calc(100% - 24px); }
+.hyo-cs-overlay-bottom .hyo-cs-sheet {
+  border-radius: 22px 22px 0 0;
+  padding-top: 0;
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, .12);
+  animation: hyo-cs-rise-in .3s cubic-bezier(.2, .8, .2, 1);
+}
+.hyo-cs-overlay-bottom .hyo-cs-sheet-open { max-height: 78%; }
+.hyo-cs-overlay-bottom .hyo-cs-sheet-history { height: 92%; max-height: 92%; }
+.hyo-cs-closing .hyo-cs-scrim { animation: hyo-cs-fade-out .18s ease-in forwards; }
+.hyo-cs-closing .hyo-cs-sheet { animation: hyo-cs-drop-out .18s ease-in forwards; }
+.hyo-cs-overlay-bottom.hyo-cs-closing .hyo-cs-sheet { animation: hyo-cs-rise-out .18s ease-in forwards; }
+@keyframes hyo-cs-fade-in { from { opacity: 0; } }
+@keyframes hyo-cs-fade-out { to { opacity: 0; } }
+@keyframes hyo-cs-drop-in { from { transform: translateY(-100%); } }
+@keyframes hyo-cs-drop-out { to { transform: translateY(-100%); } }
+@keyframes hyo-cs-rise-in { from { transform: translateY(100%); } }
+@keyframes hyo-cs-rise-out { to { transform: translateY(100%); } }
+.hyo-cs-grab {
+  flex: none;
+  width: 38px;
   height: 5px;
-  border-radius: 50%;
-  background: var(--color-green, #4bb377);
-  flex-shrink: 0;
-  animation: hyo-dot-working-pulse 1.5s ease-in-out infinite;
+  margin: 8px auto 10px;
+  border-radius: 3px;
+  background: var(--background-modifier-border-hover, var(--background-modifier-border));
 }
 
-@keyframes hyo-dot-working-pulse {
-  0%, 100% { transform: scale(1);    opacity: 0.55; }
-  50%      { transform: scale(1.15); opacity: 1; }
+/* Open | History, and Done. */
+.hyo-cs-seg-row {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px 10px;
 }
-
-/* Waiting on you — Claude is blocked awaiting a permission, answer, or plan
-   approval. Warm peach "your turn" colour + an assertive scale-and-glow pulse
-   that pulls the eye from another tab, unlike the calm green working dot. */
-.hyo-tab-dot-waiting {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #f0a875;
-  animation: hyo-dot-waiting-pulse 1.1s ease-in-out infinite;
+.hyo-cs-seg {
+  flex: 1;
+  display: flex;
+  padding: 3px;
+  border-radius: 11px;
+  background: var(--background-secondary);
 }
-
-@keyframes hyo-dot-waiting-pulse {
-  0%, 100% {
-    transform: scale(1);
-    box-shadow: 0 0 0 2px rgba(240, 168, 117, 0.4);
-    opacity: 1;
-  }
-  50% {
-    transform: scale(1.25);
-    box-shadow: 0 0 0 6px rgba(240, 168, 117, 0);
-    opacity: 1;
-  }
+.hyo-plugin .hyo-chat-panel button.hyo-cs-seg-btn {
+  flex: 1;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 !important;
+  border-radius: 9px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  transition: background .15s, color .15s;
 }
-
-.hyo-tab-rename-input {
-  width: 100px;
-  padding: 2px 6px;
-  font-size: 12px;
-  border: 1px solid var(--interactive-accent);
-  border-radius: var(--radius-s);
+.hyo-plugin .hyo-chat-panel button.hyo-cs-seg-btn.is-on {
   background: var(--background-primary);
   color: var(--text-normal);
+  box-shadow: 0 1px 3px rgba(40, 30, 20, .12);
+}
+.hyo-cs-n {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.hyo-cs-n-red { background: #D64B3F; color: #fff; }
+.hyo-plugin .hyo-chat-panel button.hyo-cs-done {
+  flex: none;
+  height: 36px;
+  padding: 0 4px !important;
+  color: var(--interactive-accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* The Open side. */
+.hyo-cs-view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.hyo-cs-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.hyo-cs-row-wrap { position: relative; overflow: hidden; }
+.hyo-cs-row-del {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 22px;
+  background: #D64B3F;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+}
+.hyo-cs-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 6px 10px 14px;
+  background: var(--background-primary);
+  cursor: pointer;
+}
+.hyo-cs-row.can-swipe { touch-action: pan-y; }
+.hyo-cs-row.is-settling { transition: transform .18s ease-out; }
+.hyo-cs-row.is-active { background: color-mix(in srgb, var(--interactive-accent) 9%, var(--background-primary)); }
+.hyo-cs-row-dot { flex: none; display: flex; justify-content: center; width: 8px; padding-top: 6px; }
+.hyo-cs-row-body { flex: 1; min-width: 0; }
+.hyo-cs-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-normal);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.hyo-cs-row-peek {
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.hyo-cs-row-meta { margin-top: 3px; color: var(--text-faint); font-size: 11px; }
+.hyo-cs-meta-waiting { color: #D64B3F; font-weight: 700; }
+.hyo-cs-meta-working { color: var(--color-green, #4bb377); font-weight: 700; }
+.hyo-cs-row-actions { flex: none; display: flex; align-items: center; align-self: center; }
+.hyo-plugin .hyo-chat-panel button.hyo-cs-row-btn { width: 32px; height: 36px; color: var(--text-faint); }
+/* Obsidian styles every text input; the rename box draws its own. */
+.hyo-cs-row input.hyo-cs-rename-input,
+.hyo-cs-row input.hyo-cs-rename-input:focus {
+  width: 100%;
+  height: 24px;
+  margin: 0;
+  padding: 0 6px;
+  border: 1px solid var(--interactive-accent);
+  border-radius: 6px;
+  background: var(--background-primary-alt);
+  box-shadow: none;
   outline: none;
+  color: var(--text-normal);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.hyo-cs-foot {
+  flex: none;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.hyo-plugin .hyo-chat-panel button.hyo-cs-newbtn {
+  width: 100%;
+  height: 40px;
+  padding: 0 !important;
+  border-radius: 10px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent, #fff);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* The History side sits in the sheet: search on the sheet, cards on cream. */
+.hyo-cs-sheet .hyo-ts-screen { background: var(--background-primary); }
+.hyo-cs-sheet .hyo-ts-search { padding: 0 12px 8px; background: var(--background-primary); }
+.hyo-cs-sheet .hyo-ts-list { background: var(--background-primary-alt); }
+
+@media (hover: hover) {
+  .hyo-plugin .hyo-chat-panel button.hyo-cs-current:hover { border-color: var(--background-modifier-border-hover); }
+  .hyo-plugin .hyo-chat-panel button.hyo-cs-iconbtn:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+  .hyo-cs-row:hover { background: var(--background-modifier-hover); }
+  .hyo-cs-row.is-active:hover { background: color-mix(in srgb, var(--interactive-accent) 13%, var(--background-primary)); }
+  .hyo-plugin .hyo-chat-panel button.hyo-cs-newbtn:hover { background: var(--interactive-accent-hover); }
 }
 
 /* Session dropdown */
@@ -2341,19 +2445,9 @@ button.hyo-ask-send:disabled {
   margin-bottom: 0;
 }
 /* ============================================================
-   History as a full task screen. Shares the chat top bar; the
-   clock button toggles chat <-> this view. Premium list feel:
+   History: the panel's second side. Premium list feel —
    soft-shadowed cards, no hard borders, sticky day headers.
    ============================================================ */
-
-.hyo-history-btn { position: relative; }
-.hyo-history-btn-active { background: var(--background-modifier-hover); color: var(--interactive-accent); border-radius: 6px; }
-.hyo-history-badge {
-  position: absolute; top: -3px; right: -4px;
-  min-width: 13px; height: 13px; padding: 0 3px; border-radius: 7px;
-  background: var(--interactive-accent); color: var(--text-on-accent, #fff);
-  font-size: 8.5px; font-weight: 700; line-height: 13px; text-align: center;
-}
 
 .hyo-ts-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--background-primary-alt); }
 
@@ -2364,8 +2458,8 @@ button.hyo-ask-send:disabled {
 }
 .hyo-ts-search-field {
   flex: 1; display: flex; align-items: center; gap: 6px; min-width: 0;
-  background: var(--background-primary); border: 1px solid var(--background-modifier-border);
-  border-radius: 8px; padding: 0 8px; height: 30px;
+  background: var(--background-primary-alt); border: 1px solid var(--background-modifier-border);
+  border-radius: 8px; padding: 0 8px; height: 32px;
 }
 .hyo-ts-search-field:focus-within { border-color: var(--interactive-accent); }
 .hyo-ts-search-field svg { flex: none; color: var(--text-faint); }
@@ -2380,12 +2474,11 @@ button.hyo-ask-send:disabled {
   font-size: 12.5px; color: var(--text-normal);
 }
 .hyo-ts-search .hyo-ts-search-input::placeholder { color: var(--text-faint); }
-.hyo-ts-search .hyo-ts-search-clear {
+.hyo-plugin .hyo-ts-search button.hyo-ts-search-clear {
   flex: none; display: flex; align-items: center; justify-content: center;
-  width: 18px; height: 18px; padding: 0; border: none; border-radius: 50%;
+  width: 22px; height: 22px; padding: 0 !important; border: none; border-radius: 50%;
   background: transparent; color: var(--text-faint); cursor: pointer; box-shadow: none;
 }
-.hyo-ts-search .hyo-ts-search-clear:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
 /* Full text is Obsidian's own switch (.checkbox-container), label beside it. */
 .hyo-ts-search .hyo-ts-search-mode {
   flex: none; display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
@@ -2394,37 +2487,17 @@ button.hyo-ask-send:disabled {
 }
 .hyo-ts-search .hyo-ts-search-mode-on { color: var(--text-normal); }
 .hyo-ts-search .hyo-ts-search-mode .checkbox-container { margin: 0; }
-.hyo-ts-search .hyo-ts-refresh {
+.hyo-plugin .hyo-ts-search button.hyo-ts-refresh {
   flex: none; display: flex; align-items: center; justify-content: center;
-  width: 30px; height: 30px; padding: 0; border-radius: 8px; cursor: pointer;
+  width: 32px; height: 32px; padding: 0 !important; border-radius: 8px; cursor: pointer;
   background: transparent; border: 1px solid var(--background-modifier-border);
   color: var(--text-muted); box-shadow: none;
 }
-.hyo-ts-search .hyo-ts-refresh:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
 .hyo-ts-search .hyo-ts-refresh-busy svg { animation: hyo-ts-spin .7s linear infinite; }
 @keyframes hyo-ts-spin { to { transform: rotate(360deg); } }
-.hyo-ts-searching { padding: 6px 12px 0; font-size: 11px; color: var(--text-faint); }
+.hyo-ts-searching { padding: 0 12px 6px; font-size: 11px; color: var(--text-faint); background: var(--background-primary); }
 
-/* Filters */
-.hyo-ts-filters {
-  display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;
-  padding: 9px 12px; border-bottom: 1px solid var(--background-modifier-border);
-  background: var(--background-primary-alt);
-}
-.hyo-ts-filters::-webkit-scrollbar { display: none; }
-.hyo-ts-filter {
-  flex: none; display: inline-flex; align-items: center; gap: 5px;
-  font-size: 11.5px; font-weight: 500; white-space: nowrap; color: var(--text-muted);
-  background: transparent; border: 1px solid var(--background-modifier-border);
-  border-radius: 999px; padding: 4px 12px; cursor: pointer;
-}
-.hyo-ts-filter:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
-.hyo-ts-filter-on { background: var(--interactive-accent); border-color: var(--interactive-accent); color: var(--text-on-accent, #fff); }
-.hyo-ts-filter-count { font-size: 10px; font-weight: 700; opacity: .75; }
-.hyo-ts-filter-empty { opacity: .5; }
-.hyo-ts-filter-empty.hyo-ts-filter-on { opacity: 1; }
-
-.hyo-ts-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 12px 14px; }
+.hyo-ts-list { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 12px 14px; }
 .hyo-ts-empty { padding: 44px 12px; text-align: center; color: var(--text-faint); font-size: 12.5px; }
 
 /* Sticky, legible day headers */
@@ -2434,74 +2507,54 @@ button.hyo-ask-send:disabled {
   font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
   color: var(--text-normal); opacity: .85;
   background: var(--background-primary-alt);
-  padding: 12px 2px 7px;
-  border-bottom: 1px solid var(--background-modifier-border);
-  margin-bottom: 8px;
+  padding: 10px 2px 7px;
 }
 
-/* Premium card: no border, soft shadow, sits above the cream. */
+/* Premium card: no border, soft shadow, sits above the cream. The pin button
+   is always there, bottom right, so nothing changes on hover. */
 .hyo-ts-card {
   position: relative;
   background: var(--background-primary);
   border-radius: 12px;
-  padding: 13px 14px; margin-bottom: 9px;
+  padding: 12px 12px 10px 14px; margin-bottom: 9px;
   box-shadow: 0 1px 2px rgba(40,30,20,.05), 0 3px 10px rgba(40,30,20,.05);
   cursor: pointer; transition: box-shadow .14s, background .14s;
 }
-.hyo-ts-card:hover { background: var(--background-modifier-hover); box-shadow: 0 2px 4px rgba(40,30,20,.07), 0 6px 18px rgba(40,30,20,.08); }
 .theme-dark .hyo-ts-card { box-shadow: 0 1px 2px rgba(0,0,0,.25); }
-.theme-dark .hyo-ts-card:hover { box-shadow: 0 3px 12px rgba(0,0,0,.35); }
-.hyo-ts-card.hyo-ts-closed { opacity: .55; }
 
-.hyo-ts-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .hyo-ts-title { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--text-normal); line-height: 1.3; }
 .hyo-ts-pin-mark { flex: none; display: inline-flex; color: var(--interactive-accent); }
 .hyo-ts-title-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hyo-ts-rename {
-  font-size: 13.5px; font-weight: 600; color: var(--text-normal);
-  background: var(--background-primary-alt);
-  border: 1px solid var(--interactive-accent); border-radius: 6px;
-  padding: 2px 6px; width: 100%; outline: none;
-}
 
-/* Chips: attention = red (loud), response = soft terracotta (backlog). */
-.hyo-ts-pill {
-  flex: none; display: inline-flex; align-items: center; gap: 5px;
-  font-size: 10px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase;
-  padding: 3px 9px; border-radius: 999px; white-space: nowrap;
-}
-.hyo-ts-pill-needs-attention { background: #D64B3F; color: #fff; }
-.hyo-ts-pill-needs-response { background: color-mix(in srgb, var(--interactive-accent) 13%, var(--background-primary)); color: color-mix(in srgb, var(--interactive-accent) 82%, var(--text-normal)); }
-.hyo-ts-pill-working { background: color-mix(in srgb, var(--color-green) 18%, var(--background-primary)); color: var(--color-green); }
-.hyo-ts-pill-closed { background: var(--background-modifier-hover); color: var(--text-muted); }
-.hyo-ts-livedot { width: 5px; height: 5px; border-radius: 50%; background: var(--color-green); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--color-green) 25%, transparent); }
-
-.hyo-ts-peek { font-size: 12px; color: var(--text-muted); margin-top: 6px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.hyo-ts-card-foot { display: flex; align-items: center; margin-top: 9px; }
+.hyo-ts-peek { font-size: 12px; color: var(--text-muted); margin-top: 5px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.hyo-ts-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
 .hyo-ts-time { font-size: 10.5px; color: var(--text-faint); display: inline-flex; align-items: center; gap: 6px; }
 .hyo-ts-openmark { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--interactive-accent); }
 
-/* Icon actions, absolute top-right so hover never resizes the card. */
-.hyo-ts-actions { position: absolute; top: 10px; right: 11px; display: none; align-items: center; gap: 5px; }
-.hyo-ts-card:hover .hyo-ts-actions { display: inline-flex; }
-.hyo-ts-card:hover .hyo-ts-pill { visibility: hidden; }
-.hyo-ts-act {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 30px; height: 30px; padding: 0; color: var(--text-muted);
+.hyo-plugin .hyo-chat-panel button.hyo-ts-act {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; padding: 0 !important; color: var(--text-muted);
   background: var(--background-primary-alt);
   border: 1px solid var(--background-modifier-border); border-radius: 8px; cursor: pointer;
 }
-.hyo-ts-act:hover { background: var(--background-modifier-hover); color: var(--text-normal); border-color: var(--interactive-accent); }
-.hyo-ts-act-on { color: var(--interactive-accent); border-color: var(--interactive-accent); }
+.hyo-plugin .hyo-chat-panel button.hyo-ts-act-on { color: var(--interactive-accent); border-color: var(--interactive-accent); }
 
-.hyo-ts-loadmore {
-  display: block; margin: 8px auto 6px; padding: 8px 18px;
+.hyo-plugin .hyo-chat-panel button.hyo-ts-loadmore {
+  display: block; margin: 8px auto 6px; padding: 0 18px !important; height: 36px;
   font-size: 12px; font-weight: 500; color: var(--text-muted);
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border); border-radius: 8px; cursor: pointer;
   box-shadow: 0 1px 2px rgba(40,30,20,.05);
 }
-.hyo-ts-loadmore:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+
+@media (hover: hover) {
+  .hyo-ts-card:hover { background: var(--background-modifier-hover); box-shadow: 0 2px 4px rgba(40,30,20,.07), 0 6px 18px rgba(40,30,20,.08); }
+  .theme-dark .hyo-ts-card:hover { box-shadow: 0 3px 12px rgba(0,0,0,.35); }
+  .hyo-plugin .hyo-ts-search button.hyo-ts-search-clear:hover,
+  .hyo-plugin .hyo-ts-search button.hyo-ts-refresh:hover,
+  .hyo-plugin .hyo-chat-panel button.hyo-ts-loadmore:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+  .hyo-plugin .hyo-chat-panel button.hyo-ts-act:hover { background: var(--background-modifier-hover); color: var(--text-normal); border-color: var(--interactive-accent); }
+}
 
 /* ── Mobile session chip + panel (agent · model · permissions) ─────────── */
 .hyo-chat-panel { position: relative; }
@@ -3622,198 +3675,6 @@ button.hyo-ask-send:disabled {
 .is-mobile .hyo-send-btn.hyo-stop:hover {
   background: #b55555 !important;
 }
-.is-mobile /* Tab bar — sits at the bottom of the panel, .is-mobile just above the input card.
-   Connection dot, .is-mobile then the scrollable tab list, .is-mobile then the new-tab action
-   pushed to the far right. */
-.hyo-tabs {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px 4px;
-}
-.is-mobile /* Gateway connection dot — the only remaining trace of connection status
-   now that the separate status strip is gone. */
-.hyo-conn-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--text-faint);
-  flex: 0 0 auto;
-}
-.is-mobile .hyo-conn-dot-connected {
-  background: var(--color-green);
-}
-.is-mobile .hyo-conn-dot-connecting, .is-mobile .hyo-conn-dot-reconnecting {
-  background: var(--color-yellow);
-}
-.is-mobile .hyo-conn-dot-disconnected {
-  background: var(--color-red);
-}
-.is-mobile /* Scrollable tab list */
-.hyo-tabs-left {
-  display: flex;
-  align-items: center;
-  flex: 1;
-  min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  gap: 6px;
-}
-.is-mobile .hyo-tabs-left::-webkit-scrollbar {
-  height: 0;
-}
-.is-mobile /* Right side — action buttons, .is-mobile pushed to the far right by hyo-tabs-left's
-   flex: 1 */
-.hyo-tabs-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
-.is-mobile /* Action button styling */
-.hyo-action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  color: var(--text-muted);
-  background: transparent;
-  border-radius: var(--radius-s);
-  transition: all 0.1s;
-}
-.is-mobile .hyo-action-btn:hover {
-  color: var(--text-normal);
-  background: var(--background-modifier-hover);
-}
-.is-mobile /* Individual tab — a small rounded pill, .is-mobile not a browser-style joined tab, .is-mobile since the bar now floats above the input rather than capping the panel. */
-.hyo-tab {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-  max-width: 200px;
-  padding: 5px 10px;
-  border-radius: 9px;
-  border: 1px solid var(--background-modifier-border);
-  background: var(--background-secondary);
-  cursor: pointer;
-  color: var(--text-muted);
-  font-size: 12.5px;
-  white-space: nowrap;
-  user-select: none;
-  transition: color 0.1s, background 0.1s, border-color 0.1s;
-}
-.is-mobile .hyo-tab:hover {
-  color: var(--text-normal);
-  background: var(--background-modifier-hover);
-}
-.is-mobile .hyo-tab-active {
-  color: var(--text-normal);
-  background: var(--background-primary);
-  border-color: var(--background-modifier-border-hover);
-}
-.is-mobile .hyo-tab-active:hover {
-  background: var(--background-primary);
-}
-.is-mobile /* Tab title */
-.hyo-tab-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-.is-mobile /* Close button — always reserves space, .is-mobile visible on hover/active */
-.hyo-tab-close {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  font-size: 14px;
-  line-height: 1;
-  color: var(--text-muted) !important;
-  opacity: 0;
-  transition: opacity 0.1s;
-}
-.is-mobile .hyo-tab-close:hover {
-  color: var(--text-normal);
-  background: var(--background-modifier-hover);
-}
-.is-mobile .hyo-tab:hover .hyo-tab-close, .is-mobile .hyo-tab-active .hyo-tab-close {
-  opacity: 1;
-}
-/* One tap switches tabs. iOS treats the first tap on anything that reveals
-   content on :hover as a hover and holds back the click, so a close button
-   that appears on hover made every switch take two taps. On a phone the close
-   button only exists on the open tab and nothing changes on hover. The
-   callout and text selection are off so a long-press (rename) stays clean. */
-.is-mobile .hyo-tab:not(.hyo-tab-active) .hyo-tab-close {
-  display: none;
-}
-.is-mobile .hyo-tab {
-  -webkit-touch-callout: none;
-  -webkit-user-select: none;
-  touch-action: pan-x;
-}
-@media (hover: none) {
-  .is-mobile .hyo-tab:hover {
-    color: var(--text-muted);
-    background: var(--background-secondary);
-  }
-  .is-mobile .hyo-tab-active:hover {
-    color: var(--text-normal);
-    background: var(--background-primary);
-  }
-}
-.is-mobile /* Working — Claude is running. Green "go" dot with a calm scale pulse: alive, .is-mobile but ambient (this is the constant background state, .is-mobile so it stays gentle). */
-.hyo-tab-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--color-green, #4bb377);
-  flex-shrink: 0;
-  animation: hyo-dot-working-pulse 1.5s ease-in-out infinite;
-}
-@keyframes hyo-dot-working-pulse {
-  0%, 100% { transform: scale(1);    opacity: 0.55; }
-  50%      { transform: scale(1.15); opacity: 1; }
-}
-.is-mobile /* Waiting on you — Claude is blocked awaiting a permission, .is-mobile answer, .is-mobile or plan
-   approval. Warm peach "your turn" colour + an assertive scale-and-glow pulse
-   that pulls the eye from another tab, .is-mobile unlike the calm green working dot. */
-.hyo-tab-dot-waiting {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #f0a875;
-  animation: hyo-dot-waiting-pulse 1.1s ease-in-out infinite;
-}
-@keyframes hyo-dot-waiting-pulse {
-  0%, 100% {
-    transform: scale(1);
-    box-shadow: 0 0 0 2px rgba(240, 168, 117, 0.4);
-    opacity: 1;
-  }
-  50% {
-    transform: scale(1.25);
-    box-shadow: 0 0 0 6px rgba(240, 168, 117, 0);
-    opacity: 1;
-  }
-}
-.is-mobile .hyo-tab-rename-input {
-  width: 100px;
-  padding: 2px 6px;
-  font-size: 12px;
-  border: 1px solid var(--interactive-accent);
-  border-radius: var(--radius-s);
-  background: var(--background-primary);
-  color: var(--text-normal);
-  outline: none;
-}
 .is-mobile /* Session dropdown */
 .hyo-session-dropdown {
   position: relative;
@@ -4495,7 +4356,7 @@ button.hyo-ask-send:disabled {
 .is-mobile /* iPad/tablet fix (2026-07-18): on `is-tablet`, .is-mobile Obsidian collapses button-icon
    SVG width to 0 (diagnostic showed svg:0x15) so the icons vanish while the
    buttons stay. Force explicit icon dimensions so nothing can flatten them. */
-.hyo-input-controls button svg, .is-mobile .hyo-tabs button svg {
+.hyo-input-controls button svg {
   width: 16px !important;
   height: 16px !important;
   flex-shrink: 0 !important;
@@ -4535,161 +4396,6 @@ button.hyo-ask-send:disabled {
 .workspace-drawer.mod-right:has([data-type="hyo-plugin-view"]) .metadata-content, .is-mobile .workspace-drawer.mod-right:has([data-type="hyo-plugin-view"]) .metadata-container, .is-mobile .workspace-drawer.mod-right:has([data-type="hyo-plugin-view"]) .view-content > * {
   background-color: var(--background-primary-alt) !important;
 }
-.is-mobile /* ============================================================
-   History as a full task screen. Shares the chat top bar; the
-   clock button toggles chat <-> this view. Premium list feel:
-   soft-shadowed cards, .is-mobile no hard borders, .is-mobile sticky day headers.
-   ============================================================ */
-
-.hyo-history-btn { position: relative; }
-.is-mobile .hyo-history-btn-active { background: var(--background-modifier-hover); color: var(--interactive-accent); border-radius: 6px; }
-.is-mobile .hyo-history-badge {
-  position: absolute; top: -3px; right: -4px;
-  min-width: 13px; height: 13px; padding: 0 3px; border-radius: 7px;
-  background: var(--interactive-accent); color: var(--text-on-accent, #fff);
-  font-size: 8.5px; font-weight: 700; line-height: 13px; text-align: center;
-}
-.is-mobile .hyo-ts-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--background-primary-alt); }
-
-/* Search bar */
-.is-mobile .hyo-ts-search {
-  display: flex; align-items: center; gap: 6px;
-  padding: 9px 12px 0; background: var(--background-primary-alt);
-}
-.is-mobile .hyo-ts-search-field {
-  flex: 1; display: flex; align-items: center; gap: 6px; min-width: 0;
-  background: var(--background-primary); border: 1px solid var(--background-modifier-border);
-  border-radius: 8px; padding: 0 8px; height: 34px;
-}
-.is-mobile .hyo-ts-search-field:focus-within { border-color: var(--interactive-accent); }
-.is-mobile .hyo-ts-search-field svg { flex: none; color: var(--text-faint); }
-.is-mobile .hyo-ts-search .hyo-ts-search-field input.hyo-ts-search-input,
-.is-mobile .hyo-ts-search .hyo-ts-search-field input.hyo-ts-search-input:focus,
-.is-mobile .hyo-ts-search .hyo-ts-search-field input.hyo-ts-search-input:active,
-.is-mobile .hyo-ts-search .hyo-ts-search-field input.hyo-ts-search-input:focus-visible {
-  flex: 1; min-width: 0; height: 100%; padding: 0; margin: 0;
-  background: transparent; border: none; border-radius: 0; box-shadow: none; outline: none;
-  font-size: 16px; color: var(--text-normal);
-}
-.is-mobile .hyo-ts-search .hyo-ts-search-input::placeholder { color: var(--text-faint); }
-.is-mobile .hyo-ts-search .hyo-ts-search-clear {
-  flex: none; display: flex; align-items: center; justify-content: center;
-  width: 22px; height: 22px; padding: 0; border: none; border-radius: 50%;
-  background: transparent; color: var(--text-faint); cursor: pointer; box-shadow: none;
-}
-.is-mobile .hyo-ts-search .hyo-ts-search-mode {
-  flex: none; display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
-  font-size: 12px; font-weight: 500; white-space: nowrap; color: var(--text-muted);
-  user-select: none;
-}
-.is-mobile .hyo-ts-search .hyo-ts-search-mode-on { color: var(--text-normal); }
-.is-mobile .hyo-ts-search .hyo-ts-search-mode .checkbox-container { margin: 0; }
-.is-mobile .hyo-ts-search .hyo-ts-refresh {
-  flex: none; display: flex; align-items: center; justify-content: center;
-  width: 34px; height: 34px; padding: 0; border-radius: 8px; cursor: pointer;
-  background: transparent; border: 1px solid var(--background-modifier-border);
-  color: var(--text-muted); box-shadow: none;
-}
-.is-mobile .hyo-ts-search .hyo-ts-refresh-busy svg { animation: hyo-ts-spin .7s linear infinite; }
-.is-mobile .hyo-ts-searching { padding: 6px 12px 0; font-size: 11px; color: var(--text-faint); }
-.is-mobile /* Filters */
-.hyo-ts-filters {
-  display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;
-  padding: 9px 12px; border-bottom: 1px solid var(--background-modifier-border);
-  background: var(--background-primary-alt);
-}
-.is-mobile .hyo-ts-filters::-webkit-scrollbar { display: none; }
-.is-mobile .hyo-ts-filter {
-  flex: none; display: inline-flex; align-items: center; gap: 5px;
-  font-size: 11.5px; font-weight: 500; white-space: nowrap; color: var(--text-muted);
-  background: transparent; border: 1px solid var(--background-modifier-border);
-  border-radius: 999px; padding: 4px 12px; cursor: pointer;
-}
-.is-mobile .hyo-ts-filter:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
-.is-mobile .hyo-ts-filter-on { background: var(--interactive-accent); border-color: var(--interactive-accent); color: var(--text-on-accent, #fff); }
-.is-mobile .hyo-ts-filter-count { font-size: 10px; font-weight: 700; opacity: .75; }
-.is-mobile .hyo-ts-filter-empty { opacity: .5; }
-.is-mobile .hyo-ts-filter-empty.hyo-ts-filter-on { opacity: 1; }
-.is-mobile .hyo-ts-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 12px 14px; }
-.is-mobile .hyo-ts-empty { padding: 44px 12px; text-align: center; color: var(--text-faint); font-size: 12.5px; }
-.is-mobile /* Sticky, .is-mobile legible day headers */
-.hyo-ts-group-block { margin-bottom: 2px; }
-.is-mobile .hyo-ts-group {
-  position: sticky; top: 0; z-index: 2;
-  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
-  color: var(--text-normal); opacity: .85;
-  background: var(--background-primary-alt);
-  padding: 12px 2px 7px;
-  border-bottom: 1px solid var(--background-modifier-border);
-  margin-bottom: 8px;
-}
-.is-mobile /* Premium card: no border, .is-mobile soft shadow, .is-mobile sits above the cream. */
-.hyo-ts-card {
-  position: relative;
-  background: var(--background-primary);
-  border-radius: 12px;
-  padding: 13px 14px; margin-bottom: 9px;
-  box-shadow: 0 1px 2px rgba(40,30,20,.05), 0 3px 10px rgba(40,30,20,.05);
-  cursor: pointer; transition: box-shadow .14s, background .14s;
-}
-.is-mobile .hyo-ts-card:hover { background: var(--background-modifier-hover); box-shadow: 0 2px 4px rgba(40,30,20,.07), 0 6px 18px rgba(40,30,20,.08); }
-.is-mobile .theme-dark .hyo-ts-card { box-shadow: 0 1px 2px rgba(0,0,0,.25); }
-.is-mobile .theme-dark .hyo-ts-card:hover { box-shadow: 0 3px 12px rgba(0,0,0,.35); }
-.is-mobile .hyo-ts-card.hyo-ts-closed { opacity: .55; }
-.is-mobile .hyo-ts-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
-.is-mobile .hyo-ts-title { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--text-normal); line-height: 1.3; }
-.is-mobile .hyo-ts-pin-mark { flex: none; display: inline-flex; color: var(--interactive-accent); }
-.is-mobile .hyo-ts-title-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.is-mobile .hyo-ts-rename {
-  font-size: 13.5px; font-weight: 600; color: var(--text-normal);
-  background: var(--background-primary-alt);
-  border: 1px solid var(--interactive-accent); border-radius: 6px;
-  padding: 2px 6px; width: 100%; outline: none;
-}
-.is-mobile /* Chips: attention = red (loud), .is-mobile response = soft terracotta (backlog). */
-.hyo-ts-pill {
-  flex: none; display: inline-flex; align-items: center; gap: 5px;
-  font-size: 10px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase;
-  padding: 3px 9px; border-radius: 999px; white-space: nowrap;
-}
-.is-mobile .hyo-ts-pill-needs-attention { background: #D64B3F; color: #fff; }
-.is-mobile .hyo-ts-pill-needs-response { background: color-mix(in srgb, var(--interactive-accent) 13%, var(--background-primary)); color: color-mix(in srgb, var(--interactive-accent) 82%, var(--text-normal)); }
-.is-mobile .hyo-ts-pill-working { background: color-mix(in srgb, var(--color-green) 18%, var(--background-primary)); color: var(--color-green); }
-.is-mobile .hyo-ts-pill-closed { background: var(--background-modifier-hover); color: var(--text-muted); }
-.is-mobile .hyo-ts-livedot { width: 5px; height: 5px; border-radius: 50%; background: var(--color-green); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--color-green) 25%, transparent); }
-.is-mobile .hyo-ts-peek { font-size: 12px; color: var(--text-muted); margin-top: 6px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.is-mobile .hyo-ts-card-foot { display: flex; align-items: center; margin-top: 9px; }
-.is-mobile .hyo-ts-time { font-size: 10.5px; color: var(--text-faint); display: inline-flex; align-items: center; gap: 6px; }
-.is-mobile .hyo-ts-openmark { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--interactive-accent); }
-/* One tap opens a conversation. iOS treats the first tap on anything that
-   reveals content on :hover as a hover and holds back the click, so pin and
-   done appearing on hover made every card take two taps. On a phone the
-   actions sit permanently in the bottom-right of the card, the status pill
-   stays put, and nothing on the card changes on hover. */
-.is-mobile .hyo-ts-card-foot { min-height: 28px; }
-.is-mobile .hyo-ts-actions,
-.is-mobile .hyo-ts-card:hover .hyo-ts-actions { position: absolute; top: auto; bottom: 13px; right: 14px; display: inline-flex; align-items: center; gap: 6px; }
-.is-mobile .hyo-ts-card:hover .hyo-ts-pill { visibility: visible; }
-.is-mobile .hyo-ts-card:hover { background: var(--background-primary); box-shadow: 0 1px 2px rgba(40,30,20,.05), 0 3px 10px rgba(40,30,20,.05); }
-.is-mobile.theme-dark .hyo-ts-card:hover, .theme-dark .is-mobile .hyo-ts-card:hover { box-shadow: 0 1px 2px rgba(0,0,0,.25); }
-.is-mobile .hyo-ts-card { -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
-.is-mobile .hyo-ts-card:active { background: var(--background-modifier-hover); }
-.is-mobile .hyo-ts-act {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 30px; height: 30px; padding: 0; color: var(--text-muted);
-  background: var(--background-primary-alt);
-  border: 1px solid var(--background-modifier-border); border-radius: 8px; cursor: pointer;
-}
-.is-mobile .hyo-ts-act:hover { background: var(--background-modifier-hover); color: var(--text-normal); border-color: var(--interactive-accent); }
-.is-mobile .hyo-ts-act-on { color: var(--interactive-accent); border-color: var(--interactive-accent); }
-.is-mobile .hyo-ts-loadmore {
-  display: block; margin: 8px auto 6px; padding: 8px 18px;
-  font-size: 12px; font-weight: 500; color: var(--text-muted);
-  background: var(--background-primary);
-  border: 1px solid var(--background-modifier-border); border-radius: 8px; cursor: pointer;
-  box-shadow: 0 1px 2px rgba(40,30,20,.05);
-}
-.is-mobile .hyo-ts-loadmore:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
 
 /* Left-align session panel options (beats Obsidian mobile's centred button default) */
 .hyo-session-sheet .hyo-session-opt { justify-content: flex-start; text-align: left; }
@@ -4976,39 +4682,6 @@ button.hyo-callline:hover { background: var(--background-secondary); }
 .is-mobile .hyo-callbar button.hyo-callbar-end { width: 48px; height: 36px; border-radius: 18px; }
 .is-mobile .hyo-callsheet { max-height: 85%; padding-bottom: env(safe-area-inset-bottom); }
 
-/* ── Main chat ─────────────────────────────────────────────────────────────
-   The pinned first tab. Quiet: a small chat-bubble mark in place of the dot
-   and a hairline after it that sets it apart from the tabs that come and go.
-   No close button; it can't be dragged. Shared by desktop and phone. */
-.hyo-tab-main {
-  margin-right: 4px;
-}
-.hyo-tab-main::after {
-  content: "";
-  position: absolute;
-  right: -3px;
-  top: 7px;
-  bottom: 7px;
-  width: 1px;
-  background: var(--background-modifier-border);
-  pointer-events: none;
-}
-.hyo-tab-main-icon {
-  flex-shrink: 0;
-  opacity: 0.7;
-}
-.hyo-tab-main.hyo-tab-active .hyo-tab-main-icon {
-  color: var(--text-accent);
-  opacity: 1;
-}
-/* On a phone the tabs are pills; the pill is set apart by its spacing. */
-.is-mobile .hyo-tab-main {
-  margin-right: 6px;
-}
-.is-mobile .hyo-tab-main::after {
-  right: -5px;
-}
-
 /* ── Background jobs ───────────────────────────────────────────────────────
    One line per job just above the composer, Grok Bot style: who's on it and
    what it's doing right now. Each goes when its job finishes. */
@@ -5090,3 +4763,71 @@ button.hyo-callline:hover { background: var(--background-secondary); }
   color: var(--text-muted);
   margin-bottom: 4px;
 }
+
+/* ── Conversation bar + panel on a phone ──────────────────────────────────
+   The bar floats above the input card; the panel is a bottom sheet. Touch
+   targets are at least 40px, and every button is always visible (iOS spends
+   the first tap on anything that appears on :hover). */
+.is-mobile .hyo-cs-bar {
+  padding: 6px 8px 4px 14px;
+  gap: 6px;
+  background: transparent;
+  border-bottom: none;
+}
+/* The gateway connection dot at the left of the bar. */
+.is-mobile .hyo-conn-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-right: 2px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.is-mobile .hyo-conn-dot-connected { background: var(--color-green); }
+.is-mobile .hyo-conn-dot-connecting, .is-mobile .hyo-conn-dot-reconnecting { background: var(--color-yellow); }
+.is-mobile .hyo-conn-dot-disconnected { background: var(--color-red); }
+.is-mobile .hyo-plugin .hyo-chat-panel button.hyo-cs-current {
+  height: 42px;
+  gap: 9px;
+  padding: 0 12px 0 14px !important;
+  border-radius: 13px;
+  border-color: var(--background-modifier-border-hover, var(--background-modifier-border));
+  font-size: 14.5px;
+  -webkit-tap-highlight-color: transparent;
+}
+.is-mobile .hyo-cs-count { font-size: 12px; padding: 3px 7px; }
+.is-mobile .hyo-plugin .hyo-chat-panel button.hyo-cs-iconbtn { width: 40px; height: 40px; border-radius: 12px; }
+.is-mobile .hyo-cs-seg-row { padding: 0 16px 10px; }
+.is-mobile .hyo-plugin .hyo-chat-panel button.hyo-cs-seg-btn { height: 36px; font-size: 14px; }
+.is-mobile .hyo-plugin .hyo-chat-panel button.hyo-cs-done { height: 40px; padding: 0 6px !important; font-size: 14px; }
+.is-mobile .hyo-cs-row {
+  gap: 12px;
+  padding: 12px 6px 12px 18px;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.is-mobile .hyo-cs-row:active { background: var(--background-modifier-hover); }
+.is-mobile .hyo-cs-row-title { font-size: 15px; }
+.is-mobile .hyo-cs-row-peek { font-size: 13px; }
+.is-mobile .hyo-cs-row-meta { font-size: 11.5px; }
+.is-mobile .hyo-plugin .hyo-chat-panel button.hyo-cs-row-btn { width: 40px; height: 44px; }
+.is-mobile .hyo-cs-row input.hyo-cs-rename-input,
+.is-mobile .hyo-cs-row input.hyo-cs-rename-input:focus { height: 30px; font-size: 15px; }
+.is-mobile .hyo-cs-foot { padding: 12px 18px calc(14px + env(safe-area-inset-bottom)); }
+.is-mobile .hyo-plugin .hyo-chat-panel button.hyo-cs-newbtn { height: 44px; border-radius: 12px; font-size: 14px; }
+
+/* History on a phone: bigger search, bigger buttons, one-tap cards. */
+.is-mobile .hyo-cs-sheet .hyo-ts-search { padding: 0 16px 8px; gap: 8px; }
+.is-mobile .hyo-ts-search-field { height: 40px; border-radius: 10px; padding: 0 10px; }
+.is-mobile .hyo-ts-search .hyo-ts-search-field input.hyo-ts-search-input,
+.is-mobile .hyo-ts-search .hyo-ts-search-field input.hyo-ts-search-input:focus { font-size: 14px; }
+.is-mobile .hyo-ts-search .hyo-ts-search-mode { font-size: 12px; }
+.is-mobile .hyo-plugin .hyo-ts-search button.hyo-ts-refresh { width: 40px; height: 40px; border-radius: 10px; }
+.is-mobile .hyo-plugin .hyo-ts-search button.hyo-ts-search-clear { width: 28px; height: 28px; }
+.is-mobile .hyo-ts-list { padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
+.is-mobile .hyo-ts-card { padding: 13px 12px 10px 14px; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+.is-mobile .hyo-ts-card:active { background: var(--background-modifier-hover); }
+.is-mobile .hyo-plugin .hyo-chat-panel button.hyo-ts-act { width: 40px; height: 40px; border-radius: 10px; }
+.is-mobile .hyo-plugin .hyo-chat-panel button.hyo-ts-loadmore { height: 40px; }

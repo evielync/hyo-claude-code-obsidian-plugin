@@ -2,11 +2,10 @@ import React, { useRef, useState, useCallback, useEffect, useLayoutEffect, useMe
 import type { App } from "obsidian";
 import { Notice } from "obsidian";
 import { ChatMessages } from "./ChatMessages";
-import { ChatTabs } from "./ChatTabs";
+import { ConversationSwitcher } from "../../components/ConversationSwitcher";
 import { BackgroundJobs } from "../../components/BackgroundJobs";
-import { TaskScreen } from "./TaskScreen";
 import { searchPastSessions } from "../session-parser";
-import type { BoardTask } from "../task-state";
+import { buildTaskList, type BoardTask } from "../task-state";
 import type { TaskMeta } from "../../settings";
 import type { useSessionManager } from "../hooks/useSessionManager";
 import { useVoiceMode } from "../hooks/useVoiceMode";
@@ -103,7 +102,6 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     closeTab,
     switchTab,
     renameTab,
-    renamePastSession,
     setTaskMeta,
     sendMessage,
     sendPermissionResponse,
@@ -158,8 +156,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     };
   }, [plugin.settings.gatewayUrl, gatewayStatus, activeTabId, retryAfterClaudeUpdate]);
 
-  // ---- Task mode (the History screen) ----
-  const [viewMode, setViewMode] = useState<"chat" | "tasks">("chat");
+  // ---- Conversations: the bar's panel (Open + History) ----
 
   // Pinned / closed live in the shared session metadata on the gateway, so the
   // state matches desktop and every device. Map derived from the loaded
@@ -183,20 +180,8 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
         setTaskMeta(task.cliSessionId, { closed: false });
       if (task.tabId) switchTab(task.tabId);
       else if (task.past) openPastSession(task.past);
-      setViewMode("chat");
     },
     [switchTab, openPastSession, setTaskMeta]
-  );
-
-  const handleCloseTask = useCallback(
-    (task: BoardTask) => {
-      if (task.cliSessionId)
-        setTaskMeta(task.cliSessionId, {
-          closed: true,
-          lastActive: new Date().toISOString(),
-        });
-    },
-    [setTaskMeta]
   );
 
   const handleTogglePin = useCallback(
@@ -207,33 +192,19 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     [setTaskMeta]
   );
 
-  const handleRenameTask = useCallback(
-    (task: BoardTask, title: string) => {
-      if (task.tabId) renameTab(task.tabId, title);
-      else if (task.cliSessionId) renamePastSession(task.cliSessionId, title);
-    },
-    [renameTab, renamePastSession]
+  const boardTasks = useMemo(
+    () => buildTaskList(tabs, pastSessions, taskMeta),
+    [tabs, pastSessions, taskMeta]
   );
-
-  const handleNewTask = useCallback(() => {
-    newTab();
-    setViewMode("chat");
-  }, [newTab]);
-
-  const toggleTaskScreen = useCallback(() => {
-    setViewMode((v) => {
-      if (v === "chat") refreshPastSessions();
-      return v === "chat" ? "tasks" : "chat";
-    });
-  }, [refreshPastSessions]);
-
-  const switchToChatTab = useCallback(
-    (id: string) => {
-      switchTab(id);
-      setViewMode("chat");
-    },
-    [switchTab]
-  );
+  const tabIds = useMemo(() => tabs.map((t) => t.id), [tabs]);
+  const connectionLabel =
+    gatewayStatus === "connected"
+      ? "Connected"
+      : gatewayStatus === "connecting"
+      ? "Connecting…"
+      : gatewayStatus === "reconnecting"
+      ? "Reconnecting…"
+      : "Disconnected";
 
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
   const inputValue = inputValues[activeTabId] ?? "";
@@ -1022,41 +993,6 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     toggleVoiceMode();
   };
 
-  // Task mode: the full-screen history view, with the bottom tab bar kept so
-  // the clock/chat button can toggle back. Opening a task drops into it.
-  if (viewMode === "tasks" && !inVoiceView) {
-    return (
-      <div className="hyo-chat-panel">
-        <TaskScreen
-          tabs={tabs}
-          pastSessions={pastSessions}
-          tasks={taskMeta}
-          onOpenTask={handleOpenTask}
-          onCloseTask={handleCloseTask}
-          onTogglePin={handleTogglePin}
-          onRenameTask={handleRenameTask}
-          onSearchText={searchPastText}
-          onRefresh={refreshPastSessions}
-          gatewayUrl={plugin.settings.gatewayUrl}
-        />
-        <ChatTabs
-          tabs={tabs}
-          activeTabId={activeTabId}
-          onSwitch={switchToChatTab}
-          onClose={closeTabSafely}
-          onRename={renameTab}
-          pastSessions={pastSessions}
-          tasks={taskMeta}
-          onOpenTaskScreen={toggleTaskScreen}
-          taskMode
-          onRefreshPastSessions={refreshPastSessions}
-          onNewTab={handleNewTask}
-          gatewayUrl={plugin.settings.gatewayUrl}
-        />
-      </div>
-    );
-  }
-
   return (
     <div
       className={`hyo-chat-panel${dragging ? " hyo-drag-over" : ""}`}
@@ -1121,18 +1057,32 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
       <BackgroundJobs jobs={activeJobs} />
 
       {!inVoiceView && (
-        <ChatTabs
-          tabs={tabs}
+        <ConversationSwitcher
+          tasks={boardTasks}
+          tabIds={tabIds}
           activeTabId={activeTabId}
+          placement="bottom"
+          swipeToClose
+          // The gateway connection: green connected, amber (re)connecting,
+          // red disconnected. The only trace of connection health in the UI.
+          leading={
+            <span
+              className={`hyo-conn-dot hyo-conn-dot-${gatewayStatus}`}
+              title={`Gateway: ${connectionLabel}`}
+            />
+          }
           onSwitch={switchTab}
           onClose={closeTabSafely}
           onRename={renameTab}
-          pastSessions={pastSessions}
-          tasks={taskMeta}
-          onOpenTaskScreen={toggleTaskScreen}
-          onRefreshPastSessions={refreshPastSessions}
-          onNewTab={newTab}
-          gatewayUrl={plugin.settings.gatewayUrl}
+          onNew={newTab}
+          onOpenTask={handleOpenTask}
+          onTogglePin={handleTogglePin}
+          onPanelOpen={refreshPastSessions}
+          onSearchText={searchPastText}
+          onRefresh={refreshPastSessions}
+          refreshTitle="Refresh — pick up conversations started on the desktop"
+          // Search and refresh both go through the gateway.
+          searchAvailable={gatewayStatus === "connected"}
         />
       )}
 

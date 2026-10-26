@@ -2,10 +2,9 @@ import React, { useRef, useState, useCallback, useEffect, useMemo } from "react"
 import type { App } from "obsidian";
 import { Notice } from "obsidian";
 import { ChatMessages } from "./ChatMessages";
-import { ChatTabs } from "./ChatTabs";
-import { TaskScreen } from "./TaskScreen";
+import { ConversationSwitcher } from "./ConversationSwitcher";
 import { searchSessionText } from "../session-parser";
-import type { BoardTask } from "../task-state";
+import { buildTaskList, type BoardTask } from "../task-state";
 import type { TaskMeta } from "../settings";
 import { HyoStatusBar } from "./HyoStatusBar";
 import { ReleaseCard } from "./ReleaseCard";
@@ -147,9 +146,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     closeTab,
     switchTab,
     renameTab,
-    renamePastSession,
     setTaskMeta,
-    reorderTab,
     setTabModel,
     setTabEffort,
     setTabPermissionMode,
@@ -197,12 +194,8 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     [setTabAgent]
   );
 
-  // ---- Task mode (the History screen) ----
-  // The clock button opens a full screen you scroll; opening a task drops back
-  // into the conversation. No Chat/Tasks toggle — the top-bar buttons switch it.
-  const [viewMode, setViewMode] = useState<"chat" | "tasks">("chat");
-
-  // Pinned / closed now live in the shared session metadata (not the plugin's
+  // ---- Conversations: the bar's panel (Open + History) ----
+  // Pinned / closed live in the shared session metadata (not the plugin's
   // local data.json), so the state is the same on every device. The map
   // buildTaskList wants is derived from the loaded sessions; writes go through
   // the session manager, which persists to that metadata and refreshes.
@@ -219,6 +212,12 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     return m;
   }, [pastSessions]);
 
+  const boardTasks = useMemo(
+    () => buildTaskList(tabs, pastSessions, taskMeta),
+    [tabs, pastSessions, taskMeta]
+  );
+  const tabIds = useMemo(() => tabs.map((t) => t.id), [tabs]);
+
   // Open a task: switch to its tab if open, otherwise resume it as a new tab.
   // Opening a closed conversation reopens it (clears the closed flag).
   const handleOpenTask = useCallback(
@@ -227,42 +226,8 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
         setTaskMeta(task.cliSessionId, { closed: false });
       if (task.tabId) switchTab(task.tabId);
       else if (task.past) openPastSession(task.past);
-      setViewMode("chat");
     },
     [switchTab, openPastSession, setTaskMeta]
-  );
-
-  const handleNewTask = useCallback(() => {
-    newTab();
-    setViewMode("chat");
-  }, [newTab]);
-
-  const toggleTaskScreen = useCallback(() => {
-    setViewMode((v) => {
-      if (v === "chat") refreshPastSessions();
-      return v === "chat" ? "tasks" : "chat";
-    });
-  }, [refreshPastSessions]);
-
-  // In task mode, clicking a tab in the top bar takes you into that conversation.
-  const switchToChatTab = useCallback(
-    (id: string) => {
-      switchTab(id);
-      setViewMode("chat");
-    },
-    [switchTab]
-  );
-
-  // Close: done, nothing needed either way. Stays in the list, marked Closed.
-  const handleCloseTask = useCallback(
-    (task: BoardTask) => {
-      if (task.cliSessionId)
-        setTaskMeta(task.cliSessionId, {
-          closed: true,
-          lastActive: new Date().toISOString(),
-        });
-    },
-    [setTaskMeta]
   );
 
   const handleTogglePin = useCallback(
@@ -271,14 +236,6 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
         setTaskMeta(task.cliSessionId, { pinned: !task.pinned });
     },
     [setTaskMeta]
-  );
-
-  const handleRenameTask = useCallback(
-    (task: BoardTask, title: string) => {
-      if (task.tabId) renameTab(task.tabId, title);
-      else if (task.cliSessionId) renamePastSession(task.cliSessionId, title);
-    },
-    [renameTab, renamePastSession]
   );
 
   const activeTabIdRef = useRef(activeTabId);
@@ -1183,44 +1140,6 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     callWorking = agentCall ? (desc ? `Sub-agent: ${desc}` : "Sub-agent running") : callStep || "Working on it";
   }
 
-  // The History screen is a full-panel view you scroll, reached from the clock
-  // button. Side-panel width rules out split view, so opening a task drops back
-  // into the conversation.
-  if (viewMode === "tasks" && !inVoiceView) {
-    return (
-      <div className="hyo-chat-panel">
-        <ChatTabs
-          tabs={tabs}
-          activeTabId={activeTabId}
-          onSwitch={switchToChatTab}
-          onClose={closeTabSafely}
-          onRename={renameTab}
-          onReorder={reorderTab}
-          pastSessions={pastSessions}
-          tasks={taskMeta}
-          onOpenTaskScreen={toggleTaskScreen}
-          taskMode
-          onRefreshPastSessions={refreshPastSessions}
-          onNewTab={handleNewTask}
-        />
-        <TaskScreen
-          tabs={tabs}
-          pastSessions={pastSessions}
-          tasks={taskMeta}
-          onOpenTask={handleOpenTask}
-          onCloseTask={handleCloseTask}
-          onTogglePin={handleTogglePin}
-          onRenameTask={handleRenameTask}
-          onSearchText={searchPastText}
-          onRefresh={refreshPastSessions}
-        />
-        {showReleaseNotes && (
-          <ReleaseNotes onClose={() => setShowReleaseNotes(false)} />
-        )}
-      </div>
-    );
-  }
-
   // The empty-box button starts a call (voice mode on for this tab). With
   // no voice key yet, it says where to add one and opens the settings.
   const startCallFromInput = () => {
@@ -1269,18 +1188,20 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
           onOrbClick={!voiceMode.isLive && voiceMode.voiceState === "speaking" ? voiceMode.stopAudio : undefined}
         />
       ) : (
-        <ChatTabs
-          tabs={tabs}
+        <ConversationSwitcher
+          tasks={boardTasks}
+          tabIds={tabIds}
           activeTabId={activeTabId}
+          placement="top"
           onSwitch={switchTab}
           onClose={closeTabSafely}
           onRename={renameTab}
-          onReorder={reorderTab}
-          pastSessions={pastSessions}
-          tasks={taskMeta}
-          onOpenTaskScreen={toggleTaskScreen}
-          onRefreshPastSessions={refreshPastSessions}
-          onNewTab={newTab}
+          onNew={newTab}
+          onOpenTask={handleOpenTask}
+          onTogglePin={handleTogglePin}
+          onPanelOpen={refreshPastSessions}
+          onSearchText={searchPastText}
+          onRefresh={refreshPastSessions}
         />
       )}
 

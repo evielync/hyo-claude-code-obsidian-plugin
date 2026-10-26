@@ -40,8 +40,8 @@ export function deriveTaskState(input: TaskStateInput): TaskState {
 
 // Does this live tab have something explicitly waiting on the user? A held
 // AskUserQuestion, a plan awaiting review, or an unanswered permission request.
-// Mirrors tabAwaitingInput in ChatTabs so the pill stays in lockstep with the
-// blocked prompts on the chat surface.
+// These are the same conditions the chat surface uses to render its blocked
+// prompts, so the "waiting on you" dot stays in lockstep with what's on screen.
 export function hasPendingAttention(tab: TabSession): boolean {
   for (const m of tab.messages as any[]) {
     if (!m || m.role !== "assistant") continue;
@@ -185,18 +185,21 @@ export function sortTasks(list: BoardTask[]): BoardTask[] {
   });
 }
 
-export interface TaskGroup {
+export interface TaskGroup<T = BoardTask> {
   label: string;
-  tasks: BoardTask[];
+  tasks: T[];
 }
 
 // Group for display: a "Pinned" group first (if any), then by day —
 // Today, Yesterday, then dates. Order within each group is already recency.
-export function groupTasks(list: BoardTask[], now: number = Date.now()): TaskGroup[] {
+export function groupTasks<T extends { pinned: boolean; lastActive: number }>(
+  list: T[],
+  now: number = Date.now()
+): TaskGroup<T>[] {
   const pinned = list.filter((t) => t.pinned);
   const rest = list.filter((t) => !t.pinned);
 
-  const groups: TaskGroup[] = [];
+  const groups: TaskGroup<T>[] = [];
   if (pinned.length) groups.push({ label: "Pinned", tasks: pinned });
 
   const startOfDay = (ms: number) => {
@@ -206,7 +209,7 @@ export function groupTasks(list: BoardTask[], now: number = Date.now()): TaskGro
   const today = startOfDay(now);
   const dayMs = 86400000;
 
-  const byLabel = new Map<string, BoardTask[]>();
+  const byLabel = new Map<string, T[]>();
   const dayOfLabel = new Map<string, number>();
   for (const t of rest) {
     const day = startOfDay(t.lastActive || now);

@@ -40,8 +40,8 @@ export function deriveTaskState(input: TaskStateInput): TaskState {
 
 // Does this live tab have something explicitly waiting on the user? A held
 // AskUserQuestion, a plan awaiting review, or an unanswered permission request.
-// Mirrors tabAwaitingInput in ChatTabs so the pill stays in lockstep with the
-// blocked prompts on the chat surface.
+// These are the same conditions the chat surface uses to render its blocked
+// prompts, so the "waiting on you" dot stays in lockstep with what's on screen.
 export function hasPendingAttention(tab: TabSession): boolean {
   for (const m of tab.messages as any[]) {
     if (!m || m.role !== "assistant") continue;
