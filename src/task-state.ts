@@ -194,10 +194,13 @@ export interface TaskGroup<T = BoardTask> {
 // Today, Yesterday, then dates. Order within each group is already recency.
 export function groupTasks<T extends { pinned: boolean; lastActive: number }>(
   list: T[],
-  now: number = Date.now()
+  now: number = Date.now(),
+  // History has no Pinned group: pinned conversations live in Open.
+  opts: { pinnedGroup?: boolean } = {}
 ): TaskGroup<T>[] {
-  const pinned = list.filter((t) => t.pinned);
-  const rest = list.filter((t) => !t.pinned);
+  const withPinned = opts.pinnedGroup !== false;
+  const pinned = withPinned ? list.filter((t) => t.pinned) : [];
+  const rest = withPinned ? list.filter((t) => !t.pinned) : list;
 
   const groups: TaskGroup<T>[] = [];
   if (pinned.length) groups.push({ label: "Pinned", tasks: pinned });

@@ -167,6 +167,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     addVoiceCall,
     activeJobs,
     tabJobs,
+    pinnedSessionIds,
   } = sessionManager;
 
   // Closing a tab stops its Claude process, and any background jobs running
@@ -209,8 +210,14 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
         title: s.title,
       };
     }
+    // Pins as the shared open list has them (it's what puts them in Open),
+    // so a pin made on the other device shows here straight away.
+    if (pinnedSessionIds) {
+      for (const id of Object.keys(m)) m[id] = { ...m[id], pinned: pinnedSessionIds.has(id) };
+      for (const id of pinnedSessionIds) if (!m[id]) m[id] = { pinned: true };
+    }
     return m;
-  }, [pastSessions]);
+  }, [pastSessions, pinnedSessionIds]);
 
   const boardTasks = useMemo(
     () => buildTaskList(tabs, pastSessions, taskMeta),

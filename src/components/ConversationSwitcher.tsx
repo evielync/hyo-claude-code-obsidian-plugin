@@ -1,14 +1,19 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { hasRunningJobs, type JobMap } from "../background-jobs";
 import { HistoryList, relativeTime, type HistoryTask } from "./HistoryList";
-import { ChevronIcon, CloseIcon, PencilIcon, PlusIcon } from "./switcher-icons";
+import { ChevronIcon, CloseIcon, PencilIcon, PinIcon, PlusIcon } from "./switcher-icons";
 
 // The conversation bar and its panel, shared by desktop and phone.
 //
 // The bar is one button: the conversation you're in, how many are open, and a
 // red dot when another one is waiting on you. Beside it, New conversation.
 // Tapping the button opens a panel with two sides: Open (the conversations in
-// play, Main chat first) and History (everything else, searchable).
+// play: Main chat first, then the pinned ones, then the rest) and History
+// (everything else, searchable).
+//
+// A pinned conversation is always open, on every device, so its row has no
+// close button: the filled pin sits there instead, and tapping it unpins
+// (the conversation stays open, with its close button back).
 
 // What the switcher reads from a task. Both platforms' BoardTask fit it.
 export interface SwitcherTask extends HistoryTask {
@@ -47,6 +52,7 @@ interface ConversationSwitcherProps<T extends SwitcherTask> {
   onRename: (tabId: string, title: string) => void;
   onNew: () => void;
   onOpenTask: (task: T) => void;
+  // Pin or unpin an Open row.
   onTogglePin: (task: T) => void;
   // Runs each time the panel opens, so History is fresh.
   onPanelOpen?: () => void;
@@ -206,6 +212,7 @@ export function ConversationSwitcher<T extends SwitcherTask>({
                       }}
                       onClose={() => onClose(task.tabId!)}
                       onRename={(title) => onRename(task.tabId!, title)}
+                      onTogglePin={() => onTogglePin(task)}
                     />
                   ))}
                 </div>
@@ -229,7 +236,6 @@ export function ConversationSwitcher<T extends SwitcherTask>({
                     onOpenTask(task);
                     closePanel();
                   }}
-                  onTogglePin={onTogglePin}
                   onSearchText={onSearchText}
                   onRefresh={onRefresh}
                   refreshTitle={refreshTitle}
@@ -254,6 +260,7 @@ function OpenRow({
   onSelect,
   onClose,
   onRename,
+  onTogglePin,
 }: {
   task: SwitcherTask;
   active: boolean;
@@ -261,8 +268,13 @@ function OpenRow({
   onSelect: () => void;
   onClose: () => void;
   onRename: (title: string) => void;
+  onTogglePin: () => void;
 }) {
   const isMain = !!task.live?.isMain;
+  const pinned = !isMain && task.pinned;
+  // Pinning is kept with the conversation, so a new one can be pinned once
+  // it has started.
+  const canPin = !isMain && !!task.cliSessionId;
   const dot = dotFor(task);
   const [renaming, setRenaming] = useState(false);
   const [value, setValue] = useState(task.title);
@@ -300,7 +312,7 @@ function OpenRow({
   const [settling, setSettling] = useState(false);
   const drag = useRef<{ x: number; y: number; id: number; sideways: boolean } | null>(null);
   const swallowClick = useRef(false);
-  const canSwipe = swipeToClose && !isMain && !renaming;
+  const canSwipe = swipeToClose && !isMain && !pinned && !renaming;
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!canSwipe || e.button !== 0) return;
@@ -365,7 +377,7 @@ function OpenRow({
     <div className="hyo-cs-row-wrap">
       {canSwipe && dx < 0 && <div className="hyo-cs-row-del">Close</div>}
       <div
-        className={`hyo-cs-row${active ? " is-active" : ""}${settling ? " is-settling" : ""}${canSwipe ? " can-swipe" : ""}`}
+        className={`hyo-cs-row${active ? " is-active" : ""}${pinned ? " is-pinned" : ""}${settling ? " is-settling" : ""}${canSwipe ? " can-swipe" : ""}`}
         style={dx ? { transform: `translateX(${dx}px)` } : undefined}
         onClick={() => {
           if (swallowClick.current || renaming) return;
@@ -414,6 +426,19 @@ function OpenRow({
         </div>
         {!isMain && (
           <div className="hyo-cs-row-actions">
+            {canPin && !pinned && (
+              <button
+                className="hyo-cs-iconbtn hyo-cs-row-btn hyo-cs-pin"
+                title="Pin: keep it open and at the top"
+                aria-label="Pin"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onTogglePin();
+                }}
+              >
+                <PinIcon size={16} />
+              </button>
+            )}
             <button
               className="hyo-cs-iconbtn hyo-cs-row-btn"
               title="Rename"
@@ -431,17 +456,32 @@ function OpenRow({
             >
               <PencilIcon />
             </button>
-            <button
-              className="hyo-cs-iconbtn hyo-cs-row-btn"
-              title="Close"
-              aria-label="Close"
-              onClick={(e) => {
-                e.stopPropagation();
-                onClose();
-              }}
-            >
-              <CloseIcon />
-            </button>
+            {pinned ? (
+              <button
+                className="hyo-cs-iconbtn hyo-cs-row-btn hyo-cs-pin is-on"
+                title="Unpin"
+                aria-label="Unpin"
+                aria-pressed="true"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onTogglePin();
+                }}
+              >
+                <PinIcon filled size={16} />
+              </button>
+            ) : (
+              <button
+                className="hyo-cs-iconbtn hyo-cs-row-btn"
+                title="Close"
+                aria-label="Close"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClose();
+                }}
+              >
+                <CloseIcon />
+              </button>
+            )}
           </div>
         )}
       </div>

@@ -1,7 +1,7 @@
 import { debug } from "../debug";
 import { addOutgoing, startQueued } from "../send-queue";
 import { newStreamState, processContentBlocks, buildSnapshot, endTurn, startsTurnOfItsOwn, openReply, isInjectedContext, type StreamState } from "../reply-stream";
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { ClaudeTransport, normalizeModelId } from "../claude-transport";
 import { MainChatTransport, mainChatOwner } from "../main-chat-owner";
 
@@ -22,6 +22,7 @@ import { Platform } from "obsidian";
 import { parseClaudeUpdateError, isClaudeAuthError } from "../models";
 import { applyJobEvent, hasRunningJobs, jobAsking, jobList, IdleGate, maySwapProcess, type JobMap, type BackgroundJob } from "../background-jobs";
 import { appendedPrompt, withMainChatReminder, withMainChat, mainFirst, canCloseTab, canReorder, startupActive, MAIN_CHAT_TITLE } from "../main-chat";
+import { openConversations, reconcileTabs, syncChanges, syncedSid, type OpenEntry } from "../open-conversations";
 // Node built-in; deferred so this module loads on mobile.
 const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
 
@@ -213,6 +214,17 @@ export function useSessionManager(options: SessionManagerOptions) {
   const cliPathRef = useRef(options.cliPath);
   cliPathRef.current = options.cliPath;
   stateRef.current = state;
+
+  // ---- The shared open list (open-conversations.ts) ----
+  // Which conversations are open is shared with every Hyo panel on this Mac
+  // and the phone; what each one is looking at isn't. The Mac's store is
+  // read and written directly here; the gateway pushes its changes to the
+  // phone.
+  const openStore = () => openConversations(optionsRef.current.cwd);
+  // With the main chat on, its conversation is never one of the list's.
+  const mainSid = () => (optionsRef.current.mainChat ? optionsRef.current.mainChatSessionId || undefined : undefined);
+  const [openList, setOpenList] = useState<OpenEntry[] | null>(() => openConversations(options.cwd)?.list() ?? null);
+  const isPinned = (sid: string | null | undefined) => !!sid && !!openStore()?.list().some((e) => e.id === sid && e.pinned);
 
   // Cleanup transports on unmount
   useEffect(() => {
@@ -815,7 +827,11 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   const closeTab = useCallback((tabIdToClose: string) => {
     // The main chat stays: it's the one conversation that's always there.
-    if (!canCloseTab(stateRef.current.tabs.find((t) => t.id === tabIdToClose))) return;
+    const closing = stateRef.current.tabs.find((t) => t.id === tabIdToClose);
+    if (!canCloseTab(closing)) return;
+    // So does a pinned one, until it's unpinned.
+    if (isPinned(closing?.cliSessionId)) return;
+    const sid = closing ? syncedSid(closing, mainSid()) : null;
     transportsRef.current[tabIdToClose]?.stop();
     delete transportsRef.current[tabIdToClose];
     delete streamStatesRef.current[tabIdToClose];
@@ -839,6 +855,8 @@ export function useSessionManager(options: SessionManagerOptions) {
 
       return { tabs: remaining, activeTabId };
     });
+    // Closed everywhere else too.
+    if (sid) openStore()?.close(sid);
   }, []);
 
   const switchTab = useCallback((id: string) => {
@@ -854,6 +872,10 @@ export function useSessionManager(options: SessionManagerOptions) {
   }, []);
 
   const renameTab = useCallback((id: string, title: string) => {
+    // The other devices' tabs take the new title too. Told first, so a list
+    // arriving in between can't put the old one back.
+    const sid = stateRef.current.tabs.find((t) => t.id === id)?.cliSessionId;
+    if (sid) openStore()?.rename(sid, title);
     setState((prev) => {
       const tab = prev.tabs.find((t) => t.id === id);
 
@@ -878,6 +900,7 @@ export function useSessionManager(options: SessionManagerOptions) {
   // happen to be open, update the tab's title too so they stay in sync.
   const renamePastSession = useCallback((sessionId: string, title: string) => {
     saveCustomTitle(options.cwd, sessionId, title);
+    openStore()?.rename(sessionId, title);
     setState((prev) => ({
       ...prev,
       tabs: prev.tabs.map((t) =>
@@ -893,6 +916,8 @@ export function useSessionManager(options: SessionManagerOptions) {
   const setTaskMeta = useCallback(
     (sessionId: string, patch: { pinned?: boolean; closed?: boolean; lastActive?: string }) => {
       persistTaskMeta(options.cwd, sessionId, patch);
+      // A pinned conversation is open everywhere and listed first.
+      if (patch.pinned !== undefined) openStore()?.pinsChanged();
       setTimeout(() => refreshPastSessions(), 0);
     },
     [options.cwd]
@@ -1398,6 +1423,8 @@ export function useSessionManager(options: SessionManagerOptions) {
 
     const tab = sessionTab(pastSession);
     setState((prev) => ({ tabs: [...prev.tabs, tab], activeTabId: tab.id }));
+    // Opened on the phone and any other panel too (not the main chat).
+    if (tab.cliSessionId && tab.cliSessionId !== mainSid()) openStore()?.open({ id: tab.cliSessionId, title: tab.title });
   }, [options.cwd, options.model, options.effort, options.permissionMode, options.defaultAgent]);
 
   /** A tab holding a saved conversation, its history read back from disk. */
@@ -1458,12 +1485,54 @@ export function useSessionManager(options: SessionManagerOptions) {
   };
 
   // ---- Reopen the tabs from last time ---------------------------------------
-  // Closing Obsidian used to take every open Hyo tab with it. Remember which
-  // conversations are open and restore them on mount. Deliberately
-  // device-local (localStorage, keyed by vault) rather than synced settings:
-  // the desktop restores the desktop's desk, the phone restores the phone's.
+  // Which conversations are open comes from the shared list (the Mac's
+  // store, seeded on first run from what this computer had open before).
+  // Which one you were looking at is this computer's own, kept in
+  // localStorage, keyed by vault. With no store (it isn't set up), the open
+  // tabs come from localStorage as they always did.
   const restoreKey = `hyo-open-tabs:${options.cwd}`;
   const restoredRef = useRef(false);
+
+  /** A tab for a conversation the list has that this panel doesn't yet. */
+  const listedTab = (e: OpenEntry): TabSession => sessionTab({ id: e.id, title: e.title || "Untitled" });
+
+  // Close a list's busy tabs only once their work is done.
+  const isBusy = (t: TabSession) =>
+    t.generating || jobsRunning(t.id) || !!turnRunningRef.current[t.id] || (queuedSendsRef.current[t.id]?.length ?? 0) > 0;
+
+  /** Let go of what a tab closed by the list was running. */
+  const dropTab = (tabId: string) => {
+    transportsRef.current[tabId]?.stop();
+    delete transportsRef.current[tabId];
+    delete streamStatesRef.current[tabId];
+    delete jobsRef.current[tabId];
+    delete gatesRef.current[tabId];
+  };
+
+  /** Bring this panel's tabs in line with the shared list (never echoed back). */
+  const applyOpenList = (entries: OpenEntry[], startup?: { activeId?: string | null }) => {
+    const closed: TabSession[] = [];
+    setState((prev) => {
+      const r = reconcileTabs(prev.tabs, prev.activeTabId, entries, listedTab, blankTab, {
+        mainSessionId: mainSid(),
+        busy: isBusy,
+      });
+      if (!startup) {
+        if (!r.changed) return prev;
+        closed.push(...r.closed);
+        return { tabs: r.tabs, activeTabId: r.activeTabId };
+      }
+      // Opening Hyo: the pristine starter tab makes way for the desk.
+      const restored = r.tabs.filter((t) => t.cliSessionId && !t.isMain);
+      if (restored.length === 0) return r.changed ? { tabs: r.tabs, activeTabId: r.activeTabId } : prev;
+      const tabs = r.tabs.filter((t) => t.isMain || t.cliSessionId || t.messages.length > 0);
+      return { tabs, activeTabId: startupActive(tabs, startup.activeId) || tabs[tabs.length - 1].id };
+    });
+    // The updater has run by the next tick.
+    setTimeout(() => closed.forEach((t) => dropTab(t.id)), 0);
+  };
+  const applyOpenListRef = useRef(applyOpenList);
+  applyOpenListRef.current = applyOpenList;
 
   useEffect(() => {
     if (restoredRef.current) return;
@@ -1474,28 +1543,55 @@ export function useSessionManager(options: SessionManagerOptions) {
     } catch {
       /* absent or corrupt — start fresh */
     }
-    if (!saved?.sessions?.length) return;
-    for (const s of saved.sessions) {
-      // The main chat has its own tab; never a second copy of it.
-      if (s?.id && !(options.mainChat && s.id === options.mainChatSessionId)) {
-        openPastSession({ id: s.id, title: s.title || "Untitled" } as PastSession);
-      }
-    }
-    const activeId = saved.activeId;
-    setState((prev) => {
-      const restored = prev.tabs.filter((t) => t.cliSessionId && !t.isMain);
-      if (restored.length === 0) return prev;
-      // The pristine starter tab makes way for the restored desk.
-      const tabs = prev.tabs.filter((t) => t.isMain || t.cliSessionId || t.messages.length > 0);
-      return { tabs, activeTabId: startupActive(tabs, activeId) || tabs[tabs.length - 1].id };
-    });
+    const store = openStore();
+    const entries: OpenEntry[] = store ? store.list() : (saved?.sessions || []).filter((s) => s?.id).map((s) => ({ id: s.id, title: s.title || "Untitled" }));
+    if (!entries.length) return;
+    applyOpenList(entries, { activeId: saved?.activeId });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openPastSession]);
+  }, []);
+
+  // Hear every change to the list, from the phone or another panel.
+  useEffect(() => {
+    const store = openConversations(options.cwd);
+    if (!store) return;
+    setOpenList(store.list());
+    return store.subscribe((entries) => {
+      setOpenList(entries);
+      applyOpenListRef.current(entries);
+    });
+  }, [options.cwd]);
+
+  // A close that waited on running work happens once the work is done; a
+  // main chat switched on or off changes which conversation is the list's.
+  const busyKey = state.tabs.filter(isBusy).map((t) => t.id).join(",");
+  useEffect(() => {
+    const store = openStore();
+    if (store && restoredRef.current) applyOpenListRef.current(store.list());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busyKey, options.mainChat, options.mainChatSessionId]);
+
+  // Tell the list what changed here: a conversation that got its session id
+  // (its first message, or a call), moved to a new one, or let go of one.
+  // Opening from History and closing tell it themselves.
+  const syncedRef = useRef(new Map<string, string | null>());
+  useEffect(() => {
+    const store = openStore();
+    const ch = syncChanges(syncedRef.current, state.tabs, mainSid());
+    syncedRef.current = ch.next;
+    if (!store) return;
+    for (const g of ch.gained) {
+      if (g.oldSid) store.replace(g.oldSid, { id: g.sid, title: g.title });
+      else store.open({ id: g.sid, title: g.title });
+    }
+    for (const sid of ch.cleared) store.close(sid);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.tabs]);
 
   useEffect(() => {
     if (!restoredRef.current) return; // never clobber the stored desk before restore reads it
     try {
-      // The main chat isn't part of the desk: it's always there.
+      // The main chat isn't part of the desk: it's always there. The list
+      // is kept too, as the seed if the shared store is ever lost.
       const sessions = state.tabs
         .filter((t) => t.cliSessionId && !t.isMain)
         .map((t) => ({ id: t.cliSessionId as string, title: t.title }));
@@ -1709,7 +1805,15 @@ export function useSessionManager(options: SessionManagerOptions) {
   /** Background jobs still running in a tab (closing it would stop them). */
   const tabJobs = useCallback((tabId: string): BackgroundJob[] => jobList(jobsRef.current[tabId]), []);
 
+  // Pinned conversations, from the shared list (null without one: the
+  // session metadata's pins are used instead).
+  const pinnedSessionIds = useMemo(
+    () => (openList ? new Set(openList.filter((e) => e.pinned).map((e) => e.id)) : null),
+    [openList]
+  );
+
   return {
+    pinnedSessionIds,
     tabs: state.tabs,
     activeJobs: jobList(activeTab?.jobs),
     activeIsMain: !!activeTab?.isMain,

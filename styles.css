@@ -1300,6 +1300,8 @@ button.hyo-ask-send:disabled {
 .hyo-cs-meta-working { color: var(--color-green, #4bb377); font-weight: 700; }
 .hyo-cs-row-actions { flex: none; display: flex; align-items: center; align-self: center; }
 .hyo-plugin .hyo-chat-panel button.hyo-cs-row-btn { width: 32px; height: 36px; color: var(--text-faint); }
+/* Pinned: the filled pin, in the accent, where the close button would be. */
+.hyo-plugin .hyo-chat-panel button.hyo-cs-pin.is-on { color: var(--interactive-accent); }
 /* Obsidian styles every text input; the rename box draws its own. */
 .hyo-cs-row input.hyo-cs-rename-input,
 .hyo-cs-row input.hyo-cs-rename-input:focus {
@@ -4831,3 +4833,37 @@ button.hyo-callline:hover { background: var(--background-secondary); }
 .is-mobile .hyo-ts-card:active { background: var(--background-modifier-hover); }
 .is-mobile .hyo-plugin .hyo-chat-panel button.hyo-ts-act { width: 40px; height: 40px; border-radius: 10px; }
 .is-mobile .hyo-plugin .hyo-chat-panel button.hyo-ts-loadmore { height: 40px; }
+
+/* Opening an earlier conversation: its history is on its way (phone). */
+.hyo-convo-loading,
+.hyo-convo-load-error {
+  flex-direction: column;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+}
+.hyo-convo-loading p,
+.hyo-convo-load-error p { margin: 0; max-width: 300px; line-height: 1.45; }
+.hyo-convo-load-error { color: var(--text-muted); }
+.hyo-plugin .hyo-chat-panel button.hyo-convo-retry {
+  height: 36px;
+  padding: 0 16px !important;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 14px;
+  font-weight: 600;
+}
+.hyo-convo-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--background-modifier-border);
+  border-top-color: var(--text-muted);
+  border-radius: 50%;
+  animation: hyo-convo-spin 0.8s linear infinite;
+}
+@keyframes hyo-convo-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .hyo-convo-spinner { animation-duration: 2.4s; }
+}

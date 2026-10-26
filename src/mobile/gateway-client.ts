@@ -10,6 +10,7 @@
 // single pipe.
 
 import { debug } from "./debug";
+import { parseEntries, type OpenEntry } from "../open-conversations";
 
 export type ConnectionStatus =
   | "connecting"
@@ -44,6 +45,10 @@ interface PendingRPC<T> {
 }
 
 const RPC_TIMEOUT_MS = 35_000;
+// Opening a conversation waits on this, with "Loading conversation…" on
+// screen, so it's shorter than the other requests: long enough for a big
+// conversation over a slow connection, short enough not to leave a spinner.
+const HISTORY_TIMEOUT_MS = 30_000;
 const MAX_BACKOFF_MS = 30_000;
 const MAX_QUEUED_MESSAGES = 200;
 
@@ -75,7 +80,13 @@ export class GatewayClient {
   // engine/voice is set. Keyed by requestId.
   private liveSdpPending = new Map<string, PendingRPC<{ sdp: string }>>();
   private liveConfigPending = new Map<string, PendingRPC<{ engine: string; voice: string }>>();
-  private historyPending = new Map<string, PendingRPC<{ lines: any[]; voiceCalls: any[] }>>();
+  // Several opens of one conversation (a retry, the main chat) can wait on the
+  // same answer, so each session id holds a list.
+  private historyPending = new Map<string, PendingRPC<{ lines: any[]; voiceCalls: any[] }>[]>();
+  // The shared open list (open-conversations.ts): pushed by the Mac whenever
+  // it changes. Listeners also run after every reconnect.
+  private openListeners = new Set<(entries: OpenEntry[], meta: { ack?: number; sync?: number }) => void>();
+  private connectListeners = new Set<() => void>();
   private renamePending = new Map<string, PendingRPC<string>>();
   private titlePending = new Map<string, PendingRPC<string | null>>();
   // Claude updates run on the Mac; progress comes back as it goes.
@@ -165,6 +176,15 @@ export class GatewayClient {
       for (const msg of queued) {
         if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(msg);
       }
+      // After the queue, so anything asked for here is answered with what
+      // was sent while offline already applied.
+      for (const l of [...this.connectListeners]) {
+        try {
+          l();
+        } catch (e) {
+          console.error("[hyo] A gateway reconnect listener failed:", e);
+        }
+      }
     };
 
     ws.onmessage = (ev) => {
@@ -245,7 +265,16 @@ export class GatewayClient {
       p.reject(new Error("Gateway connection closed"));
     }
     this.searchQueue = [];
-    for (const map of [this.historyPending, this.renamePending, this.titlePending]) {
+    for (const list of this.historyPending.values()) {
+      for (const p of list) {
+        clearTimeout(p.timer);
+        p.reject(new Error("Gateway connection closed"));
+      }
+    }
+    this.historyPending.clear();
+    this.openListeners.clear();
+    this.connectListeners.clear();
+    for (const map of [this.renamePending, this.titlePending]) {
       for (const p of map.values()) {
         clearTimeout(p.timer);
         p.reject(new Error("Gateway connection closed"));
@@ -309,12 +338,30 @@ export class GatewayClient {
         return;
       }
       case "history": {
-        const pending = this.historyPending.get(msg.sessionId);
-        if (pending) {
+        const waiting = this.historyPending.get(msg.sessionId);
+        if (waiting) {
           this.historyPending.delete(msg.sessionId);
-          clearTimeout(pending.timer);
           // voiceCalls: from a gateway that has them; older ones send none.
-          pending.resolve({ lines: msg.lines || [], voiceCalls: Array.isArray(msg.voiceCalls) ? msg.voiceCalls : [] });
+          const result = { lines: msg.lines || [], voiceCalls: Array.isArray(msg.voiceCalls) ? msg.voiceCalls : [] };
+          for (const p of waiting) {
+            clearTimeout(p.timer);
+            p.resolve(result);
+          }
+        }
+        return;
+      }
+      case "open_list": {
+        const entries = parseEntries(msg.entries);
+        const meta = {
+          ack: typeof msg.ack === "number" ? msg.ack : undefined,
+          sync: typeof msg.sync === "number" ? msg.sync : undefined,
+        };
+        for (const l of [...this.openListeners]) {
+          try {
+            l(entries, meta);
+          } catch (e) {
+            console.error("[hyo] Applying the open conversations failed:", e);
+          }
         }
         return;
       }
@@ -543,13 +590,66 @@ export class GatewayClient {
   /** A conversation's transcript lines and its saved voice calls. */
   getHistory(sessionId: string): Promise<{ lines: any[]; voiceCalls: any[] }> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.historyPending.delete(sessionId);
-        reject(new Error("get_history timed out"));
-      }, RPC_TIMEOUT_MS);
-      this.historyPending.set(sessionId, { resolve, reject, timer });
+      const entry: PendingRPC<{ lines: any[]; voiceCalls: any[] }> = {
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          const list = (this.historyPending.get(sessionId) || []).filter((p) => p !== entry);
+          if (list.length) this.historyPending.set(sessionId, list);
+          else this.historyPending.delete(sessionId);
+          reject(
+            new Error(
+              this.status === "connected"
+                ? "The Mac didn't send the conversation in time"
+                : "Not connected to the Mac"
+            )
+          );
+        }, HISTORY_TIMEOUT_MS),
+      };
+      const list = this.historyPending.get(sessionId);
+      if (list) list.push(entry);
+      else this.historyPending.set(sessionId, [entry]);
       this.send({ type: "get_history", sessionId });
     });
+  }
+
+  // ---- the shared open list ----
+
+  /** Hear the Mac's open list whenever it changes. Returns the unsubscribe. */
+  onOpenList(listener: (entries: OpenEntry[], meta: { ack?: number; sync?: number }) => void): () => void {
+    this.openListeners.add(listener);
+    return () => {
+      this.openListeners.delete(listener);
+    };
+  }
+
+  /** Run after every (re)connect, once what was queued offline has gone. */
+  onConnected(listener: () => void): () => void {
+    this.connectListeners.add(listener);
+    return () => {
+      this.connectListeners.delete(listener);
+    };
+  }
+
+  /** Ask for the whole list (and to be sent every change after it). */
+  openSync(requestId: number): void {
+    this.send({ type: "open_list", requestId });
+  }
+
+  openAdd(id: string, title: string, opId: number): void {
+    this.send({ type: "open_add", id, title, opId });
+  }
+
+  openRemove(id: string, opId: number): void {
+    this.send({ type: "open_remove", id, opId });
+  }
+
+  openRename(id: string, title: string, opId: number): void {
+    this.send({ type: "open_rename", id, title, opId });
+  }
+
+  openReplace(oldId: string, id: string, title: string, opId: number): void {
+    this.send({ type: "open_replace", oldId, id, title, opId });
   }
 
   rename(sessionId: string, title: string): Promise<string> {

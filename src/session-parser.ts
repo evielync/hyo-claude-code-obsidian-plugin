@@ -133,6 +133,8 @@ interface SessionMetadata {
     // data.json) so it's the same on every device that reads this vault's
     // sessions. On mobile the gateway reads/writes the same file.
     pinned?: boolean;
+    // When it was pinned (ISO), which orders the pins in the Open list.
+    pinnedAt?: string;
     closed?: boolean;
     lastActive?: string; // ISO
     voiceTurns?: VoiceTurn[];
@@ -213,8 +215,40 @@ export function setTaskMeta(
 ): void {
   const metadata = loadMetadata(cwd);
   if (!metadata[sessionId]) metadata[sessionId] = {};
-  Object.assign(metadata[sessionId], patch);
+  const m = metadata[sessionId];
+  // When it was pinned orders the pins in the Open list.
+  if (patch.pinned === true && !m.pinned) m.pinnedAt = new Date().toISOString();
+  if (patch.pinned === false) delete m.pinnedAt;
+  Object.assign(m, patch);
   saveMetadata(cwd, metadata);
+}
+
+/**
+ * Every pinned conversation that still exists, with its title and the time
+ * it was pinned (older pins, from before that was kept, use their last
+ * activity). The Open list puts these first on every device.
+ */
+export function listPinned(cwd: string): { id: string; title: string; order: string }[] {
+  const metadata = loadMetadata(cwd);
+  const out: { id: string; title: string; order: string }[] = [];
+  for (const [id, m] of Object.entries(metadata)) {
+    if (!m?.pinned) continue;
+    const file = getCandidateProjectDirs(cwd)
+      .map((d) => path.join(d, `${id}.jsonl`))
+      .find((f) => {
+        try {
+          return fs.existsSync(f);
+        } catch {
+          return false;
+        }
+      });
+    // A conversation that's only a voice call so far counts; one whose
+    // transcript has gone doesn't.
+    if (!file && !(m.voiceCalls && m.voiceCalls.length)) continue;
+    const title = m.customTitle || (file ? extractTitle(file) : "") || "Untitled";
+    out.push({ id, title, order: m.pinnedAt || m.lastActive || "" });
+  }
+  return out;
 }
 
 export function listPastSessions(cwd: string): PastSession[] {

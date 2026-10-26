@@ -104,14 +104,14 @@ export interface SessionHistory {
   voiceCalls: VoiceCallRecord[];
 }
 
+/**
+ * A conversation's history from the gateway. Rejects when it can't be had
+ * (not connected, or the Mac didn't answer in time), so the caller can say
+ * so rather than showing an empty conversation.
+ */
 export async function loadSessionHistory(gatewayUrl: string, sessionId: string): Promise<SessionHistory> {
-  try {
-    const { lines, voiceCalls } = await GatewayClient.get(gatewayUrl).getHistory(sessionId);
-    return { messages: parseSessionLines(lines), model: extractSessionModel(lines), voiceCalls };
-  } catch (e) {
-    console.error("[hyo] Failed to load session history:", e);
-    return { messages: [], model: null, voiceCalls: [] };
-  }
+  const { lines, voiceCalls } = await GatewayClient.get(gatewayUrl).getHistory(sessionId);
+  return { messages: parseSessionLines(lines), model: extractSessionModel(lines), voiceCalls };
 }
 
 /** The model the conversation last ran on, from its main thread (a

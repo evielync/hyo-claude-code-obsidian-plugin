@@ -16,6 +16,8 @@ import { probeCliCapabilities } from "./cli-capabilities";
 import { startGatewayHost, stopGatewayHost, GatewayStatus } from "./gateway-host";
 import { MainChatOwner, setMainChatOwnerFactory, shutdownMainChats, fileLock } from "./main-chat-owner";
 import { ClaudeTransport } from "./claude-transport";
+import { OpenConversationsStore, setOpenConversationsFactory, legacyDesk, OPEN_LIST_FILE } from "./open-conversations";
+import { getProjectDir, listPinned } from "./session-parser";
 import { CommandsManager } from "./commands";
 import { updateClaude, detectClaude } from "./cli-probe";
 import { compareVersions } from "./models";
@@ -69,6 +71,39 @@ export default class HyoPlugin extends Plugin {
             fileLock(path.join(os.homedir(), ".hyo", `main-chat-${cwd.replace(/[^A-Za-z0-9]+/g, "-").slice(-80)}.lock`))
           )
       );
+      // The open conversations, shared by every Hyo panel and the phone (see
+      // open-conversations.ts). Saved next to the session metadata.
+      setOpenConversationsFactory((cwd) => {
+        const file = () => path.join(getProjectDir(cwd), OPEN_LIST_FILE);
+        let warned = false;
+        return new OpenConversationsStore({
+          load: () => {
+            try {
+              if (!fs.existsSync(file())) return null;
+              return JSON.parse(fs.readFileSync(file(), "utf8"))?.entries ?? null;
+            } catch (e) {
+              // Unreadable: start again from this computer's last open tabs.
+              console.error("[hyo] Couldn't read the open conversations:", e);
+              return null;
+            }
+          },
+          save: (entries) => {
+            fs.mkdirSync(path.dirname(file()), { recursive: true });
+            fs.writeFileSync(file(), JSON.stringify({ version: 1, entries }, null, 2), "utf8");
+          },
+          // First run: the tabs this computer had open before the list was shared.
+          seed: () => legacyDesk(window.localStorage.getItem(`hyo-open-tabs:${cwd}`)),
+          pins: () => listPinned(cwd),
+          onSaveError: (e: any) => {
+            if (warned) return;
+            warned = true;
+            new Notice(
+              `Hyo couldn't save which conversations are open (${e?.message || e}). They stay open until Obsidian closes, and your phone still sees them.`,
+              10000
+            );
+          },
+        });
+      });
     }
     setShowAllToolCalls(!!this.settings.showAllToolCalls);
 
@@ -307,6 +342,7 @@ export default class HyoPlugin extends Plugin {
       // Obsidian is closing: the main chat's process (and any background
       // jobs in it) ends with it. Known limitation.
       try { shutdownMainChats(); } catch { /* ignore */ }
+      setOpenConversationsFactory(null);
     }
     // Unmount React and clean up child processes for all Hyo leaves
     this.app.workspace.getLeavesOfType(VIEW_TYPE_HYO).forEach((leaf) => {

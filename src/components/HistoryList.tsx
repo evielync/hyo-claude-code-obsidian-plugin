@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from "react";
 import { groupTasks, type TaskState } from "../task-state";
-import { PinIcon, RefreshIcon, SearchIcon } from "./switcher-icons";
+import { RefreshIcon, SearchIcon } from "./switcher-icons";
 
 // The History side of the conversation panel, shared by desktop and phone.
 // History is everything that isn't open right now. A search reaches open
 // conversations too (marked "Open"), so one search box finds anything.
+// Pinned conversations are always open, so they only show here in a search.
 
 // The fields History reads from a task. Both platforms' BoardTask fit it.
 export interface HistoryTask {
@@ -21,7 +22,6 @@ export interface HistoryTask {
 interface HistoryListProps<T extends HistoryTask> {
   tasks: T[];
   onOpenTask: (task: T) => void;
-  onTogglePin: (task: T) => void;
   // Full-text search: session id → the matched line. Debounced here.
   onSearchText?: (query: string) => Promise<Record<string, string>>;
   // Re-read past sessions, to pick up conversations started elsewhere.
@@ -60,7 +60,6 @@ export function relativeTime(ms: number): string {
 export function HistoryList<T extends HistoryTask>({
   tasks,
   onOpenTask,
-  onTogglePin,
   onSearchText,
   onRefresh,
   refreshTitle = "Refresh — pick up conversations started elsewhere",
@@ -124,7 +123,7 @@ export function HistoryList<T extends HistoryTask>({
         })
     : tasks.filter((t) => !t.isOpen);
   const shown = filtered.slice(0, visible);
-  const groups = groupTasks(shown);
+  const groups = groupTasks(shown, Date.now(), { pinnedGroup: false });
   const hasMore = filtered.length > visible;
 
   return (
@@ -196,12 +195,7 @@ export function HistoryList<T extends HistoryTask>({
             <div key={group.label} className="hyo-ts-group-block">
               <div className="hyo-ts-group">{group.label}</div>
               {group.tasks.map((task) => (
-                <HistoryCard
-                  key={task.key}
-                  task={task}
-                  onOpen={() => onOpenTask(task)}
-                  onPin={() => onTogglePin(task)}
-                />
+                <HistoryCard key={task.key} task={task} onOpen={() => onOpenTask(task)} />
               ))}
             </div>
           ))
@@ -217,21 +211,15 @@ export function HistoryList<T extends HistoryTask>({
   );
 }
 
-// One past conversation. The pin button is always on the card, never revealed
-// on hover, so a single tap on a phone always lands.
-function HistoryCard({ task, onOpen, onPin }: { task: HistoryTask; onOpen: () => void; onPin: () => void }) {
+// One past conversation: tap to open it.
+function HistoryCard({ task, onOpen }: { task: HistoryTask; onOpen: () => void }) {
   return (
     <div
-      className={`hyo-ts-card${task.pinned ? " hyo-ts-pinned" : ""}`}
+      className="hyo-ts-card"
       onClick={onOpen}
       title={task.isOpen ? "Switch to this conversation" : "Open this conversation"}
     >
       <div className="hyo-ts-title">
-        {task.pinned && (
-          <span className="hyo-ts-pin-mark">
-            <PinIcon />
-          </span>
-        )}
         <span className="hyo-ts-title-text">{task.title}</span>
       </div>
 
@@ -242,17 +230,6 @@ function HistoryCard({ task, onOpen, onPin }: { task: HistoryTask; onOpen: () =>
           {task.isOpen && <span className="hyo-ts-openmark">Open</span>}
           {relativeTime(task.lastActive)}
         </span>
-        <button
-          className={`hyo-ts-act${task.pinned ? " hyo-ts-act-on" : ""}`}
-          title={task.pinned ? "Unpin" : "Pin to top"}
-          aria-label={task.pinned ? "Unpin" : "Pin to top"}
-          onClick={(e) => {
-            e.stopPropagation();
-            onPin();
-          }}
-        >
-          <PinIcon />
-        </button>
       </div>
     </div>
   );

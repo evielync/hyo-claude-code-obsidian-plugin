@@ -20,8 +20,14 @@
 //   { type:'generate_title', requestId, userMessage, assistantMessage }
 //   { type:'list_agents' }
 //   { type:'list_skills' }
+//   { type:'open_list', requestId }                 (subscribe + the whole list)
+//   { type:'open_add',    id, title, opId }
+//   { type:'open_remove', id, opId }
+//   { type:'open_rename', id, title, opId }
+//   { type:'open_replace', oldId, id, title, opId }
 //   { type:'ping' }
 // Server -> client:
+//   { type:'open_list', entries:[{ id, title, pinned? }], sync?, ack? }
 //   { type:'stream', tabId, event }
 //   { type:'sessions', sessions:[...] }
 //   { type:'history', sessionId, lines:[...] }
@@ -39,6 +45,7 @@ import { callOnlySessions } from "./voice/voice-call";
 import { buildLiveInstructions, readAgentIdentity } from "./voice/gpt-live";
 import { applyJobEvent, hasRunningJobs, type JobMap } from "./background-jobs";
 import { mainChatOwner, gatewayMainChat, gatewayClientGone, MAIN_CHAT_WIRE_ID } from "./main-chat-owner";
+import { openConversations, gatewayOpenList, gatewayOpenListGone, gatewayOpenListReset } from "./open-conversations";
 import type * as FsType from "fs";
 import type * as PathType from "path";
 import type * as OsType from "os";
@@ -1319,6 +1326,10 @@ export function startGatewayHost(config: GatewayHostConfig): void {
         ) {
           return;
         }
+        // Which conversations are open, shared with the Mac's panels
+        // (open-conversations.ts). Pushed to the phone whenever it changes.
+        const openList = openConversations(cfg.vault);
+        if (openList && gatewayOpenList(openList, m, ws, { send })) return;
         switch (m.type) {
           case "list_sessions":
             send({ type: "sessions", sessions: listSessions(cfg.vault) });
@@ -1348,6 +1359,8 @@ export function startGatewayHost(config: GatewayHostConfig): void {
           case "set_task_meta":
             setTaskMeta(cfg.vault, m.sessionId, m.patch || {});
             send({ type: "task_meta_set", sessionId: m.sessionId });
+            // A pin puts the conversation in everyone's Open list.
+            if (m.patch && "pinned" in m.patch) openConversations(cfg.vault)?.pinsChanged();
             break;
           case "list_agents":
             send({ type: "agents", agents: listAgents(cfg.vault) });
@@ -1551,6 +1564,7 @@ export function startGatewayHost(config: GatewayHostConfig): void {
     ws.on("close", () => {
       setStatus({ clients: Math.max(0, currentStatus.clients - 1) });
       if (activeConfig) gatewayClientGone(mainChatOwner(activeConfig.vault), ws);
+      gatewayOpenListGone(ws);
       let inGrace = 0,
         detached = 0,
         working = 0;
@@ -1716,6 +1730,7 @@ export function stopGatewayHost(): void {
   for (const tabId of Array.from(tabs.keys())) {
     killTab(tabId, "gateway host stopped");
   }
+  gatewayOpenListReset();
   if (wss) {
     try {
       wss.close();

@@ -116,6 +116,10 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     scrollRef,
     activeJobs,
     tabJobs,
+    pinnedSessionIds,
+    activeLoading,
+    activeLoadError,
+    retryLoad,
   } = sessionManager;
 
   // Closing a tab stops its Claude process, and its background jobs with it.
@@ -171,8 +175,14 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
         title: s.title,
       };
     }
+    // Pins as the shared open list has them (it's what puts them in Open),
+    // so a pin made on the other device shows here straight away.
+    if (pinnedSessionIds) {
+      for (const id of Object.keys(m)) m[id] = { ...m[id], pinned: pinnedSessionIds.has(id) };
+      for (const id of pinnedSessionIds) if (!m[id]) m[id] = { pinned: true };
+    }
     return m;
-  }, [pastSessions]);
+  }, [pastSessions, pinnedSessionIds]);
 
   const handleOpenTask = useCallback(
     (task: BoardTask) => {
@@ -1046,6 +1056,26 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
             }
           }}
         />
+      ) : activeLoading ? (
+        // An earlier conversation on its way from the Mac.
+        <div className="hyo-messages">
+          <div className="hyo-empty-state hyo-convo-loading" role="status">
+            <span className="hyo-convo-spinner" aria-hidden="true" />
+            <p>Loading conversation…</p>
+          </div>
+        </div>
+      ) : activeLoadError ? (
+        <div className="hyo-messages">
+          <div className="hyo-empty-state hyo-convo-load-error" role="alert">
+            <p>
+              Couldn't load this conversation. {activeLoadError.replace(/\.?$/, ".")} Check the Mac is on and Hyo
+              is open there, then try again.
+            </p>
+            <button className="hyo-convo-retry" onClick={() => retryLoad(activeTabId)}>
+              Try again
+            </button>
+          </div>
+        </div>
       ) : (
         <div className="hyo-messages">
           <div className="hyo-empty-state">

@@ -1,7 +1,7 @@
 import { debug } from "../debug";
 import { addOutgoing, startQueued } from "../../send-queue";
 import { newStreamState, processContentBlocks, buildSnapshot, endTurn, startsTurnOfItsOwn, openReply, isInjectedContext, type StreamState } from "../../reply-stream";
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { GatewayTransport } from "../gateway-transport";
 import { MAIN_CHAT_WIRE_ID } from "../../main-chat-owner";
 import { VOICE_PERSONA } from "../voice/voice-persona";
@@ -20,6 +20,8 @@ import { generateConversationTitle } from "../title-generator";
 import { parseClaudeUpdateError } from "../../models";
 import { applyJobEvent, hasRunningJobs, jobAsking, jobList, maySwapProcess, IdleGate, type JobMap, type BackgroundJob } from "../../background-jobs";
 import { appendedPrompt, withMainChatReminder, withMainChat, mainFirst, canCloseTab, canReorder, startupActive, MAIN_CHAT_TITLE } from "../../main-chat";
+import { GatewayClient } from "../gateway-client";
+import { PendingOps, reconcileTabs, syncChanges, syncedSid, type OpenEntry } from "../../open-conversations";
 
 // Re-export for convenience
 export type { PastSession };
@@ -57,6 +59,10 @@ export interface TabSession {
   isMain?: boolean;
   // Background agents running in this tab's Claude process, by task id.
   jobs?: JobMap;
+  // Its history is on its way from the Mac ("Loading conversation…").
+  loading?: boolean;
+  // Why its history couldn't be loaded, in plain words (shown with a retry).
+  loadError?: string;
 }
 
 interface SessionState {
@@ -180,6 +186,27 @@ export function useSessionManager(options: SessionManagerOptions) {
   const scrollRef = useRef({ nearBottom: true });
   const stateRef = useRef(state);
   stateRef.current = state;
+
+  // ---- The shared open list (open-conversations.ts) ----
+  // Which conversations are open is the Mac's list, pushed here whenever it
+  // changes; what this phone is looking at is its own. Changes made here go
+  // to the Mac numbered, and a list that arrives before the Mac has seen
+  // them doesn't undo them on screen (PendingOps).
+  const pendingRef = useRef(new PendingOps());
+  const remoteRef = useRef<OpenEntry[] | null>(null);
+  const [openList, setOpenList] = useState<OpenEntry[] | null>(null);
+  const mainSid = () => (optionsRef.current.mainChat ? optionsRef.current.mainChatSessionId || undefined : undefined);
+  const gateway = () => (optionsRef.current.gatewayUrl ? GatewayClient.get(optionsRef.current.gatewayUrl) : null);
+  const tellMac = {
+    open: (sid: string, title: string) => gateway()?.openAdd(sid, title, pendingRef.current.note(sid, "add")),
+    close: (sid: string) => gateway()?.openRemove(sid, pendingRef.current.note(sid, "remove")),
+    rename: (sid: string, title: string) => gateway()?.openRename(sid, title, pendingRef.current.note(sid, "rename")),
+    replace: (oldSid: string, sid: string, title: string) => {
+      pendingRef.current.note(oldSid, "remove");
+      gateway()?.openReplace(oldSid, sid, title, pendingRef.current.note(sid, "add"));
+    },
+  };
+  const isPinned = (sid: string | null | undefined) => !!sid && !!remoteRef.current?.some((e) => e.id === sid && e.pinned);
 
   // Cleanup transports on unmount
   useEffect(() => {
@@ -739,7 +766,12 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   const closeTab = useCallback((tabIdToClose: string) => {
     // The main chat stays: it's the one conversation that's always there.
-    if (!canCloseTab(stateRef.current.tabs.find((t) => t.id === tabIdToClose))) return;
+    const closing = stateRef.current.tabs.find((t) => t.id === tabIdToClose);
+    if (!canCloseTab(closing)) return;
+    // So does a pinned one, until it's unpinned.
+    if (isPinned(closing?.cliSessionId)) return;
+    const sid = closing ? syncedSid(closing, mainSid()) : null;
+    if (sid) tellMac.close(sid);
     transportsRef.current[tabIdToClose]?.stop();
     delete transportsRef.current[tabIdToClose];
     delete streamStatesRef.current[tabIdToClose];
@@ -791,6 +823,9 @@ export function useSessionManager(options: SessionManagerOptions) {
   }, []);
 
   const renameTab = useCallback((id: string, title: string) => {
+    // The Mac's list (and so its tabs) takes the new title too.
+    const sid = stateRef.current.tabs.find((t) => t.id === id)?.cliSessionId;
+    if (sid && remoteRef.current?.some((e) => e.id === sid)) tellMac.rename(sid, title);
     setState((prev) => {
       const tab = prev.tabs.find((t) => t.id === id);
 
@@ -813,6 +848,7 @@ export function useSessionManager(options: SessionManagerOptions) {
   // Rename a conversation from the task list (open tab or not). Saves the custom
   // title via the gateway and refreshes; updates the tab title too if it's open.
   const renamePastSession = useCallback((sessionId: string, title: string) => {
+    if (remoteRef.current?.some((e) => e.id === sessionId)) tellMac.rename(sessionId, title);
     saveCustomTitle(options.gatewayUrl, sessionId, title).then(() => {
       refreshPastSessions();
     });
@@ -1197,6 +1233,22 @@ export function useSessionManager(options: SessionManagerOptions) {
     refreshPastSessions();
   }, [refreshPastSessions]);
 
+  /** A tab for a saved conversation: open at once, its history on its way. */
+  const sessionTabFor = (pastSession: Pick<PastSession, "id" | "title" | "callOnly">, like?: TabSession): TabSession => ({
+    id: genId(),
+    cliSessionId: pastSession.id,
+    sessionPending: !!pastSession.callOnly,
+    title: pastSession.title || "Untitled",
+    messages: [],
+    generating: false,
+    model: like?.model || LOCKED_MODEL,
+    permissionMode: like?.permissionMode || LOCKED_PERMISSION_MODE,
+    agent: LOCKED_AGENT,
+    inputTokens: 0,
+    voiceMode: false,
+    loading: true,
+  });
+
   const openPastSession = useCallback((pastSession: PastSession) => {
     const existing = stateRef.current.tabs.find(
       (t) => t.cliSessionId === pastSession.id
@@ -1206,78 +1258,142 @@ export function useSessionManager(options: SessionManagerOptions) {
       return;
     }
 
-    // Open the tab immediately (empty) and switch to it — history is
-    // fetched from the gateway asynchronously and back-filled once it
-    // arrives, so opening a past session doesn't block the UI.
-    const id = genId();
-    setState((prev) => {
-      const activeTab = prev.tabs.find((t) => t.id === prev.activeTabId);
-      return {
-        tabs: [
-          ...prev.tabs,
-          {
-            id,
-            cliSessionId: pastSession.id,
-            sessionPending: !!pastSession.callOnly,
-            title: pastSession.title,
-            messages: [],
-            generating: false,
-            model: activeTab?.model || LOCKED_MODEL,
-            permissionMode: activeTab?.permissionMode || LOCKED_PERMISSION_MODE,
-            agent: LOCKED_AGENT,
-            voiceMode: false,
-          },
-        ],
-        activeTabId: id,
-      };
-    });
+    // Open the tab immediately and switch to it — history is fetched from
+    // the gateway asynchronously and back-filled once it arrives, with
+    // "Loading conversation…" showing until then.
+    const tab = sessionTabFor(pastSession, stateRef.current.tabs.find((t) => t.id === stateRef.current.activeTabId));
+    setState((prev) => ({ tabs: [...prev.tabs, tab], activeTabId: tab.id }));
+    // Opened on the Mac too (not the main chat, which is always there).
+    if (pastSession.id !== mainSid()) tellMac.open(pastSession.id, tab.title);
 
-    backfill(id, pastSession.id);
+    backfill(tab.id, pastSession.id);
   }, [options.gatewayUrl]);
 
-  /** Fill an open tab with its conversation's history from the gateway. */
+  /**
+   * Fill an open tab with its conversation's history from the gateway. The
+   * tab shows it's loading until then; if the Mac can't be reached, or
+   * doesn't answer in time, it says so with a retry instead.
+   */
   function backfill(id: string, sessionId: string) {
-    loadSessionHistory(options.gatewayUrl, sessionId).then((history) => {
-      const claudeMessages: Message[] = history.messages.map((m) => {
-        // Hand-offs from a live call carry the marker in the prompt itself.
-        const handoff = m.role === "user" && m.content.includes(HANDOFF_MARKER);
-        return {
-          role: m.role,
-          content: m.content,
-          thinking: m.thinking || "",
-          toolCalls: m.toolCalls || [],
-          orderedBlocks: m.orderedBlocks || [],
+    const url = optionsRef.current.gatewayUrl;
+    setState((prev) => ({
+      ...prev,
+      tabs: prev.tabs.map((t) => (t.id === id ? { ...t, loading: true, loadError: undefined } : t)),
+    }));
+    loadSessionHistory(url, sessionId)
+      .then((history) => {
+        const claudeMessages: Message[] = history.messages.map((m) => {
+          // Hand-offs from a live call carry the marker in the prompt itself.
+          const handoff = m.role === "user" && m.content.includes(HANDOFF_MARKER);
+          return {
+            role: m.role,
+            content: m.content,
+            thinking: m.thinking || "",
+            toolCalls: m.toolCalls || [],
+            orderedBlocks: m.orderedBlocks || [],
+            streaming: false,
+            handoff: handoff || undefined,
+            displayText: handoff ? handoffRequestText(m.content) : m.displayText,
+          };
+        });
+        // Each voice call goes back in as its one line, where it started.
+        const messages = threadCalls(claudeMessages, history.voiceCalls || [], (call) => ({
+          role: "system" as const,
+          content: "",
           streaming: false,
-          handoff: handoff || undefined,
-          displayText: handoff ? handoffRequestText(m.content) : m.displayText,
-        };
+          voiceCall: call,
+        }));
+        // Continue on the model the conversation was actually built with, rather
+        // than the hardcoded mobile default. Resuming must not silently switch
+        // models mid-conversation — and forcing a long conversation onto a
+        // different model's context window is what caused "Prompt is too long".
+        const inheritedModel = history.model || LOCKED_MODEL;
+        setState((prev) => ({
+          ...prev,
+          tabs: prev.tabs.map((t) => {
+            if (t.id !== id) return t;
+            // Only if nothing has been said in it yet on this phone.
+            if (t.messages.length > 0) return { ...t, loading: false, loadError: undefined };
+            return { ...t, messages, model: inheritedModel, loading: false, loadError: undefined };
+          }),
+        }));
+      })
+      .catch((e: any) => {
+        const cause = e?.message || String(e);
+        console.error("[hyo] Couldn't load the conversation:", cause);
+        setState((prev) => ({
+          ...prev,
+          tabs: prev.tabs.map((t) => (t.id === id ? { ...t, loading: false, loadError: cause } : t)),
+        }));
       });
-      // Each voice call goes back in as its one line, where it started.
-      const messages = threadCalls(claudeMessages, history.voiceCalls || [], (call) => ({
-        role: "system" as const,
-        content: "",
-        streaming: false,
-        voiceCall: call,
-      }));
-      // Continue on the model the conversation was actually built with, rather
-      // than the hardcoded mobile default. Resuming must not silently switch
-      // models mid-conversation — and forcing a long conversation onto a
-      // different model's context window is what caused "Prompt is too long".
-      const inheritedModel = history.model || LOCKED_MODEL;
-      setState((prev) => ({
-        ...prev,
-        tabs: prev.tabs.map((t) =>
-          // Only if nothing has been said in it yet on this phone.
-          t.id === id && t.messages.length === 0 ? { ...t, messages, model: inheritedModel } : t
-        ),
-      }));
-    });
   }
 
+  /** Try loading a conversation's history again (after it failed). */
+  const retryLoad = useCallback((tabId: string) => {
+    const t = stateRef.current.tabs.find((x) => x.id === tabId);
+    if (t?.cliSessionId) backfill(t.id, t.cliSessionId);
+  }, []);
+
+  // Close a list's busy tabs only once their work is done.
+  const isBusy = (t: TabSession) =>
+    t.generating || jobsRunning(t.id) || !!turnRunningRef.current[t.id] || (queuedSendsRef.current[t.id]?.length ?? 0) > 0;
+
+  const blankTab = (): TabSession => ({
+    id: genId(),
+    cliSessionId: null,
+    title: "New conversation",
+    messages: [],
+    generating: false,
+    model: LOCKED_MODEL,
+    permissionMode: LOCKED_PERMISSION_MODE,
+    agent: LOCKED_AGENT,
+    inputTokens: 0,
+    voiceMode: false,
+  });
+
+  /**
+   * Bring this phone's tabs in line with an open list: the Mac's, or at
+   * startup the one this phone last had. Never sent back to the Mac.
+   */
+  const applyOpenList = (entries: OpenEntry[], startup?: { activeId?: string | null }) => {
+    const p = pendingRef.current;
+    const done: { closed: TabSession[]; opened: TabSession[] } = { closed: [], opened: [] };
+    setState((prev) => {
+      const r = reconcileTabs(prev.tabs, prev.activeTabId, entries, (e) => sessionTabFor(e), blankTab, {
+        mainSessionId: mainSid(),
+        busy: isBusy,
+        blocksClose: (sid) => p.blocksClose(sid),
+        blocksOpen: (sid) => p.blocksOpen(sid),
+        blocksRetitle: (sid) => p.blocksRetitle(sid),
+      });
+      done.closed = r.closed;
+      done.opened = r.opened;
+      if (!startup) return r.changed ? { tabs: r.tabs, activeTabId: r.activeTabId } : prev;
+      // Opening Hyo: the pristine starter tab makes way for the desk.
+      const restored = r.tabs.filter((t) => t.cliSessionId && !t.isMain);
+      if (restored.length === 0) return r.changed ? { tabs: r.tabs, activeTabId: r.activeTabId } : prev;
+      const tabs = r.tabs.filter((t) => t.isMain || t.cliSessionId || t.messages.length > 0);
+      return { tabs, activeTabId: startupActive(tabs, startup.activeId) || tabs[tabs.length - 1].id };
+    });
+    // The updater has run by the next tick: let go of closed tabs' processes
+    // and load the history of the ones just opened.
+    setTimeout(() => {
+      for (const t of done.closed) {
+        transportsRef.current[t.id]?.stop();
+        delete transportsRef.current[t.id];
+        delete streamStatesRef.current[t.id];
+        delete jobsRef.current[t.id];
+      }
+      for (const t of done.opened) if (t.cliSessionId) backfill(t.id, t.cliSessionId);
+    }, 0);
+  };
+  const applyOpenListRef = useRef(applyOpenList);
+  applyOpenListRef.current = applyOpenList;
+
   // ---- Reopen the tabs from last time ---------------------------------------
-  // Same behaviour as desktop: remember which conversations are open and
-  // restore them on mount. Device-local (this webview's localStorage), so the
-  // phone's desk is its own — closing the app doesn't lose your open tabs.
+  // The phone remembers the open list it last had (and which conversation it
+  // was on) in this webview's localStorage, so the desk is there at once and
+  // offline. The Mac's list, when it arrives, is the one that counts.
   const restoreKey = `hyo-open-tabs:${options.gatewayUrl}`;
   const restoredRef = useRef(false);
 
@@ -1290,23 +1406,56 @@ export function useSessionManager(options: SessionManagerOptions) {
     } catch {
       /* absent or corrupt — start fresh */
     }
-    if (!saved?.sessions?.length) return;
-    for (const s of saved.sessions) {
-      // The main chat has its own tab; never a second copy of it.
-      if (s?.id && !(options.mainChat && s.id === options.mainChatSessionId)) {
-        openPastSession({ id: s.id, title: s.title || "Untitled" } as PastSession);
-      }
-    }
-    const activeId = saved.activeId;
-    setState((prev) => {
-      const restored = prev.tabs.filter((t) => t.cliSessionId && !t.isMain);
-      if (restored.length === 0) return prev;
-      // The pristine starter tab makes way for the restored desk.
-      const tabs = prev.tabs.filter((t) => t.isMain || t.cliSessionId || t.messages.length > 0);
-      return { tabs, activeTabId: startupActive(tabs, activeId) || tabs[tabs.length - 1].id };
-    });
+    // The Mac's list got here first: it's what's open.
+    const entries: OpenEntry[] =
+      remoteRef.current ?? (saved?.sessions || []).filter((s) => s?.id).map((s) => ({ id: s.id, title: s.title || "Untitled" }));
+    if (!entries.length) return;
+    applyOpenList(entries, { activeId: saved?.activeId });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openPastSession, options.gatewayUrl]);
+  }, [options.gatewayUrl]);
+
+  // Hear the Mac's list: now, after every reconnect (what was changed here
+  // while offline goes first), and whenever it changes there.
+  useEffect(() => {
+    if (!options.gatewayUrl) return;
+    const g = GatewayClient.get(options.gatewayUrl);
+    const off = g.onOpenList((entries, meta) => {
+      pendingRef.current.settle(meta);
+      remoteRef.current = entries;
+      setOpenList(entries);
+      applyOpenListRef.current(entries);
+    });
+    const sync = () => g.openSync(pendingRef.current.sync());
+    const offConnected = g.onConnected(sync);
+    if (g.getStatus() === "connected") sync();
+    return () => {
+      off();
+      offConnected();
+    };
+  }, [options.gatewayUrl]);
+
+  // A close that waited on running work happens once the work is done; a
+  // main chat switched on or off changes which conversation is the list's.
+  const busyKey = state.tabs.filter(isBusy).map((t) => t.id).join(",");
+  useEffect(() => {
+    if (remoteRef.current) applyOpenListRef.current(remoteRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busyKey, options.mainChat, options.mainChatSessionId]);
+
+  // Tell the Mac what changed here: a conversation that got its session id
+  // (its first message, or a call), moved to a new one, or let go of one.
+  // Opening from History and closing tell it themselves.
+  const syncedRef = useRef(new Map<string, string | null>());
+  useEffect(() => {
+    const ch = syncChanges(syncedRef.current, state.tabs, mainSid());
+    syncedRef.current = ch.next;
+    for (const g of ch.gained) {
+      if (g.oldSid) tellMac.replace(g.oldSid, g.sid, g.title);
+      else tellMac.open(g.sid, g.title);
+    }
+    for (const sid of ch.cleared) tellMac.close(sid);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.tabs]);
 
   useEffect(() => {
     if (!restoredRef.current || !options.gatewayUrl) return; // never clobber before restore reads it
@@ -1378,6 +1527,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           inputTokens: 0,
           voiceMode: false,
           isMain: true,
+          loading: !!sid,
         };
         if (sid) filled = { id: tab.id, sid };
         return tab;
@@ -1554,7 +1704,18 @@ export function useSessionManager(options: SessionManagerOptions) {
   /** Background jobs still running in a tab (closing it would stop them). */
   const tabJobs = useCallback((tabId: string): BackgroundJob[] => jobList(jobsRef.current[tabId]), []);
 
+  // Pinned conversations, from the Mac's list (null until it's heard from:
+  // the session metadata's pins are used instead).
+  const pinnedSessionIds = useMemo(
+    () => (openList ? new Set(openList.filter((e) => e.pinned).map((e) => e.id)) : null),
+    [openList]
+  );
+
   return {
+    pinnedSessionIds,
+    activeLoading: !!activeTab?.loading,
+    activeLoadError: activeTab?.loadError || null,
+    retryLoad,
     activeJobs: jobList(activeTab?.jobs),
     activeIsMain: !!activeTab?.isMain,
     tabJobs,
