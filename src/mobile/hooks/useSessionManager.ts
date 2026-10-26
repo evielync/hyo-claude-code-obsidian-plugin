@@ -95,6 +95,8 @@ interface SessionManagerOptions {
   mainChat?: boolean;
   mainChatSessionId?: string;
   onMainChatSession?: (sessionId: string) => void;
+  /** How long opening a conversation waits for the Mac (tests shorten it). */
+  historyTimeoutMs?: number;
 }
 
 // ------- utilities -------
@@ -817,6 +819,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     delete transportsRef.current[tabIdToClose];
     delete streamStatesRef.current[tabIdToClose];
     delete jobsRef.current[tabIdToClose];
+    draftsRef.current.delete(tabIdToClose);
 
     setState((prev) => {
       const remaining = prev.tabs.filter((t) => t.id !== tabIdToClose);
@@ -1344,9 +1347,10 @@ export function useSessionManager(options: SessionManagerOptions) {
     }));
     // Listening before asking, so nothing the Mac sends right after is missed.
     const transport = ensureTransport(id);
+    const wait = optionsRef.current.historyTimeoutMs ?? HISTORY_TIMEOUT_MS;
     settleWithin(
-      loadSessionHistory(url, sessionId, { tabId: transport.wireId }),
-      HISTORY_TIMEOUT_MS + 5000,
+      loadSessionHistory(url, sessionId, { tabId: transport.wireId, timeoutMs: wait }),
+      wait + 5000,
       "Your Mac didn't send it in time."
     )
       .then((history) => {
@@ -1563,6 +1567,24 @@ export function useSessionManager(options: SessionManagerOptions) {
       /* storage unavailable — restore just won't happen */
     }
   }, [state.tabs, state.activeTabId, restoreKey, options.gatewayUrl]);
+
+  // A tab that's gone (closed here or by the shared list) stops hearing its
+  // conversation. Worked out from the tabs themselves after each change,
+  // rather than from inside a state update, which may not have run yet.
+  useEffect(() => {
+    const ids = new Set(state.tabs.map((t) => t.id));
+    for (const id of Object.keys(transportsRef.current)) {
+      if (ids.has(id)) continue;
+      try {
+        transportsRef.current[id]?.stop();
+      } catch (e) {
+        console.error("[hyo] Couldn't let go of a closed conversation:", e);
+      }
+      delete transportsRef.current[id];
+      delete streamStatesRef.current[id];
+      draftsRef.current.delete(id);
+    }
+  }, [state.tabs]);
 
   // The main chat listens from the moment it's open: what's said on the Mac
   // shows here as it happens, and a turn already running is picked up. (With

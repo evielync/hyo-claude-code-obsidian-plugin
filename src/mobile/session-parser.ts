@@ -118,7 +118,7 @@ export interface SessionHistory {
 export async function loadSessionHistory(
   gatewayUrl: string,
   sessionId: string,
-  opts: { tabId?: string; before?: number } = {}
+  opts: { tabId?: string; before?: number; timeoutMs?: number } = {}
 ): Promise<SessionHistory> {
   const reply = await GatewayClient.get(gatewayUrl).getHistory(sessionId, opts);
   if (reply.messages) {

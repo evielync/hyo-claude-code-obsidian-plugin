@@ -21,7 +21,11 @@ for (const f of files) {
     outfile,
     logLevel: "error",
     // Obsidian isn't available outside the app; a small stub stands in.
-    alias: { obsidian: "./test/stubs/obsidian.ts" },
+    // Tests that drive the real session-manager hooks (*.hooks.test.ts) get
+    // a tiny React that runs a hook without a DOM.
+    alias: f.includes(".hooks.test.")
+      ? { obsidian: "./test/stubs/obsidian.ts", react: "./test/stubs/mini-react.ts" }
+      : { obsidian: "./test/stubs/obsidian.ts" },
   });
   built.push(outfile);
 }

@@ -873,6 +873,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     delete transportsRef.current[tabIdToClose];
     delete streamStatesRef.current[tabIdToClose];
     delete jobsRef.current[tabIdToClose];
+    draftsRef.current.delete(tabIdToClose);
     delete gatesRef.current[tabIdToClose];
 
     setState((prev) => {
@@ -1523,6 +1524,7 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   /** Let go of what a tab closed by the list was running. */
   const dropTab = (tabId: string) => {
+    draftsRef.current.delete(tabId);
     transportsRef.current[tabId]?.stop();
     delete transportsRef.current[tabId];
     delete streamStatesRef.current[tabId];
@@ -1625,6 +1627,24 @@ export function useSessionManager(options: SessionManagerOptions) {
       /* storage unavailable — restore just won't happen */
     }
   }, [state.tabs, state.activeTabId, restoreKey]);
+
+  // A tab that's gone (closed here or by the shared list) stops hearing its
+  // conversation. Worked out from the tabs themselves after each change,
+  // rather than from inside a state update, which may not have run yet.
+  useEffect(() => {
+    const ids = new Set(state.tabs.map((t) => t.id));
+    for (const id of Object.keys(transportsRef.current)) {
+      if (ids.has(id)) continue;
+      try {
+        transportsRef.current[id]?.stop();
+      } catch (e) {
+        console.error("[hyo] Couldn't let go of a closed conversation:", e);
+      }
+      delete transportsRef.current[id];
+      delete streamStatesRef.current[id];
+      draftsRef.current.delete(id);
+    }
+  }, [state.tabs]);
 
   // Which conversation each tab last subscribed to (its history is in step from then on).
   const listenedRef = useRef(new Map<string, string>());
