@@ -96,6 +96,16 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
   // Mac) owns the Claude process. Connection health is surfaced inline in
   // the status bar rather than gating the whole panel behind an
   // install-Claude-Code onboarding screen, which doesn't apply here.
+  // The main chat's conversation id is kept in the synced settings, so the
+  // phone and the computer carry on the same one.
+  const onMainChatSession = React.useCallback(
+    (sessionId: string) => {
+      if (plugin.settings.mainChatSessionId === sessionId) return;
+      plugin.settings.mainChatSessionId = sessionId;
+      void plugin.saveSettings();
+    },
+    [plugin]
+  );
   const sessionManager = useSessionManager({
     gatewayUrl: plugin.settings.gatewayUrl,
     model: plugin.settings.model,
@@ -103,6 +113,9 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
     autoGenerateTitles: plugin.settings.autoGenerateTitles,
     askFirst: plugin.settings.askFirst,
     settingsVersion,
+    mainChat: !!plugin.settings.mainChat,
+    mainChatSessionId: plugin.settings.mainChatSessionId || "",
+    onMainChatSession,
   });
 
   return (

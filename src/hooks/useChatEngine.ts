@@ -25,6 +25,9 @@ export interface Message {
   askQuestion?: AskQuestionData | null;
   planReview?: PlanReviewData | null;
   isCompaction?: boolean;
+  // A reply Claude started itself, with nobody sending anything: a
+  // background job finished and it's reporting back.
+  selfStarted?: boolean;
   attachments?: { type: string; name: string; preview?: string }[];
   // Older builds (0.6.x) put each spoken turn in the thread. Kept only so
   // old in-memory messages type-check; calls are `voiceCall` records now.
@@ -77,6 +80,8 @@ export interface PermissionRequestData {
   requestId: string;
   toolName: string;
   input?: any;
+  /** The background job asking, by name, when it isn't the chat itself. */
+  asker?: string;
   resolved?: "allowed" | "denied";
 }
 

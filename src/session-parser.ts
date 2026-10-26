@@ -1,6 +1,7 @@
 import { debug } from "./debug";
 import { Platform } from "obsidian";
 import { isSelfStartedPrompt, isInjectedContext } from "./reply-stream";
+import { transcriptModel, resumeModel } from "./models";
 import { mergeStoredCalls, upsertCall, callOnlySessions, type VoiceCallRecord } from "./voice/voice-call";
 import type * as fsTypes from "fs"; // type-only (erased at build) for annotations
 // Node built-ins are desktop-only; deferred so this module loads on mobile.
@@ -473,21 +474,18 @@ export function loadSessionModel(cwd: string, sessionId: string): string | null 
   } catch {
     return null;
   }
-  let model: string | null = null;
+  const lines: any[] = [];
   for (const line of text.split("\n")) {
     if (!line.includes('"model"')) continue;
     try {
-      const d = JSON.parse(line);
-      const id = d.message?.model;
-      // Subagent replies are on their own model; only the main thread counts.
-      if (d.type === "assistant" && d.isSidechain !== true && typeof id === "string" && id.startsWith("claude-")) {
-        model = id;
-      }
+      lines.push(JSON.parse(line));
     } catch {
       /* skip a malformed line */
     }
   }
-  return model;
+  // Main thread only; a long conversation keeps the window it grew in.
+  const { model, contextTokens } = transcriptModel(lines);
+  return resumeModel(model, contextTokens);
 }
 
 export function loadSessionHistory(cwd: string, sessionId: string): HistoryMessage[] {

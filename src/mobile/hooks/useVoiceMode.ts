@@ -124,8 +124,8 @@ export function useVoiceMode({
   }, []);
 
   /** Claude finished a reply: the answer to the open hand-off, or something typed in the chat. */
-  const finishReply = useCallback((markdown: string) => {
-    liveRef.current?.finishReply(markdown);
+  const finishReply = useCallback((markdown: string, selfStarted?: boolean) => {
+    liveRef.current?.finishReply(markdown, selfStarted);
   }, []);
 
   const noteSilently = useCallback((text: string) => {

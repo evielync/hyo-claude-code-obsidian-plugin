@@ -204,3 +204,37 @@ const CLAUDE_AUTH_ERROR_RE =
 export function isClaudeAuthError(text: string): boolean {
   return !!text && CLAUDE_AUTH_ERROR_RE.test(text);
 }
+
+/**
+ * The model to carry a reopened conversation on, from what its transcript
+ * recorded. The transcript stores the API model ID, which never carries the
+ * "[1m]" suffix, so a conversation that grew past 200K on an older model's
+ * long-context variant would come back on the 200K one and have to be
+ * squeezed down before the next message. When the last context the
+ * transcript recorded is over what the plain ID allows, the suffix goes back.
+ */
+export function resumeModel(recorded: string | null | undefined, lastContextTokens: number): string | null {
+  if (!recorded) return null;
+  if (lastContextTokens > getContextLimit(recorded) && !isNative1M(recorded) && !recorded.includes("[1m]")) {
+    return `${recorded}[1m]`;
+  }
+  return recorded;
+}
+
+/**
+ * The model and the last context size a transcript recorded, from its main
+ * thread only: a sub-agent's replies run on their own (often smaller) model.
+ * Pure: takes the parsed jsonl lines, for the desktop reader and the phone.
+ */
+export function transcriptModel(lines: any[]): { model: string | null; contextTokens: number } {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const d = lines[i];
+    if (d?.type !== "assistant" || d.isSidechain === true) continue;
+    const id = d.message?.model;
+    if (typeof id !== "string" || !id.startsWith("claude-")) continue;
+    const u = d.message?.usage || {};
+    const contextTokens = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+    return { model: id, contextTokens };
+  }
+  return { model: null, contextTokens: 0 };
+}

@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import type { TabSession } from "../hooks/useSessionManager";
 import type { PastSession } from "../session-parser";
 import type { TaskMeta } from "../../settings";
+import { hasRunningJobs } from "../../background-jobs";
 import { buildTaskList } from "../task-state";
 import { GatewayClient, type ConnectionStatus } from "../gateway-client";
 
@@ -108,7 +109,8 @@ export function ChatTabs({
   const handlePointerDown = (e: React.PointerEvent, tab: TabSession) => {
     longPressed.current = false;
     cancelPress();
-    if (renamingId === tab.id) return;
+    // The main chat keeps its name.
+    if (renamingId === tab.id || tab.isMain) return;
     pressStart.current = { x: e.clientX, y: e.clientY };
     pressTimer.current = window.setTimeout(() => {
       pressTimer.current = null;
@@ -165,7 +167,7 @@ export function ChatTabs({
           return (
           <div
             key={tab.id}
-            className={`hyo-tab ${tab.id === activeTabId ? "hyo-tab-active" : ""}`}
+            className={`hyo-tab ${tab.id === activeTabId ? "hyo-tab-active" : ""}${tab.isMain ? " hyo-tab-main" : ""}`}
             onClick={() => handleTabClick(tab)}
             onPointerDown={(e) => handlePointerDown(e, tab)}
             onPointerMove={handlePointerMove}
@@ -191,17 +193,22 @@ export function ChatTabs({
                     className="hyo-tab-dot hyo-tab-dot-waiting"
                     title="Waiting for you"
                   />
-                ) : tab.generating ? (
+                ) : tab.generating || hasRunningJobs(tab.jobs) ? (
+                  // Working, including background jobs after the reply is in.
                   <span className="hyo-tab-dot" title="Working…" />
+                ) : tab.isMain ? (
+                  <MainChatIcon />
                 ) : null}
                 <span className="hyo-tab-title">{tab.title}</span>
-                <button
-                  className="hyo-tab-close"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onClose(tab.id);
-                  }}
-                >×</button>
+                {!tab.isMain && (
+                  <button
+                    className="hyo-tab-close"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onClose(tab.id);
+                    }}
+                  >×</button>
+                )}
               </>
             )}
           </div>
@@ -249,5 +256,15 @@ export function ChatTabs({
         </button>
       </div>
     </div>
+  );
+}
+
+// The main chat's mark in the tab bar: a small chat bubble, in the tab's own
+// text colour, so it reads as "this one's different" without shouting.
+function MainChatIcon() {
+  return (
+    <svg className="hyo-tab-main-icon" width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14 9.5a2 2 0 0 1-2 2H6l-3.5 2.5V4a2 2 0 0 1 2-2h7.5a2 2 0 0 1 2 2z" />
+    </svg>
   );
 }

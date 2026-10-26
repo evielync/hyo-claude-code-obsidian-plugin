@@ -1,5 +1,6 @@
 import React from "react";
 import type { PermissionRequestData } from "../hooks/useChatEngine";
+import { permissionAskerLine } from "../background-jobs";
 
 interface PermissionRequestProps {
   request: PermissionRequestData;
@@ -7,11 +8,14 @@ interface PermissionRequestProps {
 }
 
 export function PermissionRequest({ request, onRespond }: PermissionRequestProps) {
-  const { requestId, toolName, input } = request;
+  const { requestId, toolName, input, asker } = request;
   const summary = getPermissionSummary(toolName, input);
 
   return (
     <div className="hyo-permission">
+      {/* A background job's ask says which job, so it isn't mistaken for
+          the chat asking about something you just said. */}
+      {asker && <div className="hyo-permission-asker">{permissionAskerLine(asker)}</div>}
       <div className="hyo-permission-tool">{toolName}</div>
       {summary && <div className="hyo-permission-summary">{summary}</div>}
       <div className="hyo-permission-buttons">

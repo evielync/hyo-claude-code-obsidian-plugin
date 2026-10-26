@@ -79,7 +79,7 @@ export function derivePeek(tab: TabSession): string {
       return "Plan ready for your review";
     }
   }
-  if (tab.generating) return "Working…";
+  if (tab.generating || Object.keys(tab.jobs || {}).length > 0) return "Working…";
   for (let i = tab.messages.length - 1; i >= 0; i--) {
     const m: any = tab.messages[i];
     if (m?.role === "assistant" && m.content) return oneLine(m.content);
@@ -127,7 +127,8 @@ export function buildTaskList(
       title: tab.title || meta.title || "Untitled",
       peek: derivePeek(tab),
       state: deriveTaskState({
-        generating: tab.generating,
+        // Background jobs still running count as working, after the reply too.
+        generating: tab.generating || Object.keys(tab.jobs || {}).length > 0,
         hasPending: hasPendingAttention(tab),
         closed: !!meta.closed,
       }),

@@ -85,6 +85,12 @@ export interface HyoSettings {
   // else about a task (its state) is derived live; only these few things need
   // to persist across reloads. See hyo-task-mode-build-spec.
   tasks: Record<string, TaskMeta>;
+  // Main chat: a pinned first tab holding one long conversation with your
+  // agent that hands work to background agents and never blocks. Off by
+  // default. The conversation's id is kept here (synced) so the phone opens
+  // the same one.
+  mainChat: boolean;
+  mainChatSessionId: string;
   // Commands — note `type` frontmatter -> the header-button commands for that
   // type. Ported from the standalone AI Commands plugin (see commandsMigrated).
   commands: Record<string, HyoCommand[]>;
@@ -133,6 +139,8 @@ export const DEFAULT_SETTINGS: HyoSettings = {
   voiceAboutYouNote: "",
   voicePersonality: "",
   voiceDebugLog: false,
+  mainChat: false,
+  mainChatSessionId: "",
   tasks: {},
   commands: {},
   commandsMigrated: false,
@@ -345,6 +353,21 @@ export class HyoSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.autoGenerateTitles)
           .onChange(async (value) => {
             this.plugin.settings.autoGenerateTitles = value;
+            await this.plugin.saveSettings();
+            this.showSaved();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Main chat")
+      .setDesc(
+        "One ongoing conversation with your agent, always there as the first tab. Ask for something and it hands the work to a background helper and answers straight away, so you can keep asking for more. Each result comes back into the chat when it's done. Your other tabs work as they do now."
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(!!this.plugin.settings.mainChat)
+          .onChange(async (value) => {
+            this.plugin.settings.mainChat = value;
             await this.plugin.saveSettings();
             this.showSaved();
           })

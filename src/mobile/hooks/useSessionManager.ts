@@ -17,6 +17,8 @@ import { handoffRequestText, HANDOFF_MARKER, threadCalls, insertCallLine, sessio
 import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
 import { generateConversationTitle } from "../title-generator";
 import { parseClaudeUpdateError } from "../../models";
+import { applyJobEvent, hasRunningJobs, jobAsking, jobList, maySwapProcess, IdleGate, type JobMap, type BackgroundJob } from "../../background-jobs";
+import { appendedPrompt, withMainChatReminder, withMainChat, mainFirst, canCloseTab, canReorder, startupActive, MAIN_CHAT_TITLE } from "../../main-chat";
 
 // Re-export for convenience
 export type { PastSession };
@@ -50,6 +52,10 @@ export interface TabSession {
   // Task mode: set when a turn finishes on a tab you aren't viewing, cleared
   // when you open it. Makes a finished result read as "waiting on you".
   hasUnseenReply?: boolean;
+  // The main chat: pinned first, can't be closed (see main-chat.ts).
+  isMain?: boolean;
+  // Background agents running in this tab's Claude process, by task id.
+  jobs?: JobMap;
 }
 
 interface SessionState {
@@ -67,6 +73,11 @@ interface SessionManagerOptions {
   // every sendMessage call and sent with each prompt — see gateway-client's
   // sendPrompt.
   askFirst?: boolean;
+  // Settings → Main chat, and the conversation it carries on (synced from
+  // the desktop's settings, so it's the same conversation on both).
+  mainChat?: boolean;
+  mainChatSessionId?: string;
+  onMainChatSession?: (sessionId: string) => void;
 }
 
 // ------- utilities -------
@@ -113,6 +124,29 @@ export function useSessionManager(options: SessionManagerOptions) {
   const [pastSessions, setPastSessions] = useState<PastSession[]>([]);
 
   const transportsRef = useRef<Record<string, GatewayTransport>>({});
+  // Each tab's background jobs, in step with tab.jobs for the guards below.
+  const jobsRef = useRef<Record<string, JobMap>>({});
+  const jobsRunning = (tabId: string) => hasRunningJobs(jobsRef.current[tabId]);
+  // Work that has to restart a tab's process waits for its background jobs.
+  const gatesRef = useRef<Record<string, IdleGate>>({});
+  const gate = (tabId: string) => (gatesRef.current[tabId] ||= new IdleGate());
+  const whenIdle = (tabId: string, fn: () => void) => {
+    const g = gate(tabId);
+    g.update(jobsRef.current[tabId]);
+    g.whenIdle(fn);
+  };
+  const setJobs = (tabId: string, jobs: JobMap) => {
+    jobsRef.current[tabId] = jobs;
+    setState((prev) => ({
+      ...prev,
+      tabs: prev.tabs.map((t) => (t.id === tabId ? { ...t, jobs } : t)),
+    }));
+    setTimeout(() => gate(tabId).update(jobsRef.current[tabId]), 0);
+  };
+  // An auto-compaction that ended the turn without carrying on (older CLIs).
+  const compactNudgeRef = useRef<Record<string, boolean>>({});
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
   // Messages sent while Claude is still answering, per tab, oldest first.
   // They show in the chat at once and go to Claude when the turn ends (see
   // send-queue.ts). turnRunningRef is set the moment a turn starts, so two
@@ -134,6 +168,9 @@ export function useSessionManager(options: SessionManagerOptions) {
   }, []);
   const personaFor = (voiceMode: boolean | undefined): string | undefined =>
     voiceMode ? (voiceEngineRef.current === "gpt-live" ? LIVE_BACKEND_PERSONA : VOICE_PERSONA) : undefined;
+  // The main chat's instructions (main chat only), then the voice persona.
+  const promptFor = (tab: TabSession | undefined): string | undefined =>
+    appendedPrompt(tab?.isMain, personaFor(tab?.voiceMode));
   // The persona each tab's process was started with; a change swaps the
   // process on the next send between turns (never mid-turn — a hand-off
   // carries on after hang-up).
@@ -191,12 +228,24 @@ export function useSessionManager(options: SessionManagerOptions) {
           );
         }
 
+        // Background agents starting, reporting and finishing.
+        if (event.type === "system") {
+          const next = applyJobEvent(jobsRef.current[tabId] || {}, event);
+          if (next) setJobs(tabId, next);
+        }
+
         const ss = streamStatesRef.current[tabId];
         if (!ss) return;
 
         // System init
         if (event.type === "system" && event.subtype === "init") {
           if (event.session_id) {
+            const t = stateRef.current.tabs.find((x) => x.id === tabId);
+            if (t?.isMain && event.session_id !== optionsRef.current.mainChatSessionId) {
+              optionsRef.current.onMainChatSession?.(event.session_id);
+              // Named in History too, wherever it's opened.
+              void saveCustomTitle(optionsRef.current.gatewayUrl, event.session_id, MAIN_CHAT_TITLE);
+            }
             setState((prev) => ({
               ...prev,
               tabs: prev.tabs.map((tab) =>
@@ -257,12 +306,9 @@ export function useSessionManager(options: SessionManagerOptions) {
               }),
             }));
             streamStatesRef.current[tabId] = newStreamState();
-            // Nudge the CLI to resume what it was doing before compaction.
-            setTimeout(() => {
-              transportsRef.current[tabId]?.sendUserMessage(
-                "Please continue where you left off before the compaction."
-              );
-            }, 100);
+            // Claude Code carries on by itself after compacting; only if the
+            // turn ends here is it nudged (see the result handler).
+            compactNudgeRef.current[tabId] = true;
           }
           return;
         }
@@ -328,6 +374,8 @@ export function useSessionManager(options: SessionManagerOptions) {
             return;
           }
 
+          // A background agent's ask names the job.
+          const asker = jobAsking(jobsRef.current[tabId], req)?.title;
           updateTabLastAssistant(tabId, (msg) => {
             const existing = msg.permissionRequests || [];
             // Guard against a re-delivered control_request for the same id.
@@ -337,7 +385,7 @@ export function useSessionManager(options: SessionManagerOptions) {
             return {
               permissionRequests: [
                 ...existing,
-                { requestId, toolName, input: req.input },
+                { requestId, toolName, input: req.input, ...(asker ? { asker } : {}) },
               ],
             };
           });
@@ -348,6 +396,16 @@ export function useSessionManager(options: SessionManagerOptions) {
         // is tracked from individual assistant events (see below) since result.usage
         // aggregates across multiple API calls within a turn.
         if (event.type === "result") {
+          // A sub-agent's own result never ends the chat's turn.
+          if (event.isSidechain || event.parent_tool_use_id) return;
+          if (compactNudgeRef.current[tabId]) {
+            compactNudgeRef.current[tabId] = false;
+            transportsRef.current[tabId]?.sendUserMessage(
+              "Please continue where you left off before the compaction.",
+              optionsRef.current.askFirst
+            );
+            return;
+          }
           endTurn(ss, event);
           updateTabLastAssistant(tabId, () => ({ streaming: false }));
           const mu: any = event.modelUsage || {};
@@ -374,7 +432,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           // Auto-generate title after first response
           if (options.autoGenerateTitles) {
             const currentTab = stateRef.current.tabs.find((t) => t.id === tabId);
-            if (currentTab && currentTab.messages.length >= 2) {
+            if (currentTab && !currentTab.isMain && currentTab.messages.length >= 2) {
               const firstUser = currentTab.messages.find((m) => m.role === "user" && !m.isCompaction);
               const firstAssistant = currentTab.messages.find((m) => m.role === "assistant" && !m.isCompaction);
 
@@ -435,6 +493,7 @@ export function useSessionManager(options: SessionManagerOptions) {
             toolCalls: [],
             orderedBlocks: [],
             streaming: true,
+            selfStarted: true,
           };
           setState((prev) => ({
             ...prev,
@@ -448,6 +507,9 @@ export function useSessionManager(options: SessionManagerOptions) {
 
         // User event (tool results)
         if (event.type === "user") {
+          // A sub-agent's messages (its brief, its tool results) aren't the
+          // chat's: they'd land in whatever reply was last.
+          if (event.isSidechain || event.parent_tool_use_id) return;
           // A skill's instructions, added for the agent to read: never a message.
           if (isInjectedContext(event)) return;
           const contentArr = event.message?.content || [];
@@ -478,6 +540,9 @@ export function useSessionManager(options: SessionManagerOptions) {
               }));
             }
           }
+          // A sub-agent's narration and report stay out of the chat's reply.
+          if (isSidechain) return;
+          compactNudgeRef.current[tabId] = false;
           const contentArr = event.message?.content || [];
           processContentBlocks(contentArr, ss, "assistant");
           updateTabLastAssistant(tabId, () => buildSnapshot(ss));
@@ -562,7 +627,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           if (evt.type === "content_block_delta") {
             const delta = evt.delta;
 
-            if (delta?.type === "text_delta" && delta.text) {
+            if (delta?.type === "text_delta" && delta.text && !(event.isSidechain || event.parent_tool_use_id)) {
               if (ss.toolResultSinceLastText && ss.orderedBlocks.length > 0)
                 ss.turnIndex++;
               const existing = ss.orderedBlocks.find(
@@ -629,9 +694,12 @@ export function useSessionManager(options: SessionManagerOptions) {
   }, []);
 
   const closeTab = useCallback((tabIdToClose: string) => {
+    // The main chat stays: it's the one conversation that's always there.
+    if (!canCloseTab(stateRef.current.tabs.find((t) => t.id === tabIdToClose))) return;
     transportsRef.current[tabIdToClose]?.stop();
     delete transportsRef.current[tabIdToClose];
     delete streamStatesRef.current[tabIdToClose];
+    delete jobsRef.current[tabIdToClose];
 
     setState((prev) => {
       const remaining = prev.tabs.filter((t) => t.id !== tabIdToClose);
@@ -854,7 +922,17 @@ export function useSessionManager(options: SessionManagerOptions) {
       {
         const t = stateRef.current.tabs.find((x) => x.id === tabId);
         const running = transportsRef.current[tabId];
-        if (running && running.isRunning() && !wasGenerating && transportPromptRef.current[tabId] !== personaFor(t?.voiceMode)) {
+        // Background agents live in that process: the swap waits for the
+        // first send after they finish.
+        if (
+          running &&
+          maySwapProcess({
+            running: running.isRunning(),
+            midTurn: wasGenerating,
+            jobs: jobsRef.current[tabId],
+            promptChanged: transportPromptRef.current[tabId] !== promptFor(t),
+          })
+        ) {
           try {
             running.stop();
           } catch {}
@@ -869,12 +947,14 @@ export function useSessionManager(options: SessionManagerOptions) {
         const currentTab = stateRef.current.tabs.find(
           (t) => t.id === tabId
         );
-        transportPromptRef.current[tabId] = personaFor(currentTab?.voiceMode);
+        transportPromptRef.current[tabId] = promptFor(currentTab);
         const cliSessionId = currentTab?.cliSessionId;
 
         const transport = new GatewayTransport({
           gatewayUrl: options.gatewayUrl,
-          model: options.model,
+          // The tab's own model: a reopened conversation carries on with the
+          // one it was built on (and its context window), not the default.
+          model: currentTab?.model || options.model,
           agent: options.agent,
           tabId,
           // A conversation that began as a call starts with --session-id on
@@ -883,13 +963,15 @@ export function useSessionManager(options: SessionManagerOptions) {
           // Voice mode is a fresh conversation, so the persona is fixed for the
           // tab's life — inject it at spawn (and on any respawn, since it's sent
           // per-prompt). Text tabs send nothing and behave exactly as before.
-          appendSystemPrompt: personaFor(currentTab?.voiceMode),
+          appendSystemPrompt: promptFor(currentTab),
           onMessage: makeProcessEvent(tabId),
           onError: (error) => console.error("[hyo] Gateway error:", error),
           onClose: (code) => {
             const wasGenerating = stateRef.current.tabs.find(
               (t) => t.id === tabId
             )?.generating;
+            // Its background agents ended with it.
+            if (jobsRunning(tabId)) setJobs(tabId, {});
             setState((prev) => ({
               ...prev,
               tabs: prev.tabs.map((tab) =>
@@ -925,7 +1007,12 @@ export function useSessionManager(options: SessionManagerOptions) {
         transportsRef.current[tabId] = transport;
       }
 
-      transportsRef.current[tabId].sendUserMessage(content, options.askFirst);
+      // The main chat's reminder rides on every message (never shown).
+      const isMain = !!stateRef.current.tabs.find((t) => t.id === tabId)?.isMain;
+      transportsRef.current[tabId].sendUserMessage(
+        isMain && !meta?.isCompaction ? withMainChatReminder(content) : content,
+        options.askFirst
+      );
     },
     [options, makeProcessEvent, updateTabLastAssistant]
   );
@@ -937,12 +1024,29 @@ export function useSessionManager(options: SessionManagerOptions) {
       const tabId = stateRef.current.activeTabId;
       // Look up the toolName from the pending permission request so the
       // transport can build the correct updatedPermissions for "always allow".
+      // Any reply can hold it: a background agent's ask lands on whichever
+      // reply was last when it came in.
       const tab = stateRef.current.tabs.find((t) => t.id === tabId);
-      const lastMsg = tab?.messages[tab.messages.length - 1];
-      const toolName = lastMsg?.permissionRequests?.find(
-        (r) => r.requestId === requestId
-      )?.toolName;
+      const toolName = tab?.messages
+        .flatMap((m) => m.permissionRequests || [])
+        .find((r) => r.requestId === requestId)?.toolName;
       transportsRef.current[tabId]?.sendPermissionResponse(requestId, behavior, toolName);
+      const resolved = behavior === "deny" ? ("denied" as const) : ("allowed" as const);
+      setState((prev) => ({
+        ...prev,
+        tabs: prev.tabs.map((t) =>
+          t.id !== tabId
+            ? t
+            : {
+                ...t,
+                messages: t.messages.map((m) =>
+                  m.permissionRequests?.some((r) => r.requestId === requestId)
+                    ? { ...m, permissionRequests: m.permissionRequests.map((r) => (r.requestId === requestId ? { ...r, resolved } : r)) }
+                    : m
+                ),
+              }
+        ),
+      }));
       updateTabLastAssistant(tabId, (msg) => {
         const updates: Partial<Message> = {};
         if (msg.permissionRequests?.some((r) => r.requestId === requestId)) {
@@ -1082,7 +1186,12 @@ export function useSessionManager(options: SessionManagerOptions) {
       };
     });
 
-    loadSessionHistory(options.gatewayUrl, pastSession.id).then((history) => {
+    backfill(id, pastSession.id);
+  }, [options.gatewayUrl]);
+
+  /** Fill an open tab with its conversation's history from the gateway. */
+  function backfill(id: string, sessionId: string) {
+    loadSessionHistory(options.gatewayUrl, sessionId).then((history) => {
       const claudeMessages: Message[] = history.messages.map((m) => {
         // Hand-offs from a live call carry the marker in the prompt itself.
         const handoff = m.role === "user" && m.content.includes(HANDOFF_MARKER);
@@ -1112,11 +1221,12 @@ export function useSessionManager(options: SessionManagerOptions) {
       setState((prev) => ({
         ...prev,
         tabs: prev.tabs.map((t) =>
-          t.id === id ? { ...t, messages, model: inheritedModel } : t
+          // Only if nothing has been said in it yet on this phone.
+          t.id === id && t.messages.length === 0 ? { ...t, messages, model: inheritedModel } : t
         ),
       }));
     });
-  }, [options.gatewayUrl]);
+  }
 
   // ---- Reopen the tabs from last time ---------------------------------------
   // Same behaviour as desktop: remember which conversations are open and
@@ -1136,16 +1246,18 @@ export function useSessionManager(options: SessionManagerOptions) {
     }
     if (!saved?.sessions?.length) return;
     for (const s of saved.sessions) {
-      if (s?.id) openPastSession({ id: s.id, title: s.title || "Untitled" } as PastSession);
+      // The main chat has its own tab; never a second copy of it.
+      if (s?.id && !(options.mainChat && s.id === options.mainChatSessionId)) {
+        openPastSession({ id: s.id, title: s.title || "Untitled" } as PastSession);
+      }
     }
     const activeId = saved.activeId;
     setState((prev) => {
-      const restored = prev.tabs.filter((t) => t.cliSessionId);
+      const restored = prev.tabs.filter((t) => t.cliSessionId && !t.isMain);
       if (restored.length === 0) return prev;
       // The pristine starter tab makes way for the restored desk.
-      const tabs = prev.tabs.filter((t) => t.cliSessionId || t.messages.length > 0);
-      const active = activeId ? tabs.find((t) => t.cliSessionId === activeId) : null;
-      return { tabs, activeTabId: active?.id || tabs[tabs.length - 1].id };
+      const tabs = prev.tabs.filter((t) => t.isMain || t.cliSessionId || t.messages.length > 0);
+      return { tabs, activeTabId: startupActive(tabs, activeId) || tabs[tabs.length - 1].id };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openPastSession, options.gatewayUrl]);
@@ -1153,8 +1265,9 @@ export function useSessionManager(options: SessionManagerOptions) {
   useEffect(() => {
     if (!restoredRef.current || !options.gatewayUrl) return; // never clobber before restore reads it
     try {
+      // The main chat isn't part of the desk: it's always there.
       const sessions = state.tabs
-        .filter((t) => t.cliSessionId)
+        .filter((t) => t.cliSessionId && !t.isMain)
         .map((t) => ({ id: t.cliSessionId as string, title: t.title }));
       const active = state.tabs.find((t) => t.id === state.activeTabId);
       window.localStorage.setItem(
@@ -1165,6 +1278,50 @@ export function useSessionManager(options: SessionManagerOptions) {
       /* storage unavailable — restore just won't happen */
     }
   }, [state.tabs, state.activeTabId, restoreKey, options.gatewayUrl]);
+
+  // ---- The main chat --------------------------------------------------------
+  // Same as desktop: a pinned first tab carrying the one long conversation
+  // (the id comes from the synced settings), and what Hyo opens to when
+  // nothing else is open. Off: it stays as an ordinary tab.
+  useEffect(() => {
+    if (!options.gatewayUrl) return;
+    let filled: { id: string; sid: string } | null = null;
+    setState((prev) => {
+      const enabled = !!options.mainChat;
+      let tabs = withMainChat(prev.tabs, enabled, () => {
+        const sid = options.mainChatSessionId || null;
+        const tab: TabSession = {
+          id: genId(),
+          cliSessionId: sid,
+          title: MAIN_CHAT_TITLE,
+          messages: [],
+          generating: false,
+          model: LOCKED_MODEL,
+          permissionMode: LOCKED_PERMISSION_MODE,
+          agent: LOCKED_AGENT,
+          inputTokens: 0,
+          voiceMode: false,
+          isMain: true,
+        };
+        if (sid) filled = { id: tab.id, sid };
+        return tab;
+      });
+      if (tabs === prev.tabs) return prev;
+      let activeTabId = prev.activeTabId;
+      if (enabled) {
+        const pristine = (t: TabSession) => !t.isMain && !t.cliSessionId && t.messages.length === 0;
+        const others = tabs.filter((t) => !t.isMain);
+        if (others.length > 0 && others.every(pristine)) tabs = tabs.filter((t) => t.isMain);
+        if (!tabs.some((t) => t.id === activeTabId) || tabs.length === 1) activeTabId = tabs[0].id;
+      }
+      return { tabs: mainFirst(tabs), activeTabId };
+    });
+    // setState's updater has run by the next tick; then read its history.
+    setTimeout(() => {
+      if (filled) backfill(filled.id, filled.sid);
+    }, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [options.mainChat, options.gatewayUrl]);
 
   const compact = useCallback(() => {
     sendMessage("/compact", { isCompaction: true });
@@ -1244,16 +1401,23 @@ export function useSessionManager(options: SessionManagerOptions) {
   // whether it resent.
   const retryAfterClaudeUpdate = useCallback(
     (tabId: string): boolean => {
-      const existing = transportsRef.current[tabId];
-      if (existing) {
-        try {
-          existing.stop();
-        } catch {}
-        delete transportsRef.current[tabId];
-      }
+      // The Mac's old process is stopped so the next send starts the updated
+      // Claude. Background jobs running in it would stop too, so that waits.
+      const restart = () => {
+        const existing = transportsRef.current[tabId];
+        if (existing) {
+          try {
+            existing.stop();
+          } catch {}
+          delete transportsRef.current[tabId];
+        }
+      };
 
       const tab = stateRef.current.tabs.find((t) => t.id === tabId);
-      if (!tab) return false;
+      if (!tab) {
+        restart();
+        return false;
+      }
       const msgs = tab.messages;
       const textOf = (m: Message) =>
         (m.content || "") +
@@ -1270,7 +1434,10 @@ export function useSessionManager(options: SessionManagerOptions) {
           break;
         }
       }
-      if (failedAt < 0) return false;
+      if (failedAt < 0) {
+        whenIdle(tabId, restart);
+        return false;
+      }
 
       const prevUser = msgs[failedAt - 1];
       const text = prevUser ? prevUser.displayText ?? prevUser.content : "";
@@ -1282,17 +1449,23 @@ export function useSessionManager(options: SessionManagerOptions) {
         !prevUser.attachments?.length &&
         typeof text === "string" &&
         !!text.trim();
-      if (!canResend) return false;
+      if (!canResend) {
+        whenIdle(tabId, restart);
+        return false;
+      }
 
-      setState((prev) => ({
-        ...prev,
-        tabs: prev.tabs.map((t) =>
-          t.id === tabId
-            ? { ...t, messages: t.messages.filter((_, i) => i !== failedAt - 1 && i !== failedAt) }
-            : t
-        ),
-      }));
-      setTimeout(() => sendMessage(text, { displayText: prevUser!.displayText }), 0);
+      whenIdle(tabId, () => {
+        restart();
+        setState((prev) => ({
+          ...prev,
+          tabs: prev.tabs.map((t) =>
+            t.id === tabId
+              ? { ...t, messages: t.messages.filter((_, i) => i !== failedAt - 1 && i !== failedAt) }
+              : t
+          ),
+        }));
+        setTimeout(() => sendMessage(text, { displayText: prevUser!.displayText }), 0);
+      });
       return true;
     },
     [sendMessage]
@@ -1302,7 +1475,13 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
 
+  /** Background jobs still running in a tab (closing it would stop them). */
+  const tabJobs = useCallback((tabId: string): BackgroundJob[] => jobList(jobsRef.current[tabId]), []);
+
   return {
+    activeJobs: jobList(activeTab?.jobs),
+    activeIsMain: !!activeTab?.isMain,
+    tabJobs,
     addVoiceCall,
     setVoiceEngine,
     tabs: state.tabs,

@@ -157,6 +157,17 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
       )
     : vaultPath;
 
+  // The main chat's conversation id lives in the synced settings, so the
+  // phone carries on the same conversation.
+  const onMainChatSession = React.useCallback(
+    (sessionId: string) => {
+      if (plugin.settings.mainChatSessionId === sessionId) return;
+      plugin.settings.mainChatSessionId = sessionId;
+      void plugin.saveSettings();
+    },
+    [plugin]
+  );
+
   const sessionManager = useSessionManager({
     cliPath: plugin.settings.cliPath,
     cwd: workingDirectory,
@@ -168,6 +179,9 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
     autoGenerateTitles: plugin.settings.autoGenerateTitles,
     settingsVersion,
     voiceEngine: plugin.settings.voiceEngine,
+    mainChat: !!plugin.settings.mainChat,
+    mainChatSessionId: plugin.settings.mainChatSessionId || "",
+    onMainChatSession: onMainChatSession,
   });
 
   if (detection === null) {

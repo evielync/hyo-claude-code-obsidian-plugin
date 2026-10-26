@@ -4963,3 +4963,118 @@ button.hyo-callline:hover { background: var(--background-secondary); }
 .is-mobile .hyo-callbar button.hyo-callbar-btn { width: 36px; height: 36px; }
 .is-mobile .hyo-callbar button.hyo-callbar-end { width: 48px; height: 36px; border-radius: 18px; }
 .is-mobile .hyo-callsheet { max-height: 85%; padding-bottom: env(safe-area-inset-bottom); }
+
+/* ── Main chat ─────────────────────────────────────────────────────────────
+   The pinned first tab. Quiet: a small chat-bubble mark in place of the dot
+   and a hairline after it that sets it apart from the tabs that come and go.
+   No close button; it can't be dragged. Shared by desktop and phone. */
+.hyo-tab-main {
+  margin-right: 4px;
+}
+.hyo-tab-main::after {
+  content: "";
+  position: absolute;
+  right: -3px;
+  top: 7px;
+  bottom: 7px;
+  width: 1px;
+  background: var(--background-modifier-border);
+  pointer-events: none;
+}
+.hyo-tab-main-icon {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+.hyo-tab-main.hyo-tab-active .hyo-tab-main-icon {
+  color: var(--text-accent);
+  opacity: 1;
+}
+/* On a phone the tabs are pills; the pill is set apart by its spacing. */
+.is-mobile .hyo-tab-main {
+  margin-right: 6px;
+}
+.is-mobile .hyo-tab-main::after {
+  right: -5px;
+}
+
+/* ── Background jobs ───────────────────────────────────────────────────────
+   One line per job just above the composer, Grok Bot style: who's on it and
+   what it's doing right now. Each goes when its job finishes. */
+.hyo-jobs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 12px 4px;
+  flex-shrink: 0;
+}
+.hyo-job {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  animation: hyo-job-in 0.2s ease-out;
+}
+@keyframes hyo-job-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: none; }
+}
+.hyo-job-avatar {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-accent);
+  font-size: 10px;
+  font-weight: 600;
+}
+/* A soft ring that breathes while the job works. */
+.hyo-job-avatar::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1.5px solid var(--interactive-accent);
+  opacity: 0;
+  animation: hyo-job-breathe 1.8s ease-in-out infinite;
+}
+@keyframes hyo-job-breathe {
+  0%, 100% { opacity: 0;   transform: scale(0.9); }
+  50%      { opacity: 0.5; transform: scale(1); }
+}
+.hyo-job-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.hyo-job-activity {
+  color: var(--text-normal);
+}
+.hyo-job-title {
+  color: var(--text-faint);
+}
+@media (prefers-reduced-motion: reduce) {
+  .hyo-job, .hyo-job-avatar::after { animation: none; }
+}
+.is-mobile .hyo-jobs {
+  padding: 4px 14px 0;
+}
+.is-mobile .hyo-job {
+  font-size: 12.5px;
+}
+
+/* Which background job a permission ask comes from. */
+.hyo-permission-asker {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}

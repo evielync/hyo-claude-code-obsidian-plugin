@@ -3,6 +3,7 @@ import type { App } from "obsidian";
 import { Notice } from "obsidian";
 import { ChatMessages } from "./ChatMessages";
 import { ChatTabs } from "./ChatTabs";
+import { BackgroundJobs } from "../../components/BackgroundJobs";
 import { TaskScreen } from "./TaskScreen";
 import { searchPastSessions } from "../session-parser";
 import type { BoardTask } from "../task-state";
@@ -115,7 +116,22 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     openPastSession,
     refreshPastSessions,
     scrollRef,
+    activeJobs,
+    tabJobs,
   } = sessionManager;
+
+  // Closing a tab stops its Claude process, and its background jobs with it.
+  const closeTabSafely = useCallback(
+    (tabId: string) => {
+      const running = tabJobs(tabId);
+      if (running.length > 0) {
+        const what = running.length === 1 ? `"${running[0].title}" is` : `${running.length} background jobs are`;
+        if (!window.confirm(`${what} still running in this conversation. Closing it stops ${running.length === 1 ? "it" : "them"}. Close anyway?`)) return;
+      }
+      closeTab(tabId);
+    },
+    [tabJobs, closeTab]
+  );
 
   // "Update Claude" from the phone: the gateway Mac runs the update, then
   // this tab's message goes again. Only offered while connected to a gateway;
@@ -389,7 +405,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     const finished = prevGeneratingRef.current && !activeGenerating;
     prevGeneratingRef.current = activeGenerating;
     if (!finished || !activeVoiceMode) return;
-    let last: { role: string; content?: string; isCompaction?: boolean; voiceCall?: VoiceCallRecord } | undefined;
+    let last: { role: string; content?: string; isCompaction?: boolean; voiceCall?: VoiceCallRecord; selfStarted?: boolean } | undefined;
     for (let i = activeMessages.length - 1; i >= 0; i--) {
       const m = activeMessages[i];
       if (m.role === "assistant" && !m.isCompaction && !m.voiceCall) {
@@ -400,7 +416,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     if (!last) return;
     if (voiceMode.isLive) {
       // Live call: the voice says the opening and points to the chat.
-      finishReply(last.content || "");
+      finishReply(last.content || "", !!last.selfStarted);
       return;
     }
     const parsed = parseVoiceResponse(last.content || "");
@@ -1027,7 +1043,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           tabs={tabs}
           activeTabId={activeTabId}
           onSwitch={switchToChatTab}
-          onClose={closeTab}
+          onClose={closeTabSafely}
           onRename={renameTab}
           pastSessions={pastSessions}
           tasks={taskMeta}
@@ -1102,12 +1118,14 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
         </div>
       )}
 
+      <BackgroundJobs jobs={activeJobs} />
+
       {!inVoiceView && (
         <ChatTabs
           tabs={tabs}
           activeTabId={activeTabId}
           onSwitch={switchTab}
-          onClose={closeTab}
+          onClose={closeTabSafely}
           onRename={renameTab}
           pastSessions={pastSessions}
           tasks={taskMeta}

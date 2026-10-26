@@ -25,6 +25,9 @@ export interface Message {
   askQuestion?: AskQuestionData | null;
   planReview?: PlanReviewData | null;
   isCompaction?: boolean;
+  // A reply Claude started itself, with nobody sending anything: a
+  // background job finished and it's reporting back.
+  selfStarted?: boolean;
   attachments?: { type: string; name: string; preview?: string }[];
   // Said on a GPT-Live call and handled by the voice itself — shown in the
   // thread, never part of Claude's session.
@@ -61,6 +64,8 @@ export interface PermissionRequestData {
   requestId: string;
   toolName: string;
   input?: any;
+  /** The background job asking, by name, when it isn't the chat itself. */
+  asker?: string;
   resolved?: "allowed" | "denied";
 }
 

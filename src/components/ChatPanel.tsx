@@ -16,6 +16,7 @@ import type { ClaudeSignInRunner } from "./ClaudeSignInCard";
 import type { CodeNeeded } from "../cli-probe";
 import { debug } from "../debug";
 import { CallBar } from "./CallBar";
+import { BackgroundJobs } from "./BackgroundJobs";
 import { SendButton, sendButtonMode } from "./SendButton";
 import { VoiceCallSheet } from "./VoiceCallLine";
 import type { AskQuestionData } from "../hooks/useChatEngine";
@@ -167,7 +168,34 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     refreshPastSessions,
     scrollRef,
     addVoiceCall,
+    activeJobs,
+    tabJobs,
   } = sessionManager;
+
+  // Closing a tab stops its Claude process, and any background jobs running
+  // in it with it. Say so first, and keep the tab unless she means it.
+  const closeTabSafely = useCallback(
+    (tabId: string) => {
+      const running = tabJobs(tabId);
+      if (running.length > 0) {
+        const what = running.length === 1 ? `"${running[0].title}" is` : `${running.length} background jobs are`;
+        if (!window.confirm(`${what} still running in this conversation. Closing it stops ${running.length === 1 ? "it" : "them"}. Close anyway?`)) return;
+      }
+      closeTab(tabId);
+    },
+    [tabJobs, closeTab]
+  );
+
+  // A different agent needs a fresh Claude process, which would stop the
+  // background jobs still working in this one.
+  const switchAgent = useCallback(
+    (agent: string) => {
+      if (!setTabAgent(agent)) {
+        new Notice("Background jobs are still running in this conversation. Switch agents once they've finished.", 6000);
+      }
+    },
+    [setTabAgent]
+  );
 
   // ---- Task mode (the History screen) ----
   // The clock button opens a full screen you scroll; opening a task drops back
@@ -580,7 +608,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     if (voiceMode.isLive) {
       if (finishedGenerating && speakTurnRef.current !== idx) {
         speakTurnRef.current = idx;
-        finishReply(activeMessages[idx].content || "");
+        finishReply(activeMessages[idx].content || "", !!activeMessages[idx].selfStarted);
       }
       return;
     }
@@ -1165,7 +1193,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
           tabs={tabs}
           activeTabId={activeTabId}
           onSwitch={switchToChatTab}
-          onClose={closeTab}
+          onClose={closeTabSafely}
           onRename={renameTab}
           onReorder={reorderTab}
           pastSessions={pastSessions}
@@ -1245,7 +1273,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
           tabs={tabs}
           activeTabId={activeTabId}
           onSwitch={switchTab}
-          onClose={closeTab}
+          onClose={closeTabSafely}
           onRename={renameTab}
           onReorder={reorderTab}
           pastSessions={pastSessions}
@@ -1315,6 +1343,8 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
           </div>
         </div>
       )}
+
+      <BackgroundJobs jobs={activeJobs} />
 
       <div className="hyo-input-area">
         {/* Slash command menu — floats above input */}
@@ -1447,7 +1477,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
         onEffortChange={handleEffortChange}
         onAddCustomModel={handleAddCustomModel}
         onPermissionModeChange={handlePermissionModeChange}
-        onAgentChange={setTabAgent}
+        onAgentChange={switchAgent}
         onCompact={compact}
       />
 

@@ -293,10 +293,16 @@ export class LiveCall {
    * spoken part goes to the voice to say. Otherwise it came from something
    * typed in the chat: the voice knows it, silently (the user is reading it).
    */
-  finishReply(markdown: string): void {
+  finishReply(markdown: string, selfStarted?: boolean): void {
     const s = this.session;
     if (!s || this.ended) return;
     const spoken = spokenForVoice(markdown);
+    // A reply Claude started itself (a background job finished, in the main
+    // chat): news to say out loud, never the answer to a waiting hand-off.
+    if (selfStarted) {
+      if (spoken.trim()) s.appendCommentary(spoken, null);
+      return;
+    }
     if (!this.queue.length) {
       s.appendThinking(`The user typed a message in the chat during the call, and your reply there was: ${spoken}`, null);
       return;

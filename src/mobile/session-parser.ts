@@ -9,6 +9,7 @@
 import { GatewayClient } from "./gateway-client";
 import { isSelfStartedPrompt, isInjectedContext } from "../reply-stream";
 import type { VoiceCallRecord } from "../voice/voice-call";
+import { transcriptModel, resumeModel } from "../models";
 
 export interface PastSession {
   id: string;
@@ -113,16 +114,12 @@ export async function loadSessionHistory(gatewayUrl: string, sessionId: string):
   }
 }
 
-/** The model the conversation last ran on — from the most recent assistant
- *  turn that recorded one. Null if none is found. */
+/** The model the conversation last ran on, from its main thread (a
+ *  sub-agent's replies are on their own, often smaller, model), with the
+ *  long-context suffix back on if it grew past 200K. Null if none is found. */
 export function extractSessionModel(lines: any[]): string | null {
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const model = lines[i]?.message?.model;
-    if (typeof model === "string" && model && model !== "<synthetic>") {
-      return model;
-    }
-  }
-  return null;
+  const { model, contextTokens } = transcriptModel(lines);
+  return resumeModel(model, contextTokens);
 }
 
 // Pure reconstruction — unchanged from desktop Hyo's file-reading version,

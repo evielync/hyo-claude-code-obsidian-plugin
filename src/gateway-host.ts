@@ -37,6 +37,7 @@ import { debug } from "./debug";
 import { getProjectDir, saveCustomTitle, setTaskMeta, saveVoiceCall, getVoiceCalls } from "./session-parser";
 import { callOnlySessions } from "./voice/voice-call";
 import { buildLiveInstructions, readAgentIdentity } from "./voice/gpt-live";
+import { applyJobEvent, hasRunningJobs, type JobMap } from "./background-jobs";
 import type * as FsType from "fs";
 import type * as PathType from "path";
 import type * as OsType from "os";
@@ -120,6 +121,9 @@ interface TabState {
   // never grace-killed on disconnect — pocketing the phone mid-task must not
   // stop the task. The grace window starts when the work finishes instead.
   generating: boolean;
+  // Background agents running in this process. They count as work the same
+  // way: the process (and they) must outlive a pocketed phone.
+  jobs: JobMap;
 }
 
 interface SpawnTabOptions {
@@ -668,6 +672,7 @@ function spawnTab(
     client: ws || null,
     outbox: [],
     generating: false,
+    jobs: {},
     pendingToolInput: new Map(),
     graceTimer: null,
     lastActivity: nowMs(),
@@ -690,13 +695,21 @@ function spawnTab(
       if (ev.type === "control_request" && ev.request?.subtype === "can_use_tool") {
         state.pendingToolInput.set(ev.request_id, ev.request.input ?? {});
       }
-      if (ev.type === "result") {
+      if (ev.type === "system") {
+        const next = applyJobEvent(state.jobs, ev);
+        if (next) {
+          state.jobs = next;
+          // The last background job finished with nobody watching.
+          if (!hasRunningJobs(next) && !state.generating) startGraceIfUnwatched(tabId, state);
+        }
+      }
+      // A sub-agent's own result isn't the turn ending.
+      if (ev.type === "result" && !ev.parent_tool_use_id) {
         state.generating = false;
         // The turn finished with nobody watching: the reply is saved, so the
-        // usual disconnect grace starts now rather than mid-work.
-        if (!state.client && !state.detach && !state.graceTimer) {
-          state.graceTimer = setTimeout(() => killTab(tabId, "grace expired"), GRACE_MS);
-        }
+        // usual disconnect grace starts now rather than mid-work, unless
+        // background jobs are still running in this process.
+        if (!hasRunningJobs(state.jobs)) startGraceIfUnwatched(tabId, state);
       }
       emitToTab(state, { type: "stream", tabId, event: ev });
     }
@@ -706,6 +719,7 @@ function spawnTab(
     if (!t.includes("[debug]")) debug(`[hyo][gateway] tab=${tabId} stderr: ${t.slice(0, 200)}`);
   });
   proc.on("close", (code) => {
+    state.jobs = {};
     emitToTab(state, { type: "gateway", subtype: "tab_closed", tabId, code });
     if (state.graceTimer) {
       clearTimeout(state.graceTimer);
@@ -715,6 +729,13 @@ function spawnTab(
   });
   proc.on("error", (e: Error) => emitToTab(state, { type: "gateway", subtype: "error", tabId, error: e.message }));
   return state;
+}
+
+/** No phone attached and nothing running: start the window for it to come back. */
+function startGraceIfUnwatched(tabId: string, state: TabState): void {
+  if (!state.client && !state.detach && !state.graceTimer) {
+    state.graceTimer = setTimeout(() => killTab(tabId, "grace expired"), GRACE_MS);
+  }
 }
 
 function writeStdin(tabId: string, obj: unknown): void {
@@ -1516,7 +1537,7 @@ export function startGatewayHost(config: GatewayHostConfig): void {
         // Mid-task tabs are left running: the disconnect grace only starts
         // once the turn finishes (see the `result` handler). The 30-minute
         // idle ceiling remains the backstop for a run that never finishes.
-        if (state.generating) {
+        if (state.generating || hasRunningJobs(state.jobs)) {
           working++;
           continue;
         }
