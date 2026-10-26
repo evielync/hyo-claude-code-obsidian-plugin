@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0
+
+**The one where voice mode becomes a phone call**
+
+- **Voice mode has had a big upgrade.** It no longer takes over your whole screen. Now it feels like jumping on a quick call with your agent, the way you'd ring a colleague to talk something through.
+- **Bring your own voice.** You can now add a custom voice, so your agent sounds the way you want.
+- **Your agent keeps working after the call.** Ask for something, end the call, and your agent carries on in the chat until the job is done.
+- **Fixed:** long voice notes on your phone no longer time out or get lost.
+- **Fixed:** replies no longer disappear, and skills no longer spill into your chat.
+
 ## 0.6.10
 
 **The one where the tool calls get out of the way**
