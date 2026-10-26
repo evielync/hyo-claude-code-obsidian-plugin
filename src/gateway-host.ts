@@ -83,6 +83,12 @@ export interface LiveVoiceConfig {
 export interface GatewayHostConfig {
   port?: number;
   vault: string;
+  // Where conversations live: the Hyo working directory setting, which can
+  // differ from the vault. The vault only names the phone's address.
+  cwd?: string;
+  // Read at each message, so a change to the Working directory setting
+  // reaches the phone without restarting mobile access.
+  getCwd?: () => string;
   cliPath: string;
   defaultAgent: string;
   defaultModel: string;
@@ -664,13 +670,13 @@ function spawnTab(
   }
   // A conversation that began as a voice call has an id but no transcript
   // yet: Claude starts it with --session-id rather than resuming nothing.
-  const canResume = !!resume && !!sessionId && fs.existsSync(path.join(getProjectDir(config.vault), `${sessionId}.jsonl`));
+  const canResume = !!resume && !!sessionId && fs.existsSync(path.join(getProjectDir(config.getCwd()), `${sessionId}.jsonl`));
   if (canResume) args.push("--resume", sessionId!);
   else if (sessionId) args.push("--session-id", sessionId);
   if (appendSystemPrompt) args.push("--append-system-prompt", appendSystemPrompt);
 
   debug(`[hyo][gateway] spawn tab=${tabId} askFirst=${ask} ${resume ? "resume " + sessionId : "new"}${appendSystemPrompt ? " voice" : ""}`);
-  const spawnOpts: SpawnOptionsWithoutStdio = { cwd: config.vault, env, stdio: ["pipe", "pipe", "pipe"] } as any;
+  const spawnOpts: SpawnOptionsWithoutStdio = { cwd: config.getCwd(), env, stdio: ["pipe", "pipe", "pipe"] } as any;
   const proc = spawn(config.cliPath, args, spawnOpts);
 
   const state: TabState = {
@@ -1184,6 +1190,320 @@ async function findFreePort(preferred: number): Promise<number> {
   return preferred;
 }
 
+/**
+ * One phone connection: every message it sends, and what happens when it goes.
+ * Exported so tests can run the gateway's real handling over a real socket
+ * without Tailscale or the rest of startup.
+ */
+export interface GatewaySocketContext {
+  config: () => Required<GatewayHostConfig> | null;
+  env: () => NodeJS.ProcessEnv | null;
+  /** Connected-client count changes, for the status bar. */
+  onClients?: (delta: number) => void;
+}
+
+export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): void {
+  const cid = Math.random().toString(36).slice(2, 8);
+  debug(`[hyo][gateway] [${cid}] connected`);
+  ctx.onClients?.(1);
+  const send = (obj: unknown) => sendTo(ws, obj);
+
+  ws.on("message", async (data: Buffer | string) => {
+    const cfg = ctx.config();
+    const env = ctx.env();
+    if (!cfg || !env) return; // host stopped mid-flight
+    const cwd = cfg.getCwd() || cfg.cwd;
+    let m: any;
+    try {
+      m = JSON.parse(data.toString());
+    } catch {
+      return;
+    }
+    try {
+      // The main chat: the phone attaches to the Mac's one process for it
+      // instead of starting its own (main-chat-owner.ts).
+      const owner = mainChatOwner(cwd);
+      if (
+        owner &&
+        gatewayMainChat(owner, m, ws, { send }, (p) => ({
+          cliPath: cfg.cliPath,
+          cwd: cwd,
+          model: p.model || cfg.defaultModel,
+          permissionMode: p.askFirst === false ? "bypassPermissions" : "default",
+          agent: p.agent || cfg.defaultAgent,
+          sessionId: p.sessionId || null,
+          resume: !!p.resume,
+          appendSystemPrompt: p.appendSystemPrompt,
+        }))
+      ) {
+        return;
+      }
+      // Which conversations are open, shared with the Mac's panels
+      // (open-conversations.ts). Pushed to the phone whenever it changes.
+      const openList = openConversations(cwd);
+      if (openList && gatewayOpenList(openList, m, ws, { send })) return;
+      switch (m.type) {
+        case "list_sessions":
+          send({ type: "sessions", sessions: listSessions(cwd) });
+          break;
+        case "get_history":
+          send({
+            type: "history",
+            sessionId: m.sessionId,
+            lines: getHistoryLines(cwd, m.sessionId),
+            voiceCalls: getVoiceCalls(cwd, m.sessionId),
+          });
+          break;
+        case "search_sessions":
+          send({ type: "search_results", query: m.query, hits: searchSessions(cwd, m.query) });
+          break;
+        case "rename":
+          saveCustomTitle(cwd, m.sessionId, m.title);
+          send({ type: "renamed", sessionId: m.sessionId, title: m.title });
+          break;
+        case "save_voice_call":
+          // A call made on the phone, saved where desktop keeps its own.
+          if (typeof m.sessionId === "string" && m.call && typeof m.call.id === "string") {
+            saveVoiceCall(cwd, m.sessionId, m.call, typeof m.title === "string" ? m.title : undefined);
+          }
+          send({ type: "voice_call_saved", sessionId: m.sessionId });
+          break;
+        case "set_task_meta":
+          setTaskMeta(cwd, m.sessionId, m.patch || {});
+          send({ type: "task_meta_set", sessionId: m.sessionId });
+          // A pin puts the conversation in everyone's Open list.
+          if (m.patch && "pinned" in m.patch) openConversations(cwd)?.pinsChanged();
+          break;
+        case "list_agents":
+          send({ type: "agents", agents: listAgents(cwd) });
+          break;
+        case "list_skills":
+          send({ type: "skills", skills: listSkills(cwd) });
+          break;
+        case "reattach": {
+          const ids: string[] = Array.isArray(m.tabIds) ? m.tabIds : m.tabId ? [m.tabId] : [];
+          const attached: string[] = [],
+            gone: string[] = [];
+          for (const id of ids) {
+            if (id === MAIN_CHAT_WIRE_ID && owner) {
+              attached.push(id); // attached to the owner above
+              continue;
+            }
+            const state = tabs.get(id);
+            if (state) {
+              attachClient(state, ws);
+              attached.push(id);
+            } else gone.push(id);
+          }
+          debug(`[hyo][gateway] [${cid}] reattach — ${attached.length} live, ${gone.length} gone`);
+          send({ type: "gateway", subtype: "reattached", attached, gone });
+          break;
+        }
+        case "prompt": {
+          let state = tabs.get(m.tabId);
+          if (!state) {
+            // Per-prompt `agent`/`model` override the configured defaults —
+            // spawnTab falls back to config.defaultAgent/defaultModel only
+            // when the client doesn't send its own value.
+            state = spawnTab(m.tabId, ws, cfg, env, {
+              sessionId: m.sessionId,
+              resume: m.resume,
+              askFirst: m.askFirst,
+              model: m.model,
+              agent: m.agent,
+              thinkingTokens: m.thinkingTokens,
+              detach: m.detach,
+              appendSystemPrompt: m.appendSystemPrompt,
+            });
+          } else if (state.client !== ws) {
+            attachClient(state, ws);
+          }
+          // `content` is the client's full Anthropic block array — text plus
+          // any image/document blocks from attachments. The CLI's stream-json
+          // stdin accepts those blocks verbatim (verified 2026-09-12: a base64
+          // image block round-trips and the model describes the picture). A
+          // client that sends only `text` goes through the fallback.
+          const promptContent =
+            Array.isArray(m.content) && m.content.length > 0
+              ? m.content
+              : [{ type: "text", text: m.text }];
+          writeStdin(m.tabId, { type: "user", message: { role: "user", content: promptContent } });
+          state.generating = true;
+          break;
+        }
+        case "permission_response": {
+          const state = tabs.get(m.tabId);
+          const originalInput = state?.pendingToolInput.get(m.requestId) ?? {};
+          state?.pendingToolInput.delete(m.requestId);
+          const withInput = (base: Record<string, unknown>) => ({
+            ...base,
+            updatedInput: m.updatedInput ?? originalInput,
+          });
+
+          let response: Record<string, unknown>;
+          if (m.behavior === "deny") {
+            response = { behavior: "deny", message: "Denied by user", decisionClassification: "user_reject" };
+          } else if (m.behavior === "allow_always" && m.toolName) {
+            // Persist to the mobile allowlist (durable across sessions,
+            // device-only — never desktop rules). `session` destination
+            // makes it take effect immediately in the running process.
+            addMobileAllow(m.toolName);
+            response = withInput({
+              behavior: "allow",
+              decisionClassification: "user_permanent",
+              updatedPermissions: [
+                { type: "addRules", rules: [{ toolName: m.toolName }], behavior: "allow", destination: "session" },
+              ],
+            });
+          } else {
+            response = withInput({ behavior: "allow", decisionClassification: "user_temporary" });
+          }
+          writeStdin(m.tabId, { type: "control_response", response: { subtype: "success", request_id: m.requestId, response } });
+          break;
+        }
+        case "interrupt":
+          writeStdin(m.tabId, { type: "control_request", request_id: randomUUID(), request: { subtype: "interrupt" } });
+          break;
+        case "stop":
+          killTab(m.tabId, "client stop");
+          break;
+        case "generate_title": {
+          const title = await generateTitle(cfg.cliPath, env, m.userMessage, m.assistantMessage);
+          send({ type: "title", requestId: m.requestId, title });
+          break;
+        }
+        case "live_config": {
+          const lv = cfg.getLiveVoice?.();
+          send({
+            type: "live_config",
+            requestId: m.requestId,
+            engine: lv?.engine || "elevenlabs",
+            voice: typeof lv?.voice === "string" ? lv.voice : lv?.voice ? "custom" : "marin",
+          });
+          break;
+        }
+        case "live_sdp": {
+          // The phone's WebRTC offer → OpenAI's answer, signed here with the
+          // desktop's key. The session (personality, the tab's agent identity,
+          // history from the phone) is built here too, so the phone holds
+          // nothing secret and follows the desktop's voice settings.
+          const lv = cfg.getLiveVoice?.();
+          if (!lv || lv.engine !== "gpt-live" || !lv.openAiApiKey) {
+            send({
+              type: "live_sdp_error",
+              requestId: m.requestId,
+              message: "Set the desktop's voice engine to GPT-Live and add an OpenAI key in Hyo settings there.",
+            });
+            break;
+          }
+          const agent = typeof m.agent === "string" && m.agent ? m.agent : cfg.defaultAgent;
+          const history = Array.isArray(m.history) ? m.history.slice(-60) : [];
+          // About you goes into the starting instructions, read fresh (capped
+          // so a slow read never holds up the call).
+          const aboutYou = lv.getAboutYou
+            ? await Promise.race([lv.getAboutYou().catch(() => ""), new Promise<string>((r) => setTimeout(() => r(""), 1500))])
+            : "";
+          const session = {
+            model: "gpt-live-1",
+            delegation: { type: "client" },
+            instructions: buildLiveInstructions(lv.personality, readAgentIdentity(agent), { voiceDescription: lv.voiceDescription, aboutYou }),
+            input: history
+              .filter((h: any) => h && (h.role === "user" || h.role === "assistant") && typeof h.text === "string" && h.text)
+              .map((h: any) => ({
+                type: "message",
+                role: h.role,
+                content: [{ type: h.role === "user" ? "input_text" : "output_text", text: String(h.text).slice(0, 4000) }],
+              })),
+            audio: { output: { voice: lv.voice || "marin" } },
+          };
+          void (async () => {
+            try {
+              const res = await fetch("https://api.openai.com/v1/live/sessions", {
+                method: "POST",
+                headers: { Authorization: `Bearer ${lv.openAiApiKey}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ session, transport: { type: "webrtc", sdp: m.sdp } }),
+              });
+              const data: any = await res.json().catch(() => ({}));
+              if (!res.ok || !data?.transport?.sdp) {
+                send({
+                  type: "live_sdp_error",
+                  requestId: m.requestId,
+                  message: data?.error?.message || `OpenAI refused the call (${res.status})`,
+                });
+                return;
+              }
+              send({ type: "live_sdp_answer", requestId: m.requestId, sdp: data.transport.sdp, sessionId: data?.session?.id });
+            } catch (e: any) {
+              send({ type: "live_sdp_error", requestId: m.requestId, message: e?.message || "Couldn't reach OpenAI" });
+            }
+          })();
+          break;
+        }
+        case "update_claude": {
+          // The phone's "Update Claude" button. "started" goes back straight
+          // away: a gateway from before this existed ignores the request,
+          // and that silence is how the phone knows to fall back.
+          const requestId = m.requestId;
+          const required = typeof m.required === "string" ? m.required : "";
+          send({ type: "claude_update", requestId, phase: "started" });
+          void (async () => {
+            try {
+              const r = await cfg.updateClaude(required, (message) =>
+                send({ type: "claude_update", requestId, phase: "progress", message }),
+              );
+              // Later spawns (the phone's resend) use the updated Claude.
+              if (r.ok && r.cliPath) cfg.cliPath = r.cliPath;
+              // The main chat's shared process is still the old Claude:
+              // restart it once nothing is running in it.
+              if (r.ok) mainChatOwner(cwd)?.restart();
+              send({ type: "claude_update", requestId, phase: "done", ok: r.ok, error: r.error });
+            } catch (e: any) {
+              send({ type: "claude_update", requestId, phase: "done", ok: false, error: e?.message || String(e) });
+            }
+          })();
+          break;
+        }
+        case "ping":
+          send({ type: "gateway", subtype: "pong" });
+          break;
+      }
+    } catch (e: any) {
+      debug(`[hyo][gateway] [${cid}] handler error on ${m.type}: ${e.message}`);
+      send({ type: "gateway", subtype: "error", error: e.message });
+    }
+  });
+
+  ws.on("close", () => {
+    ctx.onClients?.(-1);
+    const cfgNow = ctx.config();
+    if (cfgNow) gatewayClientGone(mainChatOwner(cfgNow.getCwd() || cfgNow.cwd), ws);
+    gatewayOpenListGone(ws);
+    let inGrace = 0,
+      detached = 0,
+      working = 0;
+    for (const [tabId, state] of tabs) {
+      if (state.client !== ws) continue;
+      state.client = null;
+      if (state.detach) {
+        detached++;
+        continue;
+      }
+      // Mid-task tabs are left running: the disconnect grace only starts
+      // once the turn finishes (see the `result` handler). The 30-minute
+      // idle ceiling remains the backstop for a run that never finishes.
+      if (state.generating || hasRunningJobs(state.jobs)) {
+        working++;
+        continue;
+      }
+      if (!state.graceTimer) {
+        state.graceTimer = setTimeout(() => killTab(tabId, "grace expired"), GRACE_MS);
+      }
+      inGrace++;
+    }
+    debug(`[hyo][gateway] [${cid}] disconnected — ${working} still working, ${inGrace} in grace, ${detached} detached`);
+  });
+}
+
 // ---- Public API --------------------------------------------------------------
 
 /**
@@ -1202,6 +1522,8 @@ export function startGatewayHost(config: GatewayHostConfig): void {
   const resolved: Required<GatewayHostConfig> = {
     port: config.port ?? 8787,
     vault: config.vault,
+    cwd: config.cwd || config.vault,
+    getCwd: config.getCwd ?? (() => resolved.cwd),
     getLiveVoice:
       config.getLiveVoice ??
       (() => ({ engine: "elevenlabs", openAiApiKey: "", voice: "marin", personality: "" })),
@@ -1291,305 +1613,13 @@ export function startGatewayHost(config: GatewayHostConfig): void {
   }, SWEEP_MS);
   if ((sweeper as any).unref) (sweeper as any).unref();
 
-  server.on("connection", (ws: WsSocket) => {
-    const cid = Math.random().toString(36).slice(2, 8);
-    debug(`[hyo][gateway] [${cid}] connected`);
-    setStatus({ clients: currentStatus.clients + 1 });
-    const send = (obj: unknown) => sendTo(ws, obj);
-
-    ws.on("message", async (data: Buffer | string) => {
-      if (!activeConfig || !activeEnv) return; // host stopped mid-flight
-      const cfg = activeConfig;
-      const env = activeEnv;
-      let m: any;
-      try {
-        m = JSON.parse(data.toString());
-      } catch {
-        return;
-      }
-      try {
-        // The main chat: the phone attaches to the Mac's one process for it
-        // instead of starting its own (main-chat-owner.ts).
-        const owner = mainChatOwner(cfg.vault);
-        if (
-          owner &&
-          gatewayMainChat(owner, m, ws, { send }, (p) => ({
-            cliPath: cfg.cliPath,
-            cwd: cfg.vault,
-            model: p.model || cfg.defaultModel,
-            permissionMode: p.askFirst === false ? "bypassPermissions" : "default",
-            agent: p.agent || cfg.defaultAgent,
-            sessionId: p.sessionId || null,
-            resume: !!p.resume,
-            appendSystemPrompt: p.appendSystemPrompt,
-          }))
-        ) {
-          return;
-        }
-        // Which conversations are open, shared with the Mac's panels
-        // (open-conversations.ts). Pushed to the phone whenever it changes.
-        const openList = openConversations(cfg.vault);
-        if (openList && gatewayOpenList(openList, m, ws, { send })) return;
-        switch (m.type) {
-          case "list_sessions":
-            send({ type: "sessions", sessions: listSessions(cfg.vault) });
-            break;
-          case "get_history":
-            send({
-              type: "history",
-              sessionId: m.sessionId,
-              lines: getHistoryLines(cfg.vault, m.sessionId),
-              voiceCalls: getVoiceCalls(cfg.vault, m.sessionId),
-            });
-            break;
-          case "search_sessions":
-            send({ type: "search_results", query: m.query, hits: searchSessions(cfg.vault, m.query) });
-            break;
-          case "rename":
-            saveCustomTitle(cfg.vault, m.sessionId, m.title);
-            send({ type: "renamed", sessionId: m.sessionId, title: m.title });
-            break;
-          case "save_voice_call":
-            // A call made on the phone, saved where desktop keeps its own.
-            if (typeof m.sessionId === "string" && m.call && typeof m.call.id === "string") {
-              saveVoiceCall(cfg.vault, m.sessionId, m.call, typeof m.title === "string" ? m.title : undefined);
-            }
-            send({ type: "voice_call_saved", sessionId: m.sessionId });
-            break;
-          case "set_task_meta":
-            setTaskMeta(cfg.vault, m.sessionId, m.patch || {});
-            send({ type: "task_meta_set", sessionId: m.sessionId });
-            // A pin puts the conversation in everyone's Open list.
-            if (m.patch && "pinned" in m.patch) openConversations(cfg.vault)?.pinsChanged();
-            break;
-          case "list_agents":
-            send({ type: "agents", agents: listAgents(cfg.vault) });
-            break;
-          case "list_skills":
-            send({ type: "skills", skills: listSkills(cfg.vault) });
-            break;
-          case "reattach": {
-            const ids: string[] = Array.isArray(m.tabIds) ? m.tabIds : m.tabId ? [m.tabId] : [];
-            const attached: string[] = [],
-              gone: string[] = [];
-            for (const id of ids) {
-              if (id === MAIN_CHAT_WIRE_ID && owner) {
-                attached.push(id); // attached to the owner above
-                continue;
-              }
-              const state = tabs.get(id);
-              if (state) {
-                attachClient(state, ws);
-                attached.push(id);
-              } else gone.push(id);
-            }
-            debug(`[hyo][gateway] [${cid}] reattach — ${attached.length} live, ${gone.length} gone`);
-            send({ type: "gateway", subtype: "reattached", attached, gone });
-            break;
-          }
-          case "prompt": {
-            let state = tabs.get(m.tabId);
-            if (!state) {
-              // Per-prompt `agent`/`model` override the configured defaults —
-              // spawnTab falls back to config.defaultAgent/defaultModel only
-              // when the client doesn't send its own value.
-              state = spawnTab(m.tabId, ws, cfg, env, {
-                sessionId: m.sessionId,
-                resume: m.resume,
-                askFirst: m.askFirst,
-                model: m.model,
-                agent: m.agent,
-                thinkingTokens: m.thinkingTokens,
-                detach: m.detach,
-                appendSystemPrompt: m.appendSystemPrompt,
-              });
-            } else if (state.client !== ws) {
-              attachClient(state, ws);
-            }
-            // `content` is the client's full Anthropic block array — text plus
-            // any image/document blocks from attachments. The CLI's stream-json
-            // stdin accepts those blocks verbatim (verified 2026-09-12: a base64
-            // image block round-trips and the model describes the picture). A
-            // client that sends only `text` goes through the fallback.
-            const promptContent =
-              Array.isArray(m.content) && m.content.length > 0
-                ? m.content
-                : [{ type: "text", text: m.text }];
-            writeStdin(m.tabId, { type: "user", message: { role: "user", content: promptContent } });
-            state.generating = true;
-            break;
-          }
-          case "permission_response": {
-            const state = tabs.get(m.tabId);
-            const originalInput = state?.pendingToolInput.get(m.requestId) ?? {};
-            state?.pendingToolInput.delete(m.requestId);
-            const withInput = (base: Record<string, unknown>) => ({
-              ...base,
-              updatedInput: m.updatedInput ?? originalInput,
-            });
-
-            let response: Record<string, unknown>;
-            if (m.behavior === "deny") {
-              response = { behavior: "deny", message: "Denied by user", decisionClassification: "user_reject" };
-            } else if (m.behavior === "allow_always" && m.toolName) {
-              // Persist to the mobile allowlist (durable across sessions,
-              // device-only — never desktop rules). `session` destination
-              // makes it take effect immediately in the running process.
-              addMobileAllow(m.toolName);
-              response = withInput({
-                behavior: "allow",
-                decisionClassification: "user_permanent",
-                updatedPermissions: [
-                  { type: "addRules", rules: [{ toolName: m.toolName }], behavior: "allow", destination: "session" },
-                ],
-              });
-            } else {
-              response = withInput({ behavior: "allow", decisionClassification: "user_temporary" });
-            }
-            writeStdin(m.tabId, { type: "control_response", response: { subtype: "success", request_id: m.requestId, response } });
-            break;
-          }
-          case "interrupt":
-            writeStdin(m.tabId, { type: "control_request", request_id: randomUUID(), request: { subtype: "interrupt" } });
-            break;
-          case "stop":
-            killTab(m.tabId, "client stop");
-            break;
-          case "generate_title": {
-            const title = await generateTitle(cfg.cliPath, env, m.userMessage, m.assistantMessage);
-            send({ type: "title", requestId: m.requestId, title });
-            break;
-          }
-          case "live_config": {
-            const lv = cfg.getLiveVoice?.();
-            send({
-              type: "live_config",
-              requestId: m.requestId,
-              engine: lv?.engine || "elevenlabs",
-              voice: typeof lv?.voice === "string" ? lv.voice : lv?.voice ? "custom" : "marin",
-            });
-            break;
-          }
-          case "live_sdp": {
-            // The phone's WebRTC offer → OpenAI's answer, signed here with the
-            // desktop's key. The session (personality, the tab's agent identity,
-            // history from the phone) is built here too, so the phone holds
-            // nothing secret and follows the desktop's voice settings.
-            const lv = cfg.getLiveVoice?.();
-            if (!lv || lv.engine !== "gpt-live" || !lv.openAiApiKey) {
-              send({
-                type: "live_sdp_error",
-                requestId: m.requestId,
-                message: "Set the desktop's voice engine to GPT-Live and add an OpenAI key in Hyo settings there.",
-              });
-              break;
-            }
-            const agent = typeof m.agent === "string" && m.agent ? m.agent : cfg.defaultAgent;
-            const history = Array.isArray(m.history) ? m.history.slice(-60) : [];
-            // About you goes into the starting instructions, read fresh (capped
-            // so a slow read never holds up the call).
-            const aboutYou = lv.getAboutYou
-              ? await Promise.race([lv.getAboutYou().catch(() => ""), new Promise<string>((r) => setTimeout(() => r(""), 1500))])
-              : "";
-            const session = {
-              model: "gpt-live-1",
-              delegation: { type: "client" },
-              instructions: buildLiveInstructions(lv.personality, readAgentIdentity(agent), { voiceDescription: lv.voiceDescription, aboutYou }),
-              input: history
-                .filter((h: any) => h && (h.role === "user" || h.role === "assistant") && typeof h.text === "string" && h.text)
-                .map((h: any) => ({
-                  type: "message",
-                  role: h.role,
-                  content: [{ type: h.role === "user" ? "input_text" : "output_text", text: String(h.text).slice(0, 4000) }],
-                })),
-              audio: { output: { voice: lv.voice || "marin" } },
-            };
-            void (async () => {
-              try {
-                const res = await fetch("https://api.openai.com/v1/live/sessions", {
-                  method: "POST",
-                  headers: { Authorization: `Bearer ${lv.openAiApiKey}`, "Content-Type": "application/json" },
-                  body: JSON.stringify({ session, transport: { type: "webrtc", sdp: m.sdp } }),
-                });
-                const data: any = await res.json().catch(() => ({}));
-                if (!res.ok || !data?.transport?.sdp) {
-                  send({
-                    type: "live_sdp_error",
-                    requestId: m.requestId,
-                    message: data?.error?.message || `OpenAI refused the call (${res.status})`,
-                  });
-                  return;
-                }
-                send({ type: "live_sdp_answer", requestId: m.requestId, sdp: data.transport.sdp, sessionId: data?.session?.id });
-              } catch (e: any) {
-                send({ type: "live_sdp_error", requestId: m.requestId, message: e?.message || "Couldn't reach OpenAI" });
-              }
-            })();
-            break;
-          }
-          case "update_claude": {
-            // The phone's "Update Claude" button. "started" goes back straight
-            // away: a gateway from before this existed ignores the request,
-            // and that silence is how the phone knows to fall back.
-            const requestId = m.requestId;
-            const required = typeof m.required === "string" ? m.required : "";
-            send({ type: "claude_update", requestId, phase: "started" });
-            void (async () => {
-              try {
-                const r = await cfg.updateClaude(required, (message) =>
-                  send({ type: "claude_update", requestId, phase: "progress", message }),
-                );
-                // Later spawns (the phone's resend) use the updated Claude.
-                if (r.ok && r.cliPath && activeConfig) activeConfig.cliPath = r.cliPath;
-                // The main chat's shared process is still the old Claude:
-                // restart it once nothing is running in it.
-                if (r.ok) mainChatOwner(cfg.vault)?.restart();
-                send({ type: "claude_update", requestId, phase: "done", ok: r.ok, error: r.error });
-              } catch (e: any) {
-                send({ type: "claude_update", requestId, phase: "done", ok: false, error: e?.message || String(e) });
-              }
-            })();
-            break;
-          }
-          case "ping":
-            send({ type: "gateway", subtype: "pong" });
-            break;
-        }
-      } catch (e: any) {
-        debug(`[hyo][gateway] [${cid}] handler error on ${m.type}: ${e.message}`);
-        send({ type: "gateway", subtype: "error", error: e.message });
-      }
-    });
-
-    ws.on("close", () => {
-      setStatus({ clients: Math.max(0, currentStatus.clients - 1) });
-      if (activeConfig) gatewayClientGone(mainChatOwner(activeConfig.vault), ws);
-      gatewayOpenListGone(ws);
-      let inGrace = 0,
-        detached = 0,
-        working = 0;
-      for (const [tabId, state] of tabs) {
-        if (state.client !== ws) continue;
-        state.client = null;
-        if (state.detach) {
-          detached++;
-          continue;
-        }
-        // Mid-task tabs are left running: the disconnect grace only starts
-        // once the turn finishes (see the `result` handler). The 30-minute
-        // idle ceiling remains the backstop for a run that never finishes.
-        if (state.generating || hasRunningJobs(state.jobs)) {
-          working++;
-          continue;
-        }
-        if (!state.graceTimer) {
-          state.graceTimer = setTimeout(() => killTab(tabId, "grace expired"), GRACE_MS);
-        }
-        inGrace++;
-      }
-      debug(`[hyo][gateway] [${cid}] disconnected — ${working} still working, ${inGrace} in grace, ${detached} detached`);
-    });
-  });
+  server.on("connection", (ws: WsSocket) =>
+    attachGatewaySocket(ws, {
+      config: () => activeConfig,
+      env: () => activeEnv,
+      onClients: (d) => setStatus({ clients: Math.max(0, currentStatus.clients + d) }),
+    })
+  );
     } catch (e: any) {
       // Everything after the first await used to land here as an unhandled
       // rejection, leaving the indicator on "starting" with nothing said.

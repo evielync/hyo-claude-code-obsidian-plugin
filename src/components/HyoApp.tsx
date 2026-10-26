@@ -3,6 +3,7 @@ import type { App } from "obsidian";
 import type HyoPlugin from "../main";
 import { ChatPanel } from "./ChatPanel";
 import { useSessionManager } from "../hooks/useSessionManager";
+import { resolveWorkingDirectory } from "../working-directory";
 import { DEFAULT_EFFORT, compareVersions } from "../models";
 import {
   detectClaude,
@@ -150,12 +151,7 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
   );
 
   // Use custom working directory if set, otherwise use vault path
-  const workingDirectory = plugin.settings.workingDirectory
-    ? plugin.settings.workingDirectory.replace(
-        /^~/,
-        process.env.HOME || process.env.USERPROFILE || ""
-      )
-    : vaultPath;
+  const workingDirectory = resolveWorkingDirectory(plugin.settings.workingDirectory, vaultPath);
 
   // The main chat's conversation id lives in the synced settings, so the
   // phone carries on the same conversation.

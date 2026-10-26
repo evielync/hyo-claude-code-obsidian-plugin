@@ -1,4 +1,5 @@
 import React, { useRef, useState, useCallback, useEffect, useMemo } from "react";
+import { resolveWorkingDirectory } from "../working-directory";
 import type { App } from "obsidian";
 import { Notice } from "obsidian";
 import { ChatMessages } from "./ChatMessages";
@@ -261,12 +262,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
 
   // Auto-detect skills from working directory
   const vaultPath = (app.vault.adapter as any).basePath as string;
-  const workingDirectory = plugin.settings.workingDirectory
-    ? plugin.settings.workingDirectory.replace(
-        /^~/,
-        process.env.HOME || process.env.USERPROFILE || ""
-      )
-    : vaultPath;
+  const workingDirectory = resolveWorkingDirectory(plugin.settings.workingDirectory, vaultPath);
 
   // Where large file attachments get written. Inside the plugin's own folder
   // so Obsidian keeps it tidy and Claude's Read tool can access absolute paths.

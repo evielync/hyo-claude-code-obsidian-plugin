@@ -22,6 +22,7 @@ import { CommandsManager } from "./commands";
 import { updateClaude, detectClaude } from "./cli-probe";
 import { compareVersions } from "./models";
 import { setShowAllToolCalls } from "./components/ToolCallRun";
+import { resolveWorkingDirectory } from "./working-directory";
 
 // Per-device key for "This computer is the gateway" (see isGatewayHost).
 const GATEWAY_HOST_KEY = "hyo-gateway-host";
@@ -271,6 +272,10 @@ export default class HyoPlugin extends Plugin {
       startGatewayHost({
         port: this.settings.gatewayPort,
         vault,
+        // Conversations live in the Working directory, the same folder the
+        // desktop panels use, which can differ from the vault.
+        cwd: resolveWorkingDirectory(this.settings.workingDirectory, vault),
+        getCwd: () => resolveWorkingDirectory(this.settings.workingDirectory, vault),
         cliPath: this.settings.cliPath,
         defaultAgent: this.settings.defaultAgent,
         defaultModel: this.settings.model,
