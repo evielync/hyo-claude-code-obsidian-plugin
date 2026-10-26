@@ -1,6 +1,6 @@
 import { debug } from "../debug";
 import { addOutgoing, startQueued } from "../send-queue";
-import { newStreamState, processContentBlocks, buildSnapshot, endTurn, startsTurnOfItsOwn, openReply, type StreamState } from "../reply-stream";
+import { newStreamState, processContentBlocks, buildSnapshot, endTurn, startsTurnOfItsOwn, openReply, isInjectedContext, type StreamState } from "../reply-stream";
 import { useState, useCallback, useRef, useEffect } from "react";
 import { ClaudeTransport, normalizeModelId } from "../claude-transport";
 import { VOICE_PERSONA, LIVE_BACKEND_PERSONA, HANDOFF_MARKER } from "../voice/voice-persona";
@@ -516,6 +516,8 @@ export function useSessionManager(options: SessionManagerOptions) {
           // and voice reads the raw instructions aloud. The main chain's own tool
           // results are NOT sidechain, so they still process normally below.
           if (event.isSidechain || event.parent_tool_use_id) return;
+          // A skill's instructions, added for the agent to read: never a message.
+          if (isInjectedContext(event)) return;
           const contentArr = event.message?.content || [];
           processContentBlocks(contentArr, ss, "user");
           updateTabLastAssistant(tabId, () => buildSnapshot(ss));

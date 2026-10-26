@@ -7,7 +7,7 @@
 // jsonl lines into chat messages.
 
 import { GatewayClient } from "./gateway-client";
-import { isSelfStartedPrompt } from "../reply-stream";
+import { isSelfStartedPrompt, isInjectedContext } from "../reply-stream";
 import type { VoiceCallRecord } from "../voice/voice-call";
 
 export interface PastSession {
@@ -142,6 +142,7 @@ export function parseSessionLines(lines: any[]): HistoryMessage[] {
         replyBreak = true;
         continue;
       }
+      if (isInjectedContext(d)) continue;
 
       if (d.type === "user") {
         const content = d.message?.content;

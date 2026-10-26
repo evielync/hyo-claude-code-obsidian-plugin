@@ -1,6 +1,6 @@
 import { debug } from "./debug";
 import { Platform } from "obsidian";
-import { isSelfStartedPrompt } from "./reply-stream";
+import { isSelfStartedPrompt, isInjectedContext } from "./reply-stream";
 import { mergeStoredCalls, upsertCall, callOnlySessions, type VoiceCallRecord } from "./voice/voice-call";
 import type * as fsTypes from "fs"; // type-only (erased at build) for annotations
 // Node built-ins are desktop-only; deferred so this module loads on mobile.
@@ -531,6 +531,7 @@ export function parseSessionEntries(entries: any[]): HistoryMessage[] {
           replyBreak = true;
           continue;
         }
+        if (isInjectedContext(d)) continue;
 
         if (d.type === "user") {
           const content = d.message?.content;

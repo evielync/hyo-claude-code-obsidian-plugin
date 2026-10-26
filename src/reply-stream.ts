@@ -97,6 +97,19 @@ export function isSelfStartedPrompt(entry: any): boolean {
   return /^\s*<task-notification>/.test(text);
 }
 
+/**
+ * Text Claude Code adds to the conversation for the agent to read, never
+ * something the person said: a skill's full instructions after the Skill tool
+ * loads it, a slash command's expansion, a caveat about local commands. The
+ * CLI marks these `isMeta` (a skill's also carries `sourceToolUseID`), and its
+ * own UI never shows them. The live stream marks the same message
+ * `isSynthetic`. The "Used the … skill" line comes from the tool call, so
+ * leaving these out loses nothing.
+ */
+export function isInjectedContext(entry: any): boolean {
+  return entry?.type === "user" && (entry.isMeta === true || entry.isSynthetic === true);
+}
+
 export function processContentBlocks(contentArr: any[], ss: StreamState, source: "user" | "assistant") {
   for (const block of contentArr) {
     if (block.type === "text") {
