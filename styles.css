@@ -4439,6 +4439,9 @@ button.hyo-ask-send:disabled {
   opacity: 0;
   transition: opacity 0.15s;
 }
+/* On a phone the copy button is always there. Revealing it on :hover made
+   iOS spend the first tap on a reply (a link, a file chip) as a hover. */
+.is-mobile .hyo-message-actions,
 .is-mobile .hyo-message-assistant:hover .hyo-message-actions {
   opacity: 1;
 }
@@ -4658,10 +4661,19 @@ button.hyo-ask-send:disabled {
 .is-mobile .hyo-ts-card-foot { display: flex; align-items: center; margin-top: 9px; }
 .is-mobile .hyo-ts-time { font-size: 10.5px; color: var(--text-faint); display: inline-flex; align-items: center; gap: 6px; }
 .is-mobile .hyo-ts-openmark { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--interactive-accent); }
-.is-mobile /* Icon actions, .is-mobile absolute top-right so hover never resizes the card. */
-.hyo-ts-actions { position: absolute; top: 10px; right: 11px; display: none; align-items: center; gap: 5px; }
-.is-mobile .hyo-ts-card:hover .hyo-ts-actions { display: inline-flex; }
-.is-mobile .hyo-ts-card:hover .hyo-ts-pill { visibility: hidden; }
+/* One tap opens a conversation. iOS treats the first tap on anything that
+   reveals content on :hover as a hover and holds back the click, so pin and
+   done appearing on hover made every card take two taps. On a phone the
+   actions sit permanently in the bottom-right of the card, the status pill
+   stays put, and nothing on the card changes on hover. */
+.is-mobile .hyo-ts-card-foot { min-height: 28px; }
+.is-mobile .hyo-ts-actions,
+.is-mobile .hyo-ts-card:hover .hyo-ts-actions { position: absolute; top: auto; bottom: 13px; right: 14px; display: inline-flex; align-items: center; gap: 6px; }
+.is-mobile .hyo-ts-card:hover .hyo-ts-pill { visibility: visible; }
+.is-mobile .hyo-ts-card:hover { background: var(--background-primary); box-shadow: 0 1px 2px rgba(40,30,20,.05), 0 3px 10px rgba(40,30,20,.05); }
+.is-mobile.theme-dark .hyo-ts-card:hover, .theme-dark .is-mobile .hyo-ts-card:hover { box-shadow: 0 1px 2px rgba(0,0,0,.25); }
+.is-mobile .hyo-ts-card { -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+.is-mobile .hyo-ts-card:active { background: var(--background-modifier-hover); }
 .is-mobile .hyo-ts-act {
   display: inline-flex; align-items: center; justify-content: center;
   width: 30px; height: 30px; padding: 0; color: var(--text-muted);
