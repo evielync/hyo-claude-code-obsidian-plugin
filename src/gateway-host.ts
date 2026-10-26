@@ -38,6 +38,7 @@ import { getProjectDir, saveCustomTitle, setTaskMeta, saveVoiceCall, getVoiceCal
 import { callOnlySessions } from "./voice/voice-call";
 import { buildLiveInstructions, readAgentIdentity } from "./voice/gpt-live";
 import { applyJobEvent, hasRunningJobs, type JobMap } from "./background-jobs";
+import { mainChatOwner, gatewayMainChat, gatewayClientGone, MAIN_CHAT_WIRE_ID } from "./main-chat-owner";
 import type * as FsType from "fs";
 import type * as PathType from "path";
 import type * as OsType from "os";
@@ -1300,6 +1301,24 @@ export function startGatewayHost(config: GatewayHostConfig): void {
         return;
       }
       try {
+        // The main chat: the phone attaches to the Mac's one process for it
+        // instead of starting its own (main-chat-owner.ts).
+        const owner = mainChatOwner(cfg.vault);
+        if (
+          owner &&
+          gatewayMainChat(owner, m, ws, { send }, (p) => ({
+            cliPath: cfg.cliPath,
+            cwd: cfg.vault,
+            model: p.model || cfg.defaultModel,
+            permissionMode: p.askFirst === false ? "bypassPermissions" : "default",
+            agent: p.agent || cfg.defaultAgent,
+            sessionId: p.sessionId || null,
+            resume: !!p.resume,
+            appendSystemPrompt: p.appendSystemPrompt,
+          }))
+        ) {
+          return;
+        }
         switch (m.type) {
           case "list_sessions":
             send({ type: "sessions", sessions: listSessions(cfg.vault) });
@@ -1341,6 +1360,10 @@ export function startGatewayHost(config: GatewayHostConfig): void {
             const attached: string[] = [],
               gone: string[] = [];
             for (const id of ids) {
+              if (id === MAIN_CHAT_WIRE_ID && owner) {
+                attached.push(id); // attached to the owner above
+                continue;
+              }
               const state = tabs.get(id);
               if (state) {
                 attachClient(state, ws);
@@ -1505,6 +1528,9 @@ export function startGatewayHost(config: GatewayHostConfig): void {
                 );
                 // Later spawns (the phone's resend) use the updated Claude.
                 if (r.ok && r.cliPath && activeConfig) activeConfig.cliPath = r.cliPath;
+                // The main chat's shared process is still the old Claude:
+                // restart it once nothing is running in it.
+                if (r.ok) mainChatOwner(cfg.vault)?.restart();
                 send({ type: "claude_update", requestId, phase: "done", ok: r.ok, error: r.error });
               } catch (e: any) {
                 send({ type: "claude_update", requestId, phase: "done", ok: false, error: e?.message || String(e) });
@@ -1524,6 +1550,7 @@ export function startGatewayHost(config: GatewayHostConfig): void {
 
     ws.on("close", () => {
       setStatus({ clients: Math.max(0, currentStatus.clients - 1) });
+      if (activeConfig) gatewayClientGone(mainChatOwner(activeConfig.vault), ws);
       let inGrace = 0,
         detached = 0,
         working = 0;

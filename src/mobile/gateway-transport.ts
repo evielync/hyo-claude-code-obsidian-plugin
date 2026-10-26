@@ -79,6 +79,11 @@ export class GatewayTransport {
     this.client = GatewayClient.get(options.gatewayUrl);
   }
 
+  /** Ask the gateway for this tab's live events now, before anything is sent. */
+  attach(): void {
+    this.client.attach(this.tabId);
+  }
+
   spawn(): void {
     this.client.registerTab(this.tabId, (msg) => {
       if (msg.type === "stream") {

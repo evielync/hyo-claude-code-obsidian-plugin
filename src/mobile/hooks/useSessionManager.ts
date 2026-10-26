@@ -3,6 +3,7 @@ import { addOutgoing, startQueued } from "../../send-queue";
 import { newStreamState, processContentBlocks, buildSnapshot, endTurn, startsTurnOfItsOwn, openReply, isInjectedContext, type StreamState } from "../../reply-stream";
 import { useState, useCallback, useRef, useEffect } from "react";
 import { GatewayTransport } from "../gateway-transport";
+import { MAIN_CHAT_WIRE_ID } from "../../main-chat-owner";
 import { VOICE_PERSONA } from "../voice/voice-persona";
 import type {
   Message,
@@ -226,6 +227,49 @@ export function useSessionManager(options: SessionManagerOptions) {
             event.type,
             event.subtype || event.request?.subtype || ""
           );
+        }
+
+        // The main chat, shared with the Mac and other views (main-chat-owner.ts).
+        if (event.type === "hyo_user_message" || event.type === "hyo_busy") {
+          turnRunningRef.current[tabId] = true;
+          streamStatesRef.current[tabId] = newStreamState();
+          const reply: Message = { role: "assistant", content: "", thinking: "", toolCalls: [], orderedBlocks: [], streaming: true };
+          const said: Message[] = event.type === "hyo_user_message" && event.text ? [{ role: "user", content: event.text, displayText: event.text }] : [];
+          setState((prev) => ({
+            ...prev,
+            tabs: prev.tabs.map((t) =>
+              t.id === tabId ? { ...t, messages: openReply([...t.messages, ...said], reply), generating: true } : t
+            ),
+          }));
+          return;
+        }
+        if (event.type === "hyo_permission_answered") {
+          const resolved = event.behavior === "deny" ? ("denied" as const) : ("allowed" as const);
+          setState((prev) => ({
+            ...prev,
+            tabs: prev.tabs.map((t) =>
+              t.id !== tabId
+                ? t
+                : {
+                    ...t,
+                    messages: t.messages.map((m) =>
+                      m.permissionRequests?.some((r) => r.requestId === event.requestId)
+                        ? { ...m, permissionRequests: m.permissionRequests.map((r) => (r.requestId === event.requestId ? { ...r, resolved } : r)) }
+                        : m
+                    ),
+                  }
+            ),
+          }));
+          return;
+        }
+        if (event.type === "hyo_owner_refused") {
+          updateTabLastAssistant(tabId, () => ({
+            streaming: false,
+            content: "_The main chat is already running in another copy of Obsidian on your computer. Use that one, or quit it and try again._",
+          }));
+          setState((prev) => ({ ...prev, tabs: prev.tabs.map((t) => (t.id === tabId ? { ...t, generating: false } : t)) }));
+          turnEnded(tabId);
+          return;
         }
 
         // Background agents starting, reporting and finishing.
@@ -952,11 +996,13 @@ export function useSessionManager(options: SessionManagerOptions) {
 
         const transport = new GatewayTransport({
           gatewayUrl: options.gatewayUrl,
+          // The main chat joins the Mac's one process for it, by its shared id.
+          ...(currentTab?.isMain ? { tabId: MAIN_CHAT_WIRE_ID } : {}),
           // The tab's own model: a reopened conversation carries on with the
           // one it was built on (and its context window), not the default.
           model: currentTab?.model || options.model,
           agent: options.agent,
-          tabId,
+          ...(currentTab?.isMain ? {} : { tabId }),
           // A conversation that began as a call starts with --session-id on
           // the id Hyo gave it; anything Claude has written is resumed.
           ...sessionSpawn(cliSessionId ?? null, currentTab?.sessionPending),
@@ -1278,6 +1324,36 @@ export function useSessionManager(options: SessionManagerOptions) {
       /* storage unavailable — restore just won't happen */
     }
   }, [state.tabs, state.activeTabId, restoreKey, options.gatewayUrl]);
+
+  // The main chat listens from the moment it's open: what's said on the Mac
+  // shows here as it happens, and a turn already running is picked up.
+  useEffect(() => {
+    if (!options.gatewayUrl) return;
+    for (const t of state.tabs) {
+      if (!t.isMain || transportsRef.current[t.id]) continue;
+      if (!streamStatesRef.current[t.id]) streamStatesRef.current[t.id] = { ...newStreamState(), turnDone: true };
+      const transport = new GatewayTransport({
+        gatewayUrl: options.gatewayUrl,
+        tabId: MAIN_CHAT_WIRE_ID,
+        ...sessionSpawn(t.cliSessionId ?? null, t.sessionPending),
+        appendSystemPrompt: promptFor(t),
+        model: t.model || options.model,
+        agent: options.agent,
+        onMessage: makeProcessEvent(t.id),
+        onError: (error) => console.error("[hyo] Gateway error:", error),
+        onClose: () => {
+          setState((prev) => ({ ...prev, tabs: prev.tabs.map((x) => (x.id === t.id ? { ...x, generating: false } : x)) }));
+          turnEnded(t.id);
+          updateTabLastAssistant(t.id, () => ({ streaming: false }));
+        },
+      });
+      transport.spawn();
+      transport.attach();
+      transportPromptRef.current[t.id] = promptFor(t);
+      transportsRef.current[t.id] = transport;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.tabs, options.gatewayUrl]);
 
   // ---- The main chat --------------------------------------------------------
   // Same as desktop: a pinned first tab carrying the one long conversation

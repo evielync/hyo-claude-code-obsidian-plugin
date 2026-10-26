@@ -99,13 +99,18 @@ test("the instructions carry the ported Multitask Mode wording, for Claude Code'
     "pushes meaningful work to asynchronous agents through your `Agent` tool, with `run_in_background` set to `true`",
     "NEVER await or sleep while waiting for a running subagent to complete.",
     "you MUST end your response IMMEDIATELY",
-    "For trivial user requests (i.e. user requests that can be fully completed with NO or ONE tool calls)",
+    "YOU MUST DELEGATE TO AN ASYNCHRONOUS SUBAGENT ANY TIME YOU NEED TO USE ANY TOOLS.",
+    "When the task to be completed requires ANY tool calls.",
+    "write nothing before the Agent call. Once the Agent tool returns, reply with one short line",
     "Before each foreground tool call, distinguish coordination work from the worker task you already delegated.",
     "SendMessage",
   ]) {
     assert.ok(MAIN_CHAT_PROMPT.includes(line), line);
   }
   assert.ok(MAIN_CHAT_REMINDER.includes("Decide whether to delegate the user request to a background subagent (default action)"));
+  assert.ok(MAIN_CHAT_REMINDER.includes("Reserve for requests requiring zero tool calls."));
+  // Nothing left that lets one quick tool call run in the chat itself.
+  assert.ok(!/one quick tool call|zero or one/i.test(MAIN_CHAT_PROMPT + MAIN_CHAT_REMINDER));
 });
 
 test("every main chat message carries the reminder; slash commands go as they are", () => {

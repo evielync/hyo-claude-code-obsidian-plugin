@@ -14,6 +14,8 @@ import { cleanupOldAttachments } from "./attachments";
 import { setDebug } from "./debug";
 import { probeCliCapabilities } from "./cli-capabilities";
 import { startGatewayHost, stopGatewayHost, GatewayStatus } from "./gateway-host";
+import { MainChatOwner, setMainChatOwnerFactory, shutdownMainChats, fileLock } from "./main-chat-owner";
+import { ClaudeTransport } from "./claude-transport";
 import { CommandsManager } from "./commands";
 import { updateClaude, detectClaude } from "./cli-probe";
 import { compareVersions } from "./models";
@@ -44,6 +46,30 @@ export default class HyoPlugin extends Plugin {
 
   async onload() {
     await this.loadSettings();
+    // The main chat's one Claude process per vault, shared by every Hyo panel
+    // and the phone (see main-chat-owner.ts). Desktop only.
+    if (!Platform.isMobile) {
+      setMainChatOwnerFactory(
+        (cwd) =>
+          new MainChatOwner(
+            (spec, on) =>
+              new ClaudeTransport({
+                cliPath: spec.cliPath,
+                cwd: spec.cwd,
+                model: spec.model,
+                effort: spec.effort,
+                permissionMode: spec.permissionMode,
+                agent: spec.agent,
+                sessionId: spec.sessionId || undefined,
+                resume: !!spec.resume,
+                maxOutputTokens: spec.maxOutputTokens,
+                appendSystemPrompt: spec.appendSystemPrompt,
+                ...on,
+              }),
+            fileLock(path.join(os.homedir(), ".hyo", `main-chat-${cwd.replace(/[^A-Za-z0-9]+/g, "-").slice(-80)}.lock`))
+          )
+      );
+    }
     setShowAllToolCalls(!!this.settings.showAllToolCalls);
 
     // Verbose "[hyo] ..." tracing is off by default. Expose the toggle so it
@@ -278,6 +304,9 @@ export default class HyoPlugin extends Plugin {
   onunload() {
     if (!Platform.isMobile) {
       try { stopGatewayHost(); } catch { /* ignore */ }
+      // Obsidian is closing: the main chat's process (and any background
+      // jobs in it) ends with it. Known limitation.
+      try { shutdownMainChats(); } catch { /* ignore */ }
     }
     // Unmount React and clean up child processes for all Hyo leaves
     this.app.workspace.getLeavesOfType(VIEW_TYPE_HYO).forEach((leaf) => {

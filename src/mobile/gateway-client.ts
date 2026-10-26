@@ -444,6 +444,11 @@ export class GatewayClient {
     this.send({ type: "interrupt", tabId });
   }
 
+  /** Start receiving a tab's live events (the main chat, shared with the Mac). */
+  attach(tabId: string): void {
+    this.send({ type: "reattach", tabIds: [tabId] });
+  }
+
   stop(tabId: string): void {
     this.send({ type: "stop", tabId });
     this.unregisterTab(tabId);
