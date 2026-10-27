@@ -226,6 +226,8 @@ export class SessionOwner {
   // or what was last chosen), the mode its process was launched with, and a
   // mode change Claude couldn't make in place (it needs a fresh process).
   private mode: string | null = null;
+  // The model the conversation runs on (chosen on any device).
+  private model: string | null = null;
   private launchedMode: string | null = null;
   private modeRequest: { id: string; mode: string } | null = null;
   private relaunchWhenIdle = false;
@@ -277,7 +279,8 @@ export class SessionOwner {
     if (!spec && !this.mode) return null;
     return {
       permissionMode: normalizeMode(this.mode ?? spec?.permissionMode),
-      ...(spec ? { model: spec.model, agent: spec.agent || "" } : {}),
+      ...(this.model ? { model: this.model } : {}),
+      ...(spec ? { model: this.model || spec.model, agent: spec.agent || "" } : {}),
     };
   }
 
@@ -307,6 +310,20 @@ export class SessionOwner {
       if (id) this.modeRequest = { id, mode: m };
       else this.relaunch();
     }
+    this.announceInfo();
+  }
+
+  /**
+   * Change the conversation's model, from any view. The model is fixed when
+   * Claude starts, so the conversation carries on in a fresh process on the
+   * new model: now if nothing is running, else once it's done. Every view
+   * shows the new model.
+   */
+  setModel(model: string): void {
+    if (!model) return;
+    this.model = model;
+    if (this.lastSpec) this.lastSpec = { ...this.lastSpec, model };
+    if (this.proc && this.proc.isRunning() && this.procSpec && this.procSpec.model !== model) this.relaunch();
     this.announceInfo();
   }
 
@@ -398,8 +415,11 @@ export class SessionOwner {
     if (spec.adopt && base) {
       spec = { ...spec, model: base.model, agent: base.agent, effort: base.effort };
     }
-    // A conversation keeps its permission mode whichever view sends.
+    // A conversation keeps its permission mode and model whichever view
+    // sends; they change only when someone changes them (setPermissionMode,
+    // setModel).
     if (this.mode) spec = { ...spec, permissionMode: this.mode };
+    if (this.model) spec = { ...spec, model: this.model };
     if (this.proc && this.proc.isRunning() && this.procSpec && specKey(this.procSpec) !== specKey(spec) && !this.busy) {
       this.stopProc();
     }
@@ -457,6 +477,7 @@ export class SessionOwner {
     this.procStartedAt = Date.now();
     this.launchedMode = normalizeMode(full.permissionMode);
     if (!this.mode) this.mode = this.launchedMode;
+    if (!this.model) this.model = full.model;
     this.relaunchWhenIdle = false;
     this.modeRequest = null;
     proc.spawn();
@@ -903,6 +924,11 @@ export class OwnerTransport implements ProcLike {
     this.owner.setPermissionMode(mode);
   }
 
+  /** Change the conversation's model (every view shows it). */
+  setModel(model: string): void {
+    this.owner.setModel(model);
+  }
+
   isRunning(): boolean {
     return !!this.sub;
   }
@@ -1072,6 +1098,13 @@ export function gatewaySession(m: any, ws: object, sink: GatewayClientSink, ctx:
     case "restart":
       if (tabId) phoneTabs.get(tabId)?.owner.restart();
       return true;
+    case "set_model": {
+      if (!tabId || typeof m.model !== "string" || !m.model) return true;
+      const pt = phoneTabs.get(tabId);
+      const sid = typeof m.sessionId === "string" && m.sessionId ? m.sessionId : null;
+      (pt?.owner || ownerFor(ctx, tabId, sid))?.setModel(m.model);
+      return true;
+    }
     case "set_permission_mode": {
       // From the phone, for the conversation in that tab (it may not be
       // subscribed yet: a conversation it just opened).

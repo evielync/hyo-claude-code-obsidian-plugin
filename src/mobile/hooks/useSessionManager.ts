@@ -98,6 +98,8 @@ interface SessionManagerOptions {
   mainChat?: boolean;
   mainChatSessionId?: string;
   onMainChatSession?: (sessionId: string) => void;
+  /** Settings → Permission mode: what a new conversation starts in. */
+  permissionMode?: string;
   /** How long opening a conversation waits for the Mac (tests shorten it). */
   historyTimeoutMs?: number;
 }
@@ -133,8 +135,8 @@ export function useSessionManager(options: SessionManagerOptions) {
           messages: [],
           generating: false,
           model: LOCKED_MODEL,
-          permissionMode: options.askFirst === false ? "bypassPermissions" : "manual",
-          agent: LOCKED_AGENT,
+          permissionMode: options.permissionMode || (options.askFirst === false ? "bypassPermissions" : "manual"),
+          agent: options.agent || LOCKED_AGENT,
           inputTokens: 0,
           voiceMode: false,
         },
@@ -170,7 +172,8 @@ export function useSessionManager(options: SessionManagerOptions) {
   const optionsRef = useRef(options);
   optionsRef.current = options;
   // A conversation this phone starts begins in the phone's Ask first choice.
-  const defaultMode = () => (optionsRef.current.askFirst === false ? "bypassPermissions" : "manual");
+  // New conversations start in Settings → Permission mode, as on the desktop.
+  const defaultMode = () => optionsRef.current.permissionMode || (optionsRef.current.askFirst === false ? "bypassPermissions" : "manual");
   // Messages sent while Claude is still answering, per tab, oldest first.
   // They show in the chat at once and go to Claude when the turn ends (see
   // send-queue.ts). turnRunningRef is set the moment a turn starts, so two
@@ -815,7 +818,7 @@ export function useSessionManager(options: SessionManagerOptions) {
             generating: false,
             model: activeTab?.model || LOCKED_MODEL,
             permissionMode: defaultMode(),
-            agent: LOCKED_AGENT,
+            agent: optionsRef.current.agent || LOCKED_AGENT,
             voiceMode: false,
           },
         ],
@@ -853,7 +856,7 @@ export function useSessionManager(options: SessionManagerOptions) {
               generating: false,
               model: LOCKED_MODEL,
               permissionMode: defaultMode(),
-              agent: LOCKED_AGENT,
+              agent: optionsRef.current.agent || LOCKED_AGENT,
               voiceMode: false,
             },
           ],
@@ -1011,7 +1014,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       // one it was built on (and its context window), not the default. The
       // Mac only uses it if the phone is the one starting the process.
       model: currentTab?.model || optionsRef.current.model,
-      agent: optionsRef.current.agent,
+      agent: currentTab?.agent || optionsRef.current.agent,
       ...sessionSpawn(currentTab?.cliSessionId ?? null, currentTab?.sessionPending),
       appendSystemPrompt: promptFor(currentTab),
       onMessage: makeProcessEvent(tabId),
@@ -1237,6 +1240,38 @@ export function useSessionManager(options: SessionManagerOptions) {
     updateTabLastAssistant(tabId, () => ({ streaming: false }));
   }, [updateTabLastAssistant]);
 
+  /**
+   * The model for the conversation in view, as on the desktop: it carries on
+   * on the new model (a fresh process on the Mac once nothing is running),
+   * and every view shows it. A new conversation starts on it.
+   */
+  const setTabModel = useCallback((model: string) => {
+    const t = stateRef.current.tabs.find((x) => x.id === stateRef.current.activeTabId);
+    if (t?.cliSessionId || t?.isMain) ensureTransport(t.id).setModel(model);
+    setState((prev) => ({
+      ...prev,
+      tabs: prev.tabs.map((tab) => (tab.id === prev.activeTabId ? { ...tab, model } : tab)),
+    }));
+  }, []);
+
+  /**
+   * A different agent, as on the desktop: a new conversation with it in
+   * this tab (an agent is fixed for a conversation's life). Refused while
+   * background jobs are running in the current one, which it would leave.
+   */
+  const setTabAgent = useCallback((agent: string): boolean => {
+    const tabId = stateRef.current.activeTabId;
+    if (jobsRunning(tabId)) return false;
+    transportsRef.current[tabId]?.stop();
+    delete transportsRef.current[tabId];
+    delete streamStatesRef.current[tabId];
+    setState((prev) => ({
+      ...prev,
+      tabs: prev.tabs.map((tab) => (tab.id === tabId ? { ...tab, agent, cliSessionId: null, infoKnown: false } : tab)),
+    }));
+    return true;
+  }, []);
+
   const setTabPermissionMode = useCallback((permissionMode: string) => {
     // The conversation's mode: its process on the Mac takes it (every view
     // shows it). A new conversation starts in it with its first message.
@@ -1287,7 +1322,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     generating: false,
     model: like?.model || LOCKED_MODEL,
     permissionMode: defaultMode(),
-    agent: LOCKED_AGENT,
+    agent: optionsRef.current.agent || LOCKED_AGENT,
     inputTokens: 0,
     voiceMode: false,
     loading: true,
@@ -1472,7 +1507,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     generating: false,
     model: LOCKED_MODEL,
     permissionMode: defaultMode(),
-    agent: LOCKED_AGENT,
+    agent: optionsRef.current.agent || LOCKED_AGENT,
     inputTokens: 0,
     voiceMode: false,
   });
@@ -1649,7 +1684,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           generating: false,
           model: LOCKED_MODEL,
           permissionMode: defaultMode(),
-          agent: LOCKED_AGENT,
+          agent: optionsRef.current.agent || LOCKED_AGENT,
           inputTokens: 0,
           voiceMode: false,
           isMain: true,
@@ -1893,6 +1928,8 @@ export function useSessionManager(options: SessionManagerOptions) {
     activeModel: activeTab?.model || LOCKED_MODEL,
     activePermissionMode: activeTab?.permissionMode || defaultMode(),
     activeInfoKnown: !!activeTab?.infoKnown,
+    setTabModel,
+    setTabAgent,
     activeAgent: activeTab?.agent || LOCKED_AGENT,
     activeVoiceMode: activeTab?.voiceMode || false,
     activeTabHasSession: !!activeTab?.cliSessionId,

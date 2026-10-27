@@ -184,11 +184,15 @@ test("the phone never sits on 'Loading conversation…': a Mac that doesn't answ
   await waitFor("asked again", () => asked.includes("slow-convo"), 3000);
 });
 
-test("both devices show the conversation's real permission mode, and changing it on either applies to it", async (t) => {
+test("every composer control on the phone does what it does on the desktop, for the conversation in view", async (t) => {
   const cwd = mkdtempSync(join(tmpdir(), "hyo-hooks-mode-"));
   process.env.FAKE_PROJECT_DIR = getProjectDir(cwd);
+  const spawned: any[] = [];
   setSessionOwnerFactory({
-    make: (spec, on) => new ClaudeTransport({ ...spec, sessionId: spec.sessionId || undefined, resume: !!spec.sessionId && hasTranscript(spec.cwd, spec.sessionId), ...on }),
+    make: (spec, on) => {
+      spawned.push(spec);
+      return new ClaudeTransport({ ...spec, sessionId: spec.sessionId || undefined, resume: !!spec.sessionId && hasTranscript(spec.cwd, spec.sessionId), ...on });
+    },
     transcriptLines: (c, sid) => transcriptLineCount(c, sid),
     graceMs: 300,
   });
@@ -245,6 +249,29 @@ test("both devices show the conversation's real permission mode, and changing it
   await waitFor("reply", () => replies(pTab()).includes("Echo: after the change"));
   assert.equal(P().activePermissionMode, "bypassPermissions");
   assert.deepEqual(said(dTab()), ["started on the laptop in auto-edit", "from the phone", "after the change"], "the same conversation throughout");
+
+  // The model, picked on the phone: the laptop shows it and the next turn runs on it.
+  P().setTabModel("claude-haiku-5-5");
+  await waitFor("the laptop shows the phone's model", () => dTab().model === "claude-haiku-5-5");
+  assert.equal(P().activeModel, "claude-haiku-5-5");
+  const before = spawned.length;
+  D().sendMessage("on the new model");
+  await waitFor("reply", () => replies(pTab()).includes("Echo: on the new model"));
+  assert.equal(spawned.length, before + 1, "a fresh process for the new model");
+  assert.equal(spawned.at(-1)!.model, "claude-haiku-5-5");
+  assert.equal(spawned.at(-1)!.sessionId, sid, "carrying on the same conversation");
+  // And picked on the laptop: the phone shows it.
+  D().setTabModel("claude-opus-5-5");
+  await waitFor("the phone shows the laptop's model", () => P().activeModel === "claude-opus-5-5");
+
+  // The agent, picked on the phone: as on the desktop, a new conversation with it in this tab.
+  assert.equal(P().setTabAgent("researcher"), true);
+  await phone.flush();
+  assert.equal(P().activeTabHasSession, false);
+  P().sendMessage("hello, researcher");
+  await waitFor("the new conversation's reply", () => replies(P().tabs.find((x: any) => x.id === P().activeTabId)).includes("Echo: hello, researcher"));
+  assert.equal(spawned.at(-1)!.agent, "researcher");
+  assert.notEqual(spawned.at(-1)!.sessionId, sid);
 });
 
 test("unpinning closes the conversation on both devices, unless it's the one in view", async (t) => {

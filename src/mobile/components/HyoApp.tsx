@@ -112,6 +112,7 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
     agent: plugin.settings.defaultAgent,
     autoGenerateTitles: plugin.settings.autoGenerateTitles,
     askFirst: plugin.settings.askFirst,
+    permissionMode: plugin.settings.permissionMode,
     settingsVersion,
     mainChat: !!plugin.settings.mainChat,
     mainChatSessionId: plugin.settings.mainChatSessionId || "",

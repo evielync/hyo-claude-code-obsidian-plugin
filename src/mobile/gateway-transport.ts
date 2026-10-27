@@ -150,6 +150,12 @@ export class GatewayTransport {
     this.client.sendPrompt(this.tabId, text, this.options.sessionId, this.options.resume, askFirst, this.options.appendSystemPrompt, this.options.agent, this.options.model, blocks, extra);
   }
 
+  /** Change the conversation's model on the Mac (every view shows it). */
+  setModel(model: string): void {
+    this.options.model = model;
+    this.client.setModel(this.tabId, this.options.sessionId, model);
+  }
+
   /** Change the conversation's permission mode on the Mac (every view shows it). */
   setPermissionMode(mode: string): void {
     this.client.setPermissionMode(this.tabId, this.options.sessionId, mode);

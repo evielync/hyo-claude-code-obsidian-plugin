@@ -529,6 +529,11 @@ export class GatewayClient {
     this.send({ type: "attach", tabId, sessionId: sessionId || undefined });
   }
 
+  /** Change a conversation's model on the Mac. */
+  setModel(tabId: string, sessionId: string | undefined, model: string): void {
+    this.send({ type: "set_model", tabId, sessionId, model });
+  }
+
   /** Change a conversation's permission mode on the Mac. */
   setPermissionMode(tabId: string, sessionId: string | undefined, mode: string): void {
     this.send({ type: "set_permission_mode", tabId, sessionId, mode });

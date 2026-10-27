@@ -1371,6 +1371,8 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   const setTabModel = useCallback((model: string) => {
     const normalized = normalizeModelId(model);
+    // The conversation's model: it carries on on it (every view shows it).
+    transportsRef.current[stateRef.current.activeTabId]?.setModel(normalized);
     setState((prev) => ({
       ...prev,
       tabs: prev.tabs.map((tab) =>

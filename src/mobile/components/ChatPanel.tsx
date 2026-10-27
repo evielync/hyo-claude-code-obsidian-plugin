@@ -98,8 +98,9 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     activeAgent,
     activeModel,
     activePermissionMode,
-    activeInfoKnown,
     setTabPermissionMode,
+    setTabModel,
+    setTabAgent,
     addVoiceCall,
     setVoiceEngine,
     newTab,
@@ -585,27 +586,20 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
   // What the conversation in view really runs with: its process's own model,
   // agent and permission mode once the Mac has said, else what this phone
   // would start it with.
-  const currentAgent = (activeInfoKnown && activeAgent) || plugin.settings.defaultAgent || agents[0]?.name || "default";
+  const currentAgent = activeAgent || plugin.settings.defaultAgent || agents[0]?.name || "default";
   const currentModel = activeModel || plugin.settings.model || "claude-sonnet-5-5";
-  const setAgent = useCallback((name: string) => {
-    plugin.settings.defaultAgent = name;
-    void plugin.saveSettings();
-  }, [plugin]);
-  const setModel = useCallback((value: string) => {
-    plugin.settings.model = value;
-    void plugin.saveSettings();
-  }, [plugin]);
-  // The conversation's permission mode (its process takes it, and the Mac
-  // shows it too). Ask first or not is also what a new conversation here
-  // starts with.
-  const setMode = useCallback(
-    (mode: string) => {
-      setTabPermissionMode(mode);
-      plugin.settings.askFirst = mode !== "bypassPermissions";
-      void plugin.saveSettings();
+  // Each choice here is for the conversation in view, exactly as the same
+  // control does it on the desktop (see the session manager).
+  const setAgent = useCallback(
+    (name: string) => {
+      if (!setTabAgent(name)) {
+        new Notice("Background jobs are still running in this conversation. Switch agents once they've finished.", 6000);
+      }
     },
-    [plugin, setTabPermissionMode]
+    [setTabAgent]
   );
+  const setModel = useCallback((value: string) => setTabModel(value), [setTabModel]);
+  const setMode = useCallback((mode: string) => setTabPermissionMode(mode), [setTabPermissionMode]);
 
   // AI Commands seam: expose `runCommand` so an external trigger (the AI
   // Commands companion plugin) can open a new chat pre-loaded with a prompt

@@ -479,3 +479,21 @@ test("every view shows the permission mode, model and agent the conversation rea
   assert.equal(procs[1].spec.sessionId, "s-1");
   assert.equal(phone.events.filter((e) => e.type === "hyo_session_info").at(-1).permissionMode, "bypassPermissions");
 });
+
+test("a model picked on any view: the conversation carries on on it in a fresh process, and every view shows it", () => {
+  const { procs, make } = fakes();
+  const owner = new SessionOwner(make, { sessionId: "s-1" });
+  const laptop = listen();
+  const a = owner.subscribe(laptop.sub);
+  owner.send(a, spec({ model: "claude-opus-5-5" }), "go");
+  // Picked mid-turn: shown at once, takes effect once the turn is done.
+  owner.setModel("claude-haiku-5-5");
+  assert.equal(laptop.events.filter((e) => e.type === "hyo_session_info").at(-1).model, "claude-haiku-5-5");
+  assert.equal(procs[0].stopped, false, "never mid-turn");
+  procs[0].emit(result);
+  assert.equal(procs[0].stopped, true);
+  // Whoever sends next (with their own model) gets the conversation's.
+  owner.send(a, spec({ model: "claude-opus-5-5", sessionId: null }), "next");
+  assert.equal(procs[1].spec.model, "claude-haiku-5-5");
+  assert.equal(procs[1].spec.sessionId, "s-1");
+});
