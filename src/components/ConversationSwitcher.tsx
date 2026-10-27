@@ -6,7 +6,8 @@ import { ChevronIcon, CloseIcon, PencilIcon, PinIcon, PlusIcon } from "./switche
 // The conversation bar and its panel, shared by desktop and phone.
 //
 // The bar is one button: the conversation you're in, how many are open, and a
-// red dot when another one is waiting on you. Beside it, New conversation.
+// red dot when another one is waiting on you. Beside it, Close (the one
+// you're in, unless it's pinned) and New conversation.
 // Tapping the button opens a panel with two sides: Open (the conversations in
 // play: Main chat first, then the pinned ones, then the rest) and History
 // (everything else, searchable).
@@ -162,6 +163,16 @@ export function ConversationSwitcher<T extends SwitcherTask>({
             <ChevronIcon up={placement === "bottom"} />
           </span>
         </button>
+        {current && !current.live?.isMain && !current.pinned && (
+          <button
+            className="hyo-cs-iconbtn hyo-cs-close-current"
+            onClick={() => onClose(current.tabId!)}
+            title="Close this conversation"
+            aria-label="Close this conversation"
+          >
+            <CloseIcon />
+          </button>
+        )}
         <button className="hyo-cs-iconbtn hyo-cs-new" onClick={onNew} title="New conversation" aria-label="New conversation">
           <PlusIcon />
         </button>
