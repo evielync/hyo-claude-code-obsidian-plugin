@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.1
+
+**The one where you can steer your agent mid-reply**
+
+- **Steer your agent while it's still working.** Send a message while your agent is replying and a **Send now** button shows on it. Press it and your agent reads it at its next step and changes course, instead of waiting for the whole reply to finish. Works on your Mac and your phone.
+- **Close a conversation straight from the bar.** The × beside New conversation closes the one you're in, without opening the list. Pinned conversations stay open, so they don't have one.
+- **Open Hyo from a Shortcut.** Hyo has its own link now: `obsidian://hyo?vault=YourVault` opens it on your Mac or your phone, with nothing else to install. Add `&prompt=` and your text to start a new conversation with it waiting in the box, ready for you to send.
+- **Fixed:** conversations no longer say they're waiting on you when they aren't. If an approval, question or plan ends without an answer, because you pressed Stop or your agent moved on, it clears on every device.
+- **Fixed:** open conversations show when they were really last active. Older ones were showing "just now".
+
 ## 0.8.0
 
 **The one where tabs get a makeover and sync between your devices**
