@@ -158,6 +158,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     sendMessage,
     sendPermissionResponse,
     sendQuestionAnswer,
+    sendQueuedNow,
     stopGeneration,
     compact,
     recoverSession,
@@ -1282,6 +1283,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
           scrollRef={scrollRef}
           onPermissionResponse={answerPermission}
           onQuestionAnswer={sendQuestionAnswer}
+          onSendNow={sendQueuedNow}
           onClaudeUpdate={runClaudeUpdate}
           onClaudeSignIn={runClaudeSignIn}
           onOpenCall={setOpenCall}

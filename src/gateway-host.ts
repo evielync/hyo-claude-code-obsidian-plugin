@@ -22,6 +22,7 @@
 //   { type:'reattach',     tabIds:[...] }
 //   { type:'permission_response', tabId, requestId, behavior, toolName?, updatedInput? }
 //   { type:'interrupt',    tabId }
+//   { type:'send_now',     tabId, qid }   ("Send now" on a waiting message; session-owner.ts)
 //   { type:'stop',         tabId }
 //   { type:'generate_title', requestId, userMessage, assistantMessage }
 //   { type:'list_agents' }

@@ -32,6 +32,10 @@ export interface Message {
   hyoError?: boolean;
   // Waiting for the turn under way to finish (sent here or on another device).
   queuedId?: string;
+  // Waiting, and it can go into the reply under way: "Send now" is offered.
+  steerable?: boolean;
+  // "Send now" was pressed: on its way, Claude takes it in at the reply's next step.
+  steering?: boolean;
   // The id this message went to the conversation's owner with (session-owner.ts).
   sendId?: string;
   attachments?: { type: string; name: string; preview?: string }[];

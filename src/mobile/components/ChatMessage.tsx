@@ -10,6 +10,7 @@ import { THINKING_BLOCK_ERROR_RE } from "../session-repair";
 import { parseClaudeUpdateError, isClaudeAuthError } from "../../models";
 import { ClaudeSignInCard } from "../../components/ClaudeSignInCard";
 import { ClaudeUpdateCard, type ClaudeUpdateRunner } from "../../components/ClaudeUpdateCard";
+import { QueuedNote } from "../../components/QueuedNote";
 
 interface ChatMessageProps {
   message: Message;
@@ -17,9 +18,11 @@ interface ChatMessageProps {
   onClaudeUpdate?: ClaudeUpdateRunner;
   onPermissionResponse?: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
   onQuestionAnswer?: (questionId: string, answers: Record<string, string>) => void;
+  /** "Send now" on a waiting message: into the reply under way. */
+  onSendNow?: (qid: string) => void;
 }
 
-export function ChatMessage({ message, onRecover, onClaudeUpdate, onPermissionResponse, onQuestionAnswer }: ChatMessageProps) {
+export function ChatMessage({ message, onRecover, onClaudeUpdate, onPermissionResponse, onQuestionAnswer, onSendNow }: ChatMessageProps) {
   if (message.isCompaction) {
     return <CompactionMessage message={message} />;
   }
@@ -27,7 +30,7 @@ export function ChatMessage({ message, onRecover, onClaudeUpdate, onPermissionRe
   // "Voice chat" line); the chat shows the work, as Grok Bot does.
   if (message.handoff) return null;
   if (message.role === "user") {
-    return <UserMessage message={message} />;
+    return <UserMessage message={message} onSendNow={onSendNow} />;
   }
   if (message.role === "assistant") {
     return (
@@ -56,7 +59,7 @@ function CompactionMessage({ message }: { message: Message }) {
   );
 }
 
-function UserMessage({ message }: { message: Message }) {
+function UserMessage({ message, onSendNow }: { message: Message; onSendNow?: (qid: string) => void }) {
   // Use stored metadata when available (messages sent with file attachments).
   // displayText holds exactly what the user typed; attachments holds file names.
   // Fall back to raw content for messages sent before this change.
@@ -81,7 +84,7 @@ function UserMessage({ message }: { message: Message }) {
         )}
         {displayText && <div className="hyo-message-text">{displayText}</div>}
       </div>
-      {message.queuedId && <div className="hyo-message-queued">Queued: sends when the current reply finishes</div>}
+      {message.queuedId && <QueuedNote qid={message.queuedId} steerable={message.steerable} steering={message.steering} onSendNow={onSendNow} />}
     </div>
   );
 }

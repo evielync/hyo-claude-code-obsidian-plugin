@@ -7,7 +7,7 @@ const spawn: typeof import("child_process").spawn = Platform.isMobile ? (undefin
 const randomUUID: typeof import("crypto").randomUUID = Platform.isMobile ? (undefined as any) : require("crypto").randomUUID;
 const nodePath: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
 import { isNative1M, baseModelId } from "./models";
-import { supportsEffortFlag, probeCliCapabilities } from "./cli-capabilities";
+import { supportsEffortFlag, supportsReplayFlag, probeCliCapabilities } from "./cli-capabilities";
 
 // Current models run 1M context natively and don't accept a "[1m]" suffix —
 // the API doesn't recognize it as a valid variant and silently falls back to
@@ -58,6 +58,10 @@ export class ClaudeTransport {
   private proc: ChildProcess | null = null;
   private buffer = "";
   private stopped = false;
+  // Started with --replay-user-messages: Claude echoes each message it takes
+  // in (with the uuid it was sent with), so one sent mid-reply can be told
+  // apart from one still waiting.
+  private replays = false;
   /**
    * request_id -> the tool input the CLI asked permission for. Entries are
    * consumed when the corresponding permission response is sent; the whole map
@@ -99,6 +103,14 @@ export class ClaudeTransport {
     if (agent) {
       args.push("--agent", agent);
     }
+
+    // Claude echoes back each message written to it when it takes it in. A
+    // message sent while a reply is running is held until the reply's next
+    // step, and the echo is how Hyo knows when it landed (session-owner.ts,
+    // "Send now"). Older CLIs without the flag refuse to start with it, so
+    // it goes only where the probe has seen it.
+    this.replays = supportsReplayFlag(cliPath);
+    if (this.replays) args.push("--replay-user-messages");
 
     if (this.options.settingSources) args.push("--setting-sources", this.options.settingSources);
     if (this.options.settingsPath) args.push("--settings", this.options.settingsPath);
@@ -242,7 +254,12 @@ export class ClaudeTransport {
     });
   }
 
-  sendUserMessage(content: string | any[]): void {
+  /**
+   * Write a message to Claude. `uuid` comes back on Claude's echo of it (and
+   * its command_lifecycle events), so a message sent mid-reply can be
+   * followed to the moment Claude takes it in.
+   */
+  sendUserMessage(content: string | any[], opts: { uuid?: string } = {}): void {
     if (!this.proc?.stdin?.writable) return;
 
     const messageContent =
@@ -252,6 +269,7 @@ export class ClaudeTransport {
       JSON.stringify({
         type: "user",
         message: { role: "user", content: messageContent },
+        ...(opts.uuid ? { uuid: opts.uuid } : {}),
       }) + "\n";
 
     this.proc.stdin.write(msg);
@@ -373,6 +391,11 @@ export class ClaudeTransport {
 
   isRunning(): boolean {
     return this.proc !== null && !this.stopped && !this.proc.killed;
+  }
+
+  /** A message can go to this process mid-reply and be followed until Claude takes it in. */
+  canSteer(): boolean {
+    return this.replays && this.isRunning();
   }
 }
 

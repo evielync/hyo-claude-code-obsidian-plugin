@@ -100,7 +100,7 @@ test("a message sent mid-turn is held, shown queued on every view, and goes when
   owner.send(a, spec(), "one", "q1");
   owner.send(b, spec(), "two", "q2");
   assert.deepEqual(procs[0].sent, ["one"], "turns never interleave");
-  for (const v of [A, B]) assert.deepEqual(v.events.find((e) => e.type === "hyo_queued"), { type: "hyo_queued", qid: "q2", text: "two" });
+  for (const v of [A, B]) assert.deepEqual(v.events.find((e) => e.type === "hyo_queued"), { type: "hyo_queued", qid: "q2", text: "two", steerable: false });
   procs[0].emit(result);
   assert.deepEqual(procs[0].sent, ["one", "two"]);
   assert.deepEqual(said(A.events), ["one", "two"]);
@@ -158,7 +158,7 @@ test("someone opening the conversation mid-turn gets the turn so far, what's que
     ["system", "assistant", "control_request"],
     "no streamed fragments of a message that's complete"
   );
-  assert.deepEqual(r.queued, [{ qid: "q2", text: "and email it" }]);
+  assert.deepEqual(r.queued, [{ qid: "q2", text: "and email it", steerable: false }]);
   // Then it carries on live.
   procs[0].emit(result);
   assert.ok(late.events.includes(result));
@@ -349,7 +349,7 @@ test("the phone's tabs attach to the Mac's owners through the gateway", async ()
     assert.equal(sent.at(-1).event.type, "stream_event");
     // The phone sends mid-turn: queued on the laptop too.
     gatewaySession({ type: "prompt", tabId: "phone-tab", sessionId: "s-1", text: "from the phone", qid: "qp" }, ws, sink, ctx);
-    assert.deepEqual(laptop.events.at(-1), { type: "hyo_queued", qid: "qp", text: "from the phone" });
+    assert.deepEqual(laptop.events.at(-1), { type: "hyo_queued", qid: "qp", text: "from the phone", steerable: false });
     procs[0].emit(result);
     assert.equal(procs.length, 1, "the same process");
     assert.deepEqual(procs[0].sent[1], [{ type: "text", text: "from the phone" }]);

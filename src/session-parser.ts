@@ -1,6 +1,6 @@
 import { debug } from "./debug";
 import { Platform } from "obsidian";
-import { isSelfStartedPrompt, isInjectedContext } from "./reply-stream";
+import { isSelfStartedPrompt, isInjectedContext, steerAsUserEntry } from "./reply-stream";
 import { transcriptModel, resumeModel } from "./models";
 import { mergeStoredCalls, upsertCall, callOnlySessions, type VoiceCallRecord } from "./voice/voice-call";
 import type * as fsTypes from "fs"; // type-only (erased at build) for annotations
@@ -590,8 +590,10 @@ export function parseSessionEntries(entries: any[]): HistoryMessage[] {
   let replyBreak = false;
 
   {
-    for (const d of entries) {
-      if (!d) continue;
+    for (const entry of entries) {
+      if (!entry) continue;
+      // A message sent mid-reply ("Send now") shows where Claude took it in.
+      const d = steerAsUserEntry(entry) || entry;
       try {
         if (isSelfStartedPrompt(d)) {
           replyBreak = true;

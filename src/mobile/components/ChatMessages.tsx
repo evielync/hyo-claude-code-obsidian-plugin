@@ -13,6 +13,8 @@ interface ChatMessagesProps {
   scrollRef: React.MutableRefObject<{ nearBottom: boolean }>;
   onPermissionResponse: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
   onQuestionAnswer: (questionId: string, answers: Record<string, string>) => void;
+  /** "Send now" on a waiting message: into the reply under way. */
+  onSendNow?: (qid: string) => void;
   onRecover?: () => void;
   onClaudeUpdate?: ClaudeUpdateRunner;
   /** Tapping a voice-call line opens its transcript. */
@@ -30,6 +32,7 @@ export function ChatMessages({
   scrollRef,
   onPermissionResponse,
   onQuestionAnswer,
+  onSendNow,
   onRecover,
   onClaudeUpdate,
   onOpenCall,
@@ -172,6 +175,7 @@ export function ChatMessages({
             onClaudeUpdate={onClaudeUpdate}
             onPermissionResponse={onPermissionResponse}
             onQuestionAnswer={onQuestionAnswer}
+            onSendNow={onSendNow}
           />
         );
       })}

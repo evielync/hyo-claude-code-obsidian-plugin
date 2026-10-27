@@ -24,6 +24,17 @@
  * turns never interleave. A permission, question or plan answered in one view
  * is answered once, and the others are told (`hyo_permission_answered`).
  *
+ * "Send now" on a waiting message (`sendNow`) writes it to Claude while the
+ * reply is still running, to steer it. Claude holds it until the reply's next
+ * step (a tool call finishing), takes it in, and carries on as one reply; it
+ * echoes the message back (`--replay-user-messages`) the moment it does, and
+ * every view moves it to that point (`hyo_steered`). Between the click and
+ * the echo every view shows it as on its way (`hyo_steering`). A reply with
+ * no steps left (only writing) ends without taking it in; Claude then answers
+ * it as its next turn, so the owner starts that turn for it straight away
+ * (`hyo_user_message`) and never sends it a second time. If the process ends
+ * before Claude took it in, it goes back to the front of the queue.
+ *
  * Someone opening a conversation mid-turn is caught up with `hyo_replay`: the
  * turn's events so far, the messages waiting, and any question still open.
  * History read from disk stops where the turn began (`turnStartLine`), so the
@@ -66,7 +77,8 @@ export interface OwnerSpec {
 /** The parts of ClaudeTransport the owner drives. */
 export interface ProcLike {
   spawn(): void;
-  sendUserMessage(content: string | any[]): void;
+  /** `uuid` comes back on Claude's echo of the message (see `canSteer`); a view's transport takes its own send options. */
+  sendUserMessage(content: string | any[], opts?: { uuid?: string; qid?: string; silent?: boolean }): void;
   sendPermissionResponse(
     requestId: string,
     behavior: "allow" | "allow_always" | "deny",
@@ -79,6 +91,8 @@ export interface ProcLike {
   isRunning(): boolean;
   /** Change the permission mode of the running process; returns the request's id (its answer comes back as a control_response). */
   setPermissionMode?(mode: string): string | void;
+  /** Claude echoes the messages it takes in, so one can be sent mid-reply and followed (`--replay-user-messages`). */
+  canSteer?(): boolean;
 }
 
 /** What a conversation's process is really running with, as every view shows it. */
@@ -165,6 +179,14 @@ interface QueuedSend {
   text: string;
 }
 
+/** A waiting message sent to Claude mid-reply ("Send now"), until Claude takes it in. */
+interface SteerSend extends QueuedSend {
+  /** Sent with the message; Claude's echo and command_lifecycle events carry it back. */
+  uuid: string;
+  /** The reply ended before Claude took it in, so its own turn has been started for it. */
+  turnStarted?: boolean;
+}
+
 export const DEFAULT_GRACE_MS = 3 * 60_000;
 export const DEFAULT_PROC_IDLE_MS = 30 * 60_000;
 const MAX_REPLAY_EVENTS = 20_000;
@@ -193,6 +215,16 @@ function isMainContent(e: any): boolean {
 
 function genQid(): string {
   return "q-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+}
+
+/** A v4 UUID: Claude only takes a real one as a message's uuid. */
+function genUuid(): string {
+  const c: any = (globalThis as any).crypto;
+  if (c?.randomUUID) return c.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (ch) => {
+    const r = (Math.random() * 16) | 0;
+    return (ch === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
 }
 
 /** The person's words from a message: text blocks, without the hidden reminders. */
@@ -229,6 +261,8 @@ export class SessionOwner {
   private jobs: JobMap = {};
   private _sessionId: string | null;
   private queue: QueuedSend[] = [];
+  // Sent to Claude mid-reply and not yet taken in, oldest first.
+  private steers: SteerSend[] = [];
   private turn: TurnRecord | null = null;
   // Asks Claude is waiting on (permissions, questions, plans), by request id.
   private openAsks = new Map<string, any>();
@@ -288,6 +322,11 @@ export class SessionOwner {
 
   get turnInProgress(): boolean {
     return !!this.turn;
+  }
+
+  /** A waiting message can be sent now, into the reply under way ("Send now"). */
+  get canSteer(): boolean {
+    return this.generating && !!this.proc && this.proc.isRunning() && !!this.proc.canSteer?.();
   }
 
   /** What the conversation's process is really running with (null before it has ever run). */
@@ -394,11 +433,17 @@ export class SessionOwner {
     const inTurn = new Set<string>();
     if (t) for (const e of t.events) if (e?.type === "control_request" && e.request_id) inTurn.add(e.request_id);
     const asks = [...this.openAsks.entries()].filter(([id]) => !inTurn.has(id)).map(([, e]) => e);
-    if (!t && !this.queue.length && !asks.length) return null;
+    const steering = this.steers.filter((s) => !s.turnStarted);
+    if (!t && !this.queue.length && !steering.length && !asks.length) return null;
+    const steerable = this.canSteer;
     return {
       type: "hyo_replay",
       turn: t ? { qid: t.qid, text: t.text, selfStarted: !!t.selfStarted, events: [...t.events] } : null,
-      queued: this.queue.filter((q) => !q.silent).map((q) => ({ qid: q.qid, text: q.text })),
+      // Sent with "Send now" and on their way first, then the ones still waiting.
+      queued: [
+        ...steering.map((s) => ({ qid: s.qid, text: s.text, steering: true })),
+        ...this.queue.filter((q) => !q.silent).map((q) => ({ qid: q.qid, text: q.text, steerable })),
+      ],
       asks,
     };
   }
@@ -434,11 +479,81 @@ export class SessionOwner {
     this.cancelGrace();
     if (this.generating) {
       this.queue.push(item);
-      if (!item.silent) this.broadcast({ type: "hyo_queued", qid: item.qid, text: item.text });
+      if (!item.silent) this.broadcast({ type: "hyo_queued", qid: item.qid, text: item.text, steerable: this.canSteer });
       return item.qid;
     }
     this.dispatch(item);
     return item.qid;
+  }
+
+  /**
+   * "Send now" on a waiting message: it goes to Claude straight away, into
+   * the reply under way, instead of after it. Every view shows it on its way
+   * (`hyo_steering`) until Claude takes it in (see `steerTakenIn`). Returns
+   * false, changing nothing, if it isn't waiting any more (it already went,
+   * from this view or another) or there's no reply to steer.
+   */
+  sendNow(qid: string): boolean {
+    const at = this.queue.findIndex((q) => q.qid === qid && !q.silent);
+    if (at < 0 || !this.canSteer) return false;
+    const [item] = this.queue.splice(at, 1);
+    const steer: SteerSend = { ...item, uuid: genUuid() };
+    this.steers.push(steer);
+    this.broadcast({ type: "hyo_steering", qid: item.qid });
+    this.proc!.sendUserMessage(item.content, { uuid: steer.uuid });
+    return true;
+  }
+
+  /**
+   * Claude took in a message sent with "Send now" (its echo, or the
+   * command_lifecycle event saying it started, whichever comes first). Mid-
+   * reply, every view shows it there and the reply carries on below it.
+   */
+  private steerTakenIn(uuid: string): void {
+    const at = this.steers.findIndex((s) => s.uuid === uuid);
+    if (at < 0) return;
+    const [s] = this.steers.splice(at, 1);
+    // Its own turn was started when the reply before it ended.
+    if (s.turnStarted) return;
+    if (!this.generating) {
+      this.beginTurn(s);
+      return;
+    }
+    const told = { type: "hyo_steered", qid: s.qid, text: s.text };
+    this.record(told);
+    this.broadcast(told);
+  }
+
+  /**
+   * Messages sent with "Send now" that Claude never took in (its process
+   * ended first): back to the front of the queue, in the order they went,
+   * and every view shows them waiting again.
+   */
+  private steerCancelled(uuid: string): void {
+    const at = this.steers.findIndex((s) => s.uuid === uuid);
+    if (at < 0) return;
+    const [{ uuid: _u, turnStarted, ...item }] = this.steers.splice(at, 1);
+    this.queue.unshift(item);
+    // Claude dropped it before starting it: the turn begun for it never ran.
+    const ownTurn = !!turnStarted && this.turn?.qid === item.qid;
+    if (ownTurn) {
+      this.generating = false;
+      this.turn = null;
+      this._seq++;
+    }
+    this.broadcast({ type: "hyo_queued", qid: item.qid, text: item.text, steerable: this.canSteer });
+    if (ownTurn) {
+      const next = this.queue.shift();
+      if (next) this.dispatch(next);
+    }
+  }
+
+  private returnSteers(): void {
+    if (!this.steers.length) return;
+    const back = this.steers.map(({ uuid: _u, turnStarted: _t, ...item }) => item as QueuedSend);
+    this.steers = [];
+    this.queue.unshift(...back);
+    for (const item of back) this.broadcast({ type: "hyo_queued", qid: item.qid, text: item.text, steerable: false });
   }
 
   private dispatch(item: QueuedSend): void {
@@ -462,12 +577,17 @@ export class SessionOwner {
         return;
       }
     }
+    this.beginTurn(item);
+    this.proc!.sendUserMessage(item.content);
+  }
+
+  /** A turn starts with this message: every view shows it sent, with the reply to come. */
+  private beginTurn(item: QueuedSend): void {
     this.cancelIdle();
     this.generating = true;
     this._seq++;
     this.turn = { qid: item.qid, text: item.text, startLine: this.lines(), events: [] };
     this.broadcast({ type: "hyo_user_message", qid: item.qid, text: item.text, ...(item.silent ? { silent: true } : {}) });
-    this.proc!.sendUserMessage(item.content);
   }
 
   private lines(): number | null {
@@ -533,6 +653,8 @@ export class SessionOwner {
     this.openAsks.clear();
     this.opts.lock?.release();
     for (const s of [...this.subs.values()]) s.onClose?.(code);
+    // Sent with "Send now" but never taken in: they wait again, first.
+    this.returnSteers();
     // Messages still waiting: start again for them, unless it just died on
     // starting (it would only die again).
     const next = this.queue.shift();
@@ -545,6 +667,20 @@ export class SessionOwner {
 
   private onMessage(proc: ProcLike, e: any): void {
     if (this.proc !== proc) return;
+    // Claude's echo of a message written to it (--replay-user-messages). Every
+    // view already shows the message from the owner's own announcements, so
+    // the echo itself never reaches a view: it only says when Claude took in
+    // one sent with "Send now".
+    if (e?.type === "user" && e.isReplay) {
+      if (typeof e.uuid === "string") this.steerTakenIn(e.uuid);
+      return;
+    }
+    // Newer CLIs also say when a message they were holding starts; a batch
+    // of held messages is taken in together, echoed as one.
+    if (e?.type === "command_lifecycle" && typeof e.command_uuid === "string" && this.steers.length) {
+      if (e.state === "started" || e.state === "completed") this.steerTakenIn(e.command_uuid);
+      else if (e.state === "cancelled") this.steerCancelled(e.command_uuid);
+    }
     if (e?.type === "system") {
       if (e.subtype === "init" && e.session_id && e.session_id !== this._sessionId) {
         this._sessionId = e.session_id;
@@ -591,6 +727,17 @@ export class SessionOwner {
         this.opts.onTurnEnd?.(this);
       } catch (err) {
         console.error("[hyo] A turn-end listener failed:", err);
+      }
+      // A message sent with "Send now" whose turn this was is done with.
+      this.steers = this.steers.filter((s) => !s.turnStarted);
+      // The reply ended before Claude took in a message sent with "Send
+      // now" (it had no steps left, only writing). Claude answers it next, by
+      // itself: its turn starts now, and it is never written a second time.
+      const held = this.steers[0];
+      if (held) {
+        held.turnStarted = true;
+        this.beginTurn(held);
+        return;
       }
       const next = this.queue.shift();
       if (next) this.dispatch(next);
@@ -669,6 +816,8 @@ export class SessionOwner {
   }
 
   private stopProc(): void {
+    // Anything sent with "Send now" that the process never took in waits again.
+    this.returnSteers();
     const p = this.proc;
     this.proc = null;
     this.procSpec = null;
@@ -945,6 +1094,11 @@ export class OwnerTransport implements ProcLike {
     this.owner.interrupt();
   }
 
+  /** "Send now" on a waiting message: into the reply under way (every view shows it). */
+  sendNow(qid: string): boolean {
+    return this.owner.sendNow(qid);
+  }
+
   stop(): void {
     if (this.sub) this.owner.detach(this.sub);
     this.sub = null;
@@ -1135,6 +1289,10 @@ export function gatewaySession(m: any, ws: object, sink: GatewayClientSink, ctx:
     }
     case "interrupt":
       if (tabId) phoneTabs.get(tabId)?.owner.interrupt();
+      return true;
+    case "send_now":
+      // "Send now" on a message waiting in this conversation.
+      if (tabId && typeof m.qid === "string") phoneTabs.get(tabId)?.owner.sendNow(m.qid);
       return true;
     case "restart":
       if (tabId) phoneTabs.get(tabId)?.owner.restart();

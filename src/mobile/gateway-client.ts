@@ -534,6 +534,11 @@ export class GatewayClient {
     this.send({ type: "interrupt", tabId });
   }
 
+  /** "Send now" on a message waiting in this conversation: the Mac sends it into the reply under way. */
+  sendNow(tabId: string, qid: string): void {
+    this.send({ type: "send_now", tabId, qid });
+  }
+
   /** Start hearing a conversation live in this tab, caught up on any turn under way. */
   attach(tabId: string, sessionId?: string | null): void {
     this.send({ type: "attach", tabId, sessionId: sessionId || undefined });

@@ -187,6 +187,11 @@ export class GatewayTransport {
     this.client.interrupt(this.tabId);
   }
 
+  /** "Send now" on a waiting message: the Mac sends it into the reply under way (every view shows it). */
+  sendNow(qid: string): void {
+    this.client.sendNow(this.tabId, qid);
+  }
+
   /** Stop hearing the conversation. Never stops its process or a turn on the Mac. */
   stop(): void {
     this.running = false;

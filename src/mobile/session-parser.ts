@@ -7,7 +7,7 @@
 // jsonl lines into chat messages.
 
 import { GatewayClient } from "./gateway-client";
-import { isSelfStartedPrompt, isInjectedContext } from "../reply-stream";
+import { isSelfStartedPrompt, isInjectedContext, steerAsUserEntry } from "../reply-stream";
 import type { VoiceCallRecord } from "../voice/voice-call";
 import { transcriptModel, resumeModel } from "../models";
 
@@ -148,8 +148,10 @@ export function parseSessionLines(lines: any[]): HistoryMessage[] {
   // Claude started the next turn itself: its reply is a message of its own.
   let replyBreak = false;
 
-  for (const d of lines) {
-    if (!d) continue;
+  for (const line of lines) {
+    if (!line) continue;
+    // A message sent mid-reply ("Send now") shows where Claude took it in.
+    const d = steerAsUserEntry(line) || line;
     try {
       if (isSelfStartedPrompt(d)) {
         replyBreak = true;

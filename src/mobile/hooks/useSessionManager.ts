@@ -1,6 +1,6 @@
 import { debug } from "../debug";
 import { addOutgoing, startQueued } from "../../send-queue";
-import { turnStarted, queued as queuedElsewhere, permissionAnswered, replayBase, queueDropped, hasQueued } from "../../live-sync";
+import { turnStarted, queued as queuedElsewhere, permissionAnswered, replayBase, queueDropped, hasQueued, steering, steered } from "../../live-sync";
 import { newStreamState, processContentBlocks, buildSnapshot, endTurn, startsTurnOfItsOwn, openReply, isInjectedContext, type StreamState } from "../../reply-stream";
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { GatewayTransport } from "../gateway-transport";
@@ -328,6 +328,19 @@ export function useSessionManager(options: SessionManagerOptions) {
         }
         if (event.type === "hyo_queued") {
           onTab((t) => ({ ...t, messages: queuedElsewhere(t.messages, event) }));
+          return;
+        }
+        if (event.type === "hyo_steering") {
+          // "Send now" pressed here or elsewhere: on its way to Claude.
+          onTab((t) => ({ ...t, messages: steering(t.messages, event.qid) }));
+          return;
+        }
+        if (event.type === "hyo_steered") {
+          // Claude took it in mid-reply: it shows here, and the rest of the
+          // reply streams into a fresh slot below it.
+          turnRunningRef.current[tabId] = true;
+          streamStatesRef.current[tabId] = newStreamState();
+          onTab((t) => ({ ...t, messages: steered(t.messages, event), generating: true, lastActivity: Date.now() }));
           return;
         }
         if (event.type === "hyo_permission_answered") {
@@ -1238,6 +1251,17 @@ export function useSessionManager(options: SessionManagerOptions) {
     [updateTabLastAssistant]
   );
 
+  /** "Send now" on a waiting message: the Mac sends it into the reply under way (session-owner.ts). */
+  const sendQueuedNow = useCallback((qid: string) => {
+    const tabId = stateRef.current.activeTabId;
+    const transport = transportsRef.current[tabId];
+    if (!transport) return;
+    // Shown on its way at once (the Mac confirms it with hyo_steering, then
+    // hyo_steered or its turn starting); a second tap does nothing.
+    setState((prev) => ({ ...prev, tabs: prev.tabs.map((t) => (t.id === tabId ? { ...t, messages: steering(t.messages, qid) } : t)) }));
+    transport.sendNow(qid);
+  }, []);
+
   const stopGeneration = useCallback(() => {
     const tabId = stateRef.current.activeTabId;
     transportsRef.current[tabId]?.sendInterrupt();
@@ -1958,6 +1982,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     sendMessage,
     sendPermissionResponse,
     sendQuestionAnswer,
+    sendQueuedNow,
     stopGeneration,
     compact,
     recoverSession,

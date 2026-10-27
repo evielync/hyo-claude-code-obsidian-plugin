@@ -110,6 +110,26 @@ export function isInjectedContext(entry: any): boolean {
   return entry?.type === "user" && (entry.isMeta === true || entry.isSynthetic === true);
 }
 
+/**
+ * A message the person sent while Claude was still replying, which Claude
+ * took in partway through ("Send now"). The CLI records it in the transcript
+ * where it landed, as a `queued_command` attachment rather than a user
+ * message, so reopening the conversation turns it back into the person's
+ * message (and the reply after it into a message of its own). Returns null
+ * for anything else, including held prompts Claude added itself (a task
+ * notification).
+ */
+export function steerAsUserEntry(entry: any): any | null {
+  const a = entry?.type === "attachment" ? entry.attachment : null;
+  if (a?.type !== "queued_command") return null;
+  if (a.commandMode && a.commandMode !== "prompt") return null;
+  if (entry.isMeta) return null;
+  const content = typeof a.prompt === "string" ? [{ type: "text", text: a.prompt }] : Array.isArray(a.prompt) ? a.prompt : null;
+  if (!content || !content.length) return null;
+  const user = { type: "user", uuid: a.source_uuid || entry.uuid, message: { role: "user", content } };
+  return isSelfStartedPrompt(user) ? null : user;
+}
+
 export function processContentBlocks(contentArr: any[], ss: StreamState, source: "user" | "assistant") {
   for (const block of contentArr) {
     if (block.type === "text") {

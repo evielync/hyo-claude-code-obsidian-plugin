@@ -30,13 +30,22 @@ export function nextQueued<M extends QueueMsg>(messages: M[]): M | null {
   return messages.find((m) => !!m.queuedId) || null;
 }
 
-/** It's going now: it stops being queued, and its reply slot goes right after it. */
-export function startQueued<M extends QueueMsg>(messages: M[], queuedId: string, reply: M): M[] {
+/**
+ * It's going now: it stops being queued, and its reply slot goes right after
+ * it. It goes ahead of anything still waiting (one sent with "Send now" can
+ * start before messages queued earlier).
+ */
+export function startQueued<M extends QueueMsg & { steerable?: boolean; steering?: boolean }>(messages: M[], queuedId: string, reply: M): M[] {
   const i = messages.findIndex((m) => m.queuedId === queuedId);
   if (i < 0) return [...messages, reply];
   const sent = { ...messages[i] };
   delete sent.queuedId;
-  return [...messages.slice(0, i), sent, reply, ...messages.slice(i + 1)];
+  delete sent.steerable;
+  delete sent.steering;
+  const rest = [...messages.slice(0, i), ...messages.slice(i + 1)];
+  let at = rest.findIndex((m) => !!m.queuedId);
+  if (at < 0 || at > i) at = i;
+  return [...rest.slice(0, at), sent, reply, ...rest.slice(at)];
 }
 
 /** The reply being written: the last reply slot that isn't a call line. */

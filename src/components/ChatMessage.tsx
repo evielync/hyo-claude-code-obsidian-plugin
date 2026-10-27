@@ -9,12 +9,15 @@ import { THINKING_BLOCK_ERROR_RE } from "../session-repair";
 import { parseClaudeUpdateError, isClaudeAuthError } from "../models";
 import { ClaudeUpdateCard, type ClaudeUpdateRunner } from "./ClaudeUpdateCard";
 import { ClaudeSignInCard, type ClaudeSignInRunner } from "./ClaudeSignInCard";
+import { QueuedNote } from "./QueuedNote";
 
 interface ChatMessageProps {
   message: Message;
   onRecover?: () => void;
   onPermissionResponse?: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
   onQuestionAnswer?: (questionId: string, answers: Record<string, string>) => void;
+  /** "Send now" on a waiting message: into the reply under way. */
+  onSendNow?: (qid: string) => void;
   /** Runs the Claude update from the "needs an update" card. */
   onClaudeUpdate?: ClaudeUpdateRunner;
   /** Runs the sign-in from the "sign in again" card. */
@@ -23,7 +26,7 @@ interface ChatMessageProps {
   isLast?: boolean;
 }
 
-export function ChatMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, onClaudeUpdate, onClaudeSignIn, isLast }: ChatMessageProps) {
+export function ChatMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, onSendNow, onClaudeUpdate, onClaudeSignIn, isLast }: ChatMessageProps) {
   if (message.isCompaction) {
     return <CompactionMessage message={message} />;
   }
@@ -31,7 +34,7 @@ export function ChatMessage({ message, onRecover, onPermissionResponse, onQuesti
   // "Voice chat" line); the chat shows the work, as Grok Bot does.
   if (message.handoff) return null;
   if (message.role === "user") {
-    return <UserMessage message={message} />;
+    return <UserMessage message={message} onSendNow={onSendNow} />;
   }
   if (message.role === "assistant") {
     return (
@@ -62,7 +65,7 @@ function CompactionMessage({ message }: { message: Message }) {
   );
 }
 
-function UserMessage({ message }: { message: Message }) {
+function UserMessage({ message, onSendNow }: { message: Message; onSendNow?: (qid: string) => void }) {
   // Use stored metadata when available (messages sent with file attachments).
   // displayText holds exactly what the user typed; attachments holds file names.
   // Fall back to raw content for messages sent before this change.
@@ -87,7 +90,7 @@ function UserMessage({ message }: { message: Message }) {
         )}
         {displayText && <div className="hyo-message-text">{displayText}</div>}
       </div>
-      {message.queuedId && <div className="hyo-message-queued">Queued: sends when the current reply finishes</div>}
+      {message.queuedId && <QueuedNote qid={message.queuedId} steerable={message.steerable} steering={message.steering} onSendNow={onSendNow} />}
     </div>
   );
 }

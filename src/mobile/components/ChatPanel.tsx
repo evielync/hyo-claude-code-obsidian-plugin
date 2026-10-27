@@ -138,6 +138,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     sendMessage,
     sendPermissionResponse,
     sendQuestionAnswer,
+    sendQueuedNow,
     stopGeneration,
     compact,
     recoverSession,
@@ -1156,6 +1157,7 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           scrollRef={scrollRef}
           onPermissionResponse={answerPermission}
           onQuestionAnswer={sendQuestionAnswer}
+          onSendNow={sendQueuedNow}
           onClaudeUpdate={runClaudeUpdate}
           onOpenCall={setOpenCall}
           hasOlder={activeHasOlder}
