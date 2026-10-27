@@ -325,6 +325,19 @@ export class ClaudeTransport {
     this.proc.stdin.write(msg);
   }
 
+  /**
+   * Change the running process's permission mode in place (the CLI's
+   * set_permission_mode control request). Returns the request id; Claude
+   * answers with a control_response, an error if it can't (a mode the
+   * process wasn't launched able to use).
+   */
+  setPermissionMode(mode: string): string | undefined {
+    if (!this.proc?.stdin?.writable) return undefined;
+    const request_id = randomUUID();
+    this.proc.stdin.write(JSON.stringify({ type: "control_request", request_id, request: { subtype: "set_permission_mode", mode } }) + "\n");
+    return request_id;
+  }
+
   sendInterrupt(): void {
     if (!this.proc?.stdin?.writable) return;
 

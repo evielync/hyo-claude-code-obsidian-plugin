@@ -35,7 +35,7 @@ import { VoiceWaveform } from "./VoiceWaveform";
 import { useSkills, type Skill } from "../hooks/useSkills";
 import type HyoPlugin from "../../main";
 import { estimateTokens, formatTokens } from "../attachments";
-import { MODEL_OPTIONS } from "../../models";
+import { MODEL_OPTIONS, PERMISSION_MODES as PHONE_PERMISSION_MODES } from "../../models";
 import { useAgents } from "../hooks/useAgents";
 
 interface AttachedFile {
@@ -96,6 +96,10 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     toggleVoiceMode,
     activeTabHasSession,
     activeAgent,
+    activeModel,
+    activePermissionMode,
+    activeInfoKnown,
+    setTabPermissionMode,
     addVoiceCall,
     setVoiceEngine,
     newTab,
@@ -578,8 +582,11 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     [plugin.settings.gatewayUrl]
   );
   const [sessionPanelOpen, setSessionPanelOpen] = useState(false);
-  const currentAgent = plugin.settings.defaultAgent || agents[0]?.name || "default";
-  const currentModel = plugin.settings.model || "claude-sonnet-5-5";
+  // What the conversation in view really runs with: its process's own model,
+  // agent and permission mode once the Mac has said, else what this phone
+  // would start it with.
+  const currentAgent = (activeInfoKnown && activeAgent) || plugin.settings.defaultAgent || agents[0]?.name || "default";
+  const currentModel = activeModel || plugin.settings.model || "claude-sonnet-5-5";
   const setAgent = useCallback((name: string) => {
     plugin.settings.defaultAgent = name;
     void plugin.saveSettings();
@@ -588,10 +595,17 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     plugin.settings.model = value;
     void plugin.saveSettings();
   }, [plugin]);
-  const setAskFirst = useCallback((val: boolean) => {
-    plugin.settings.askFirst = val;
-    void plugin.saveSettings();
-  }, [plugin]);
+  // The conversation's permission mode (its process takes it, and the Mac
+  // shows it too). Ask first or not is also what a new conversation here
+  // starts with.
+  const setMode = useCallback(
+    (mode: string) => {
+      setTabPermissionMode(mode);
+      plugin.settings.askFirst = mode !== "bypassPermissions";
+      void plugin.saveSettings();
+    },
+    [plugin, setTabPermissionMode]
+  );
 
   // AI Commands seam: expose `runCommand` so an external trigger (the AI
   // Commands companion plugin) can open a new chat pre-loaded with a prompt
@@ -1419,14 +1433,12 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
             </div>
             <div className="hyo-session-sec">
               <div className="hyo-session-sec-label">Permissions</div>
-              <button className={`hyo-session-opt${plugin.settings.askFirst ? " sel" : ""}`} onClick={() => setAskFirst(true)}>
-                <span className="hyo-session-opt-name">Ask first</span>
-                {plugin.settings.askFirst && <span className="hyo-session-opt-tick">✓</span>}
-              </button>
-              <button className={`hyo-session-opt${!plugin.settings.askFirst ? " sel" : ""}`} onClick={() => setAskFirst(false)}>
-                <span className="hyo-session-opt-name">Auto-approve</span>
-                {!plugin.settings.askFirst && <span className="hyo-session-opt-tick">✓</span>}
-              </button>
+              {PHONE_PERMISSION_MODES.map((m) => (
+                <button key={m.id} className={`hyo-session-opt${activePermissionMode === m.id ? " sel" : ""}`} onClick={() => setMode(m.id)}>
+                  <span className="hyo-session-opt-name">{m.name}</span>
+                  {activePermissionMode === m.id && <span className="hyo-session-opt-tick">✓</span>}
+                </button>
+              ))}
             </div>
           </div>
         </>

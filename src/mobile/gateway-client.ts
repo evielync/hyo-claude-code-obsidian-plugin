@@ -505,7 +505,7 @@ export class GatewayClient {
     agent?: string,
     model?: string,
     content?: any[],
-    extra: { qid?: string; silent?: boolean } = {}
+    extra: { qid?: string; silent?: boolean; permissionMode?: string } = {}
   ): void {
     this.send({ type: "prompt", tabId, text, content, sessionId, resume, askFirst, appendSystemPrompt, agent, model, ...extra });
   }
@@ -527,6 +527,11 @@ export class GatewayClient {
   /** Start hearing a conversation live in this tab, caught up on any turn under way. */
   attach(tabId: string, sessionId?: string | null): void {
     this.send({ type: "attach", tabId, sessionId: sessionId || undefined });
+  }
+
+  /** Change a conversation's permission mode on the Mac. */
+  setPermissionMode(tabId: string, sessionId: string | undefined, mode: string): void {
+    this.send({ type: "set_permission_mode", tabId, sessionId, mode });
   }
 
   /** Stop the conversation's process on the Mac so the next message starts a fresh one (once nothing runs in it). */

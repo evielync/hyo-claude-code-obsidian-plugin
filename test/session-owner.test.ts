@@ -148,7 +148,8 @@ test("someone opening the conversation mid-turn gets the turn so far, what's que
   owner.subscribe(late.sub);
   assert.equal(late.events[0].subtype, "background_tasks_changed");
   assert.equal(late.events[0].tasks[0].description, "Check Gmail");
-  const r = late.events[1];
+  assert.equal(late.events[1].type, "hyo_session_info", "what the conversation runs with comes first");
+  const r = late.events[2];
   assert.equal(r.type, "hyo_replay");
   assert.deepEqual({ qid: r.turn.qid, text: r.turn.text, selfStarted: r.turn.selfStarted }, { qid: "q1", text: "write the report", selfStarted: false });
   assert.deepEqual(
@@ -173,7 +174,7 @@ test("an open question outside a turn (a background agent asking) reaches a newc
   procs[0].emit(ask);
   const late = listen();
   owner.subscribe(late.sub);
-  assert.deepEqual(late.events[0], { type: "hyo_replay", turn: null, queued: [], asks: [ask] });
+  assert.deepEqual(late.events.find((e) => e.type === "hyo_replay"), { type: "hyo_replay", turn: null, queued: [], asks: [ask] });
 });
 
 test("closing on one device never stops the turn the other is watching", () => {
@@ -341,7 +342,8 @@ test("the phone's tabs attach to the Mac's owners through the gateway", async ()
     gatewaySession({ type: "attach", tabId: "phone-tab", sessionId: "s-1" }, ws, sink, ctx);
     assert.equal(sent[0].type, "stream");
     assert.equal(sent[0].tabId, "phone-tab");
-    assert.equal(sent[0].event.type, "hyo_replay");
+    assert.equal(sent[0].event.type, "hyo_session_info");
+    assert.equal(sent[1].event.type, "hyo_replay");
     procs[0].emit(delta("hello"));
     assert.equal(sent.at(-1).event.type, "stream_event");
     // The phone sends mid-turn: queued on the laptop too.
@@ -431,4 +433,49 @@ test("another copy of Obsidian on this Mac can't start a second main chat proces
 test("what the other side sees of a message: the words, never the hidden reminder", () => {
   assert.equal(displayText(withMainChatReminder("check my email") as string), "check my email");
   assert.equal(displayText(withMainChatReminder([{ type: "text", text: "what's this?" }, { type: "image" }])), "what's this?");
+});
+
+test("every view shows the permission mode, model and agent the conversation really runs with", () => {
+  const { procs, make } = fakes();
+  const ids: string[] = [];
+  const makeWithMode = (spec: OwnerSpec, on: any) => {
+    const p: any = make(spec, on);
+    p.setPermissionMode = (m: string) => {
+      const id = "mode-" + (ids.length + 1);
+      ids.push(id);
+      p.lastMode = m;
+      return id;
+    };
+    return p;
+  };
+  const owner = new SessionOwner(makeWithMode, { sessionId: "s-1" });
+  const laptop = listen();
+  const a = owner.subscribe(laptop.sub);
+  owner.send(a, spec({ permissionMode: "acceptEdits", model: "claude-opus-5-5", agent: "chad" }), "go");
+  assert.deepEqual(laptop.events.find((e) => e.type === "hyo_session_info"), { type: "hyo_session_info", permissionMode: "acceptEdits", model: "claude-opus-5-5", agent: "chad" });
+  procs[0].emit(result);
+  // The phone opens it: told the laptop's mode, model and agent straight away.
+  const phone = listen();
+  const p = owner.subscribe(phone.sub);
+  assert.deepEqual(phone.events[0], { type: "hyo_session_info", permissionMode: "acceptEdits", model: "claude-opus-5-5", agent: "chad" });
+  // The phone sending with its own defaults changes nothing: no restart, same mode.
+  owner.send(p, spec({ permissionMode: "manual", model: "claude-sonnet-5-5", agent: "", adopt: true }), "from the phone");
+  assert.equal(procs.length, 1);
+  procs[0].emit(result);
+  // Changed on the phone: Claude changes it in place, and both views show it.
+  owner.setPermissionMode("manual");
+  assert.equal((procs[0].proc as any).lastMode, "manual");
+  assert.equal(laptop.events.filter((e) => e.type === "hyo_session_info").at(-1).permissionMode, "manual");
+  procs[0].emit({ type: "control_response", response: { subtype: "success", request_id: ids[0], response: { mode: "default" } } });
+  procs[0].emit({ type: "system", subtype: "status", permissionMode: "default" });
+  assert.equal(owner.info!.permissionMode, "manual", "the CLI reports Ask first as default");
+  assert.equal(procs.length, 1, "no restart for a mode Claude can change in place");
+  // A mode it can only start in: a fresh process (once idle) launched in it, same conversation.
+  owner.setPermissionMode("bypassPermissions");
+  procs[0].emit({ type: "control_response", response: { subtype: "error", request_id: ids[1], error: "not launched with --dangerously-skip-permissions" } });
+  assert.equal(procs[0].stopped, true);
+  owner.send(a, spec({ permissionMode: "manual", sessionId: null }), "now");
+  assert.equal(procs[1].spec.permissionMode, "bypassPermissions", "the new process runs in the chosen mode, whoever sends");
+  assert.equal(procs[1].spec.sessionId, "s-1");
+  assert.equal(phone.events.filter((e) => e.type === "hyo_session_info").at(-1).permissionMode, "bypassPermissions");
 });

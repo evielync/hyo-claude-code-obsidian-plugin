@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
+import { PERMISSION_MODES } from "../models";
 import { useUsage, scopedLimit } from "../hooks/useUsage";
 import { useAgents } from "../hooks/useAgents";
 import {
@@ -24,23 +25,6 @@ interface HyoStatusBarProps {
   onCompact: () => void;
 }
 
-const PERMISSION_MODES = [
-  {
-    id: "manual",
-    name: "Ask first",
-    desc: "Asks before tools not in your allow list",
-  },
-  {
-    id: "acceptEdits",
-    name: "Auto-edit",
-    desc: "Also auto-approves file writes and edits",
-  },
-  {
-    id: "bypassPermissions",
-    name: "Never ask",
-    desc: "All tools run automatically — no prompts",
-  },
-];
 
 function formatTimeAgo(date: Date): string {
   const mins = Math.round((Date.now() - date.getTime()) / 60000);

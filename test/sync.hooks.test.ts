@@ -35,7 +35,7 @@ import { attachGatewaySocket } from "../src/gateway-host";
 import { ClaudeTransport } from "../src/claude-transport";
 import { setSessionOwnerFactory, shutdownSessionOwners, gatewaySessionReset } from "../src/session-owner";
 import { OpenConversationsStore, setOpenConversationsFactory, type OpenEntry } from "../src/open-conversations";
-import { getProjectDir, hasTranscript, transcriptLineCount } from "../src/session-parser";
+import { getProjectDir, hasTranscript, transcriptLineCount, listPinned } from "../src/session-parser";
 import { GatewayClient } from "../src/mobile/gateway-client";
 
 const fake = join(process.cwd(), "test", "fixtures", "fake-claude.mjs");
@@ -182,4 +182,137 @@ test("the phone never sits on 'Loading conversation…': a Mac that doesn't answ
   asked.length = 0;
   phone.result().retryLoad(tab().id);
   await waitFor("asked again", () => asked.includes("slow-convo"), 3000);
+});
+
+test("both devices show the conversation's real permission mode, and changing it on either applies to it", async (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), "hyo-hooks-mode-"));
+  process.env.FAKE_PROJECT_DIR = getProjectDir(cwd);
+  setSessionOwnerFactory({
+    make: (spec, on) => new ClaudeTransport({ ...spec, sessionId: spec.sessionId || undefined, resume: !!spec.sessionId && hasTranscript(spec.cwd, spec.sessionId), ...on }),
+    transcriptLines: (c, sid) => transcriptLineCount(c, sid),
+    graceMs: 300,
+  });
+  let saved: OpenEntry[] | null = [];
+  setOpenConversationsFactory(() => new OpenConversationsStore({ load: () => saved, save: (e) => (saved = e), seed: () => [], pins: () => listPinned(cwd) }));
+  const config: any = { vault: cwd, cwd, getCwd: () => cwd, cliPath: fake, defaultAgent: "", defaultModel: "claude-opus-5-5", getLiveVoice: () => ({}), onConnectUrl: () => {}, onStatus: () => {}, updateClaude: async () => ({ ok: false }) };
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((r) => server.once("listening", () => r()));
+  server.on("connection", (ws) => attachGatewaySocket(ws as any, { config: () => config, env: () => process.env }));
+  const url = `ws://127.0.0.1:${(server.address() as any).port}`;
+  // The laptop starts conversations in Auto-edit; the phone's own default is Ask first.
+  const desk = mountHook(useDesk as any, { cliPath: fake, cwd, model: "claude-opus-5-5", effort: "medium", permissionMode: "acceptEdits", defaultAgent: "", autoGenerateTitles: false, mainChat: false }) as any;
+  const phone = mountHook(usePhone as any, { gatewayUrl: url, model: "claude-sonnet-5-5", agent: "", askFirst: true, mainChat: false }) as any;
+  t.after(() => {
+    desk.unmount();
+    phone.unmount();
+    GatewayClient.get(url).destroy();
+    gatewaySessionReset();
+    shutdownSessionOwners();
+    setSessionOwnerFactory(null);
+    setOpenConversationsFactory(null);
+    server.close();
+  });
+  const D = () => desk.result();
+  const P = () => phone.result();
+  await waitFor("the phone connects", () => GatewayClient.get(url).getStatus() === "connected");
+
+  D().sendMessage("started on the laptop in auto-edit");
+  await waitFor("reply", () => replies(D().tabs.at(-1)).includes("Echo: started on the laptop in auto-edit"));
+  const sid = D().tabs.at(-1).cliSessionId;
+  const pTab = () => P().tabs.find((x: any) => x.cliSessionId === sid);
+  const dTab = () => D().tabs.find((x: any) => x.cliSessionId === sid);
+  await waitFor("open on the phone", () => !!pTab() && !pTab().loading);
+  P().switchTab(pTab().id);
+  await phone.flush();
+  await waitFor("the phone says Auto-edit", () => P().activePermissionMode === "acceptEdits");
+  assert.equal(P().activeModel, "claude-opus-5-5", "and the model it really runs on");
+
+  // Sending from the phone (whose default is Ask first) doesn't change it.
+  P().sendMessage("from the phone");
+  await waitFor("reply", () => replies(dTab()).includes("Echo: from the phone"));
+  assert.equal(dTab().permissionMode, "acceptEdits");
+  assert.equal(P().activePermissionMode, "acceptEdits");
+
+  // Changed on the phone: the laptop shows it, Claude switched in place.
+  P().setTabPermissionMode("manual");
+  await waitFor("the laptop shows Ask first", () => dTab().permissionMode === "manual");
+  // Changed on the laptop to one Claude can only start in: a fresh process, same conversation.
+  D().switchTab(dTab().id);
+  await desk.flush();
+  D().setTabPermissionMode("bypassPermissions");
+  await waitFor("the phone shows Never ask", () => P().activePermissionMode === "bypassPermissions");
+  D().sendMessage("after the change");
+  await waitFor("reply", () => replies(pTab()).includes("Echo: after the change"));
+  assert.equal(P().activePermissionMode, "bypassPermissions");
+  assert.deepEqual(said(dTab()), ["started on the laptop in auto-edit", "from the phone", "after the change"], "the same conversation throughout");
+});
+
+test("unpinning closes the conversation on both devices, unless it's the one in view", async (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), "hyo-hooks-pin-"));
+  process.env.FAKE_PROJECT_DIR = getProjectDir(cwd);
+  setSessionOwnerFactory({
+    make: (spec, on) => new ClaudeTransport({ ...spec, sessionId: spec.sessionId || undefined, resume: !!spec.sessionId && hasTranscript(spec.cwd, spec.sessionId), ...on }),
+    transcriptLines: (c, sid) => transcriptLineCount(c, sid),
+    graceMs: 300,
+  });
+  let saved: OpenEntry[] | null = [];
+  setOpenConversationsFactory(() => new OpenConversationsStore({ load: () => saved, save: (e) => (saved = e), seed: () => [], pins: () => listPinned(cwd) }));
+  const config: any = { vault: cwd, cwd, getCwd: () => cwd, cliPath: fake, defaultAgent: "", defaultModel: "claude-opus-5-5", getLiveVoice: () => ({}), onConnectUrl: () => {}, onStatus: () => {}, updateClaude: async () => ({ ok: false }) };
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((r) => server.once("listening", () => r()));
+  server.on("connection", (ws) => attachGatewaySocket(ws as any, { config: () => config, env: () => process.env }));
+  const url = `ws://127.0.0.1:${(server.address() as any).port}`;
+  const desk = mountHook(useDesk as any, { cliPath: fake, cwd, model: "claude-opus-5-5", effort: "medium", permissionMode: "manual", defaultAgent: "", autoGenerateTitles: false, mainChat: false }) as any;
+  const phone = mountHook(usePhone as any, { gatewayUrl: url, model: "claude-sonnet-5-5", agent: "", askFirst: true, mainChat: false }) as any;
+  t.after(() => {
+    desk.unmount();
+    phone.unmount();
+    GatewayClient.get(url).destroy();
+    gatewaySessionReset();
+    shutdownSessionOwners();
+    setSessionOwnerFactory(null);
+    setOpenConversationsFactory(null);
+    server.close();
+  });
+  const D = () => desk.result();
+  const P = () => phone.result();
+  await waitFor("the phone connects", () => GatewayClient.get(url).getStatus() === "connected");
+
+  // Two conversations from the laptop, both pinned.
+  D().sendMessage("first");
+  await waitFor("reply", () => replies(D().tabs.at(-1)).includes("Echo: first"));
+  const a = D().tabs.at(-1).cliSessionId;
+  D().newTab();
+  await desk.flush();
+  D().sendMessage("second");
+  await waitFor("reply", () => replies(D().tabs.at(-1)).includes("Echo: second"));
+  const b = D().tabs.at(-1).cliSessionId;
+  D().setTaskMeta(a, { pinned: true });
+  D().setTaskMeta(b, { pinned: true });
+  const pinnedOnPhone = (sid: string) => !!P().pinnedSessionIds?.has(sid);
+  await waitFor("pinned on the phone", () => pinnedOnPhone(a) && pinnedOnPhone(b));
+  const has = (r: any, sid: string) => r.tabs.some((x: any) => x.cliSessionId === sid);
+  await waitFor("both open on the phone", () => has(P(), a) && has(P(), b));
+
+  // The laptop is looking at b. Unpinning a (not in view) closes it everywhere.
+  D().setTaskMeta(a, { pinned: false });
+  await waitFor("closed on the laptop", () => !has(D(), a));
+  await waitFor("closed on the phone", () => !has(P(), a));
+  // Unpinning b, the one in view on the laptop: it stays open, as an ordinary row, on both.
+  D().setTaskMeta(b, { pinned: false });
+  await waitFor("unpinned on the phone", () => !pinnedOnPhone(b));
+  await new Promise((r) => setTimeout(r, 200));
+  assert.ok(has(D(), b), "still open on the laptop");
+  assert.equal(D().tabs.find((x: any) => x.id === D().activeTabId).cliSessionId, b, "and still in view");
+  assert.ok(has(P(), b), "and open on the phone as an ordinary row");
+
+  // Unpinned on the phone, which isn't looking at it: closed on both.
+  D().setTaskMeta(b, { pinned: true });
+  await waitFor("pinned again on the phone", () => pinnedOnPhone(b));
+  const other = P().tabs.find((x: any) => x.cliSessionId !== b);
+  P().switchTab(other.id);
+  await phone.flush();
+  P().setTaskMeta(b, { pinned: false });
+  await waitFor("closed on the phone", () => !has(P(), b));
+  await waitFor("closed on the laptop too, even though it's in view there", () => !has(D(), b));
 });

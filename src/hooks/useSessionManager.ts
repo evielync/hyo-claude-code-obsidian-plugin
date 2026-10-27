@@ -77,6 +77,9 @@ export interface TabSession {
   historySeq?: number;
   // When a turn last started or ended here (epoch ms), for its Open row.
   lastActivity?: number;
+  // The model, agent and permission mode above are the conversation's
+  // process's own (reported by the Mac), not this device's defaults.
+  infoKnown?: boolean;
 }
 
 interface SessionState {
@@ -294,6 +297,18 @@ export function useSessionManager(options: SessionManagerOptions) {
         // a turn started anywhere, a message waiting, an answer given
         // elsewhere, or catching up on a turn already under way.
         const onTab = (fn: (t: TabSession) => TabSession) => setState((prev) => ({ ...prev, tabs: prev.tabs.map((t) => (t.id === tabId ? fn(t) : t)) }));
+        if (event.type === "hyo_session_info") {
+          // What the conversation's process really runs with: shown here,
+          // whichever device started it or changed it.
+          onTab((t) => ({
+            ...t,
+            infoKnown: true,
+            ...(typeof event.permissionMode === "string" ? { permissionMode: event.permissionMode } : {}),
+            ...(typeof event.model === "string" && event.model ? { model: event.model } : {}),
+            ...(typeof event.agent === "string" ? { agent: event.agent } : {}),
+          }));
+          return;
+        }
         if (event.type === "hyo_user_message" && event.silent) {
           // Claude was asked to carry on after a compaction: same reply, no message.
           turnRunningRef.current[tabId] = true;
@@ -953,6 +968,16 @@ export function useSessionManager(options: SessionManagerOptions) {
   // with no session yet can't be pinned/closed (nothing to persist to).
   const setTaskMeta = useCallback(
     (sessionId: string, patch: { pinned?: boolean; closed?: boolean; lastActive?: string }) => {
+      // Unpinning closes it everywhere, the way a close does, unless it's
+      // the conversation in view here: then it stays open, as an ordinary row.
+      if (patch.pinned === false) {
+        const store = openStore();
+        const inView = stateRef.current.tabs.find((t) => t.id === stateRef.current.activeTabId);
+        if (store) {
+          if (inView?.cliSessionId === sessionId) store.open({ id: sessionId, title: inView.title });
+          else store.close(sessionId);
+        }
+      }
       persistTaskMeta(options.cwd, sessionId, patch);
       // A pinned conversation is open everywhere and listed first.
       if (patch.pinned !== undefined) openStore()?.pinsChanged();
@@ -1364,6 +1389,8 @@ export function useSessionManager(options: SessionManagerOptions) {
   }, []);
 
   const setTabPermissionMode = useCallback((permissionMode: string) => {
+    // The conversation's mode: its process takes it (every view shows it).
+    transportsRef.current[stateRef.current.activeTabId]?.setPermissionMode(permissionMode);
     setState((prev) => ({
       ...prev,
       tabs: prev.tabs.map((tab) =>

@@ -194,18 +194,13 @@ export class OpenConversationsStore {
 
   /**
    * A pin changed in the session metadata: read the pins again. A
-   * conversation that was unpinned stays open, as an ordinary row at the end
-   * if it wasn't already among the opened ones.
+   * conversation that was unpinned is open only if it's among the opened
+   * ones: unpinning closes it, unless the device that unpinned it is looking
+   * at it, and that device opens it first (see the session managers).
    */
   pinsChanged(origin?: ChangeOrigin): void {
-    const before = this.pins;
     this.pins = this.readPins();
-    const still = new Set(this.pins.map((p) => p.id));
-    let opened = this.opened;
-    for (const p of before) {
-      if (!still.has(p.id)) opened = withOpened(opened, { id: p.id, title: (opened.find((x) => x.id === p.id)?.title) || p.title });
-    }
-    this.commit(opened, origin);
+    this.commit(this.opened, origin);
   }
 
   private readPins(): PinnedEntry[] {

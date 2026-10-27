@@ -150,7 +150,7 @@ test("a pinned conversation is in the list without ever being opened, and can't 
   assert.deepEqual(store.list().map((e) => e.id), ["p", "a"], "still there while pinned");
 });
 
-test("pinning moves a conversation to the pins; unpinning leaves it open as an ordinary row", () => {
+test("pinning moves a conversation to the pins; unpinned, it's open only if it's among the opened ones", () => {
   const io = memIO([{ id: "a", title: "A" }, { id: "b", title: "B" }]);
   const store = new OpenConversationsStore(io);
   const heard: string[] = [];
@@ -165,11 +165,20 @@ test("pinning moves a conversation to the pins; unpinning leaves it open as an o
   store.pinsChanged();
   assert.equal(heard.pop(), "b*,q*,a");
 
-  // Unpin b: back where it was opened. Unpin q: stays open, at the end.
+  // Unpinning closes it: the device that unpins closes it first (b, which
+  // had been opened), or opens it if it's in view there. q was never opened.
+  store.close("b");
   io.pinsNow = [];
   store.pinsChanged();
-  assert.equal(heard.pop(), "a,b,q");
-  assert.deepEqual(io.saved!.map((e) => e.id), ["a", "b", "q"]);
+  assert.equal(heard.pop(), "a");
+  assert.deepEqual(io.saved!.map((e) => e.id), ["a"]);
+  // Unpinned while in view on the device that unpinned it: stays, as an ordinary row.
+  io.pinsNow = [{ id: "c", title: "C", order: "3" }];
+  store.pinsChanged();
+  store.open({ id: "c", title: "C" });
+  io.pinsNow = [];
+  store.pinsChanged();
+  assert.equal(heard.pop(), "a,c");
 });
 
 // ---- a device's tabs against the list ----------------------------------------------

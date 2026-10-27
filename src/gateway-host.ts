@@ -13,6 +13,7 @@
 //   { type:'get_history',  sessionId, requestId?, tabId?, before? }   (a page; tabId subscribes)
 //   { type:'attach',       tabId, sessionId }
 //   { type:'restart',      tabId }
+//   { type:'set_permission_mode', tabId, sessionId?, mode }
 //   { type:'rename',       sessionId, title }
 //   { type:'set_task_meta', sessionId, patch }
 //   { type:'prompt',       tabId, text, content?, qid?, sessionId?, askFirst?, agent?, model?, appendSystemPrompt? }
@@ -1086,6 +1087,8 @@ async function findFreePort(preferred: number): Promise<number> {
  * Exported so tests can run the gateway's real handling over a real socket
  * without Tailscale or the rest of startup.
  */
+const PHONE_MODES = new Set(["manual", "acceptEdits", "bypassPermissions"]);
+
 export interface GatewaySocketContext {
   config: () => Required<GatewayHostConfig> | null;
   env: () => NodeJS.ProcessEnv | null;
@@ -1127,7 +1130,10 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
             cliPath: cfg.cliPath,
             cwd,
             model: p.model || cfg.defaultModel,
-            permissionMode: ask ? "default" : "bypassPermissions",
+            // The mode the phone has for this conversation (it only applies
+            // if the phone is the one starting it; a running conversation
+            // keeps its own). Older phones send only Ask first on or off.
+            permissionMode: PHONE_MODES.has(p.permissionMode) ? p.permissionMode : ask ? "manual" : "bypassPermissions",
             agent: p.agent || cfg.defaultAgent,
             sessionId,
             appendSystemPrompt: p.appendSystemPrompt,

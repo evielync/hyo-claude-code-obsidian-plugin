@@ -29,7 +29,11 @@ const write = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 const record = (o) => transcript && appendFileSync(transcript, JSON.stringify(o) + "\n");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-write({ type: "system", subtype: "init", session_id: sessionId, model: pick("--model"), cwd: process.cwd(), argv: args });
+// The CLI calls Ask first "default" in what it reports.
+const reportMode = (m) => (m === "manual" ? "default" : m);
+const launched = pick("--permission-mode") || "manual";
+let mode = launched;
+write({ type: "system", subtype: "init", session_id: sessionId, model: pick("--model"), cwd: process.cwd(), argv: args, permissionMode: reportMode(mode) });
 
 const pendingAnswers = new Map();
 let queue = Promise.resolve();
@@ -64,6 +68,17 @@ rl.on("line", (line) => {
   try {
     m = JSON.parse(line);
   } catch {
+    return;
+  }
+  if (m.type === "control_request" && m.request?.subtype === "set_permission_mode") {
+    const want = m.request.mode;
+    if (want === "bypassPermissions" && launched !== "bypassPermissions") {
+      write({ type: "control_response", response: { subtype: "error", request_id: m.request_id, error: "Cannot set permission mode to bypassPermissions because the session was not launched with --dangerously-skip-permissions" } });
+    } else {
+      mode = want;
+      write({ type: "control_response", response: { subtype: "success", request_id: m.request_id, response: { mode: reportMode(mode) } } });
+      write({ type: "system", subtype: "status", status: null, permissionMode: reportMode(mode), session_id: sessionId });
+    }
     return;
   }
   if (m.type === "control_response") {

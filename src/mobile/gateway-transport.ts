@@ -138,7 +138,7 @@ export class GatewayTransport {
     debug("[hyo-gateway] Tab registered:", this.tabId);
   }
 
-  sendUserMessage(content: string | any[], askFirst?: boolean, extra: { qid?: string; silent?: boolean } = {}): void {
+  sendUserMessage(content: string | any[], askFirst?: boolean, extra: { qid?: string; silent?: boolean; permissionMode?: string } = {}): void {
     const blocks = typeof content === "string" ? undefined : content;
     const text = typeof content === "string" ? content : flattenContentBlocks(content);
     // sessionId/resume are consulted by the gateway whenever it has no live
@@ -148,6 +148,11 @@ export class GatewayTransport {
     // session rather than starting a fresh one. askFirst likewise reflects
     // the live "Ask First" toggle at send time rather than being fixed at spawn.
     this.client.sendPrompt(this.tabId, text, this.options.sessionId, this.options.resume, askFirst, this.options.appendSystemPrompt, this.options.agent, this.options.model, blocks, extra);
+  }
+
+  /** Change the conversation's permission mode on the Mac (every view shows it). */
+  setPermissionMode(mode: string): void {
+    this.client.setPermissionMode(this.tabId, this.options.sessionId, mode);
   }
 
   /** Ask the Mac for a fresh process on the next message (once nothing runs in it). */

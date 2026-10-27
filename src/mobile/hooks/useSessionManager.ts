@@ -71,6 +71,9 @@ export interface TabSession {
   olderError?: string;
   // When a turn last started or ended here (epoch ms), for its Open row.
   lastActivity?: number;
+  // The model, agent and permission mode above are the conversation's
+  // process's own (reported by the Mac), not this device's defaults.
+  infoKnown?: boolean;
   // Why its history couldn't be loaded, in plain words (shown with a retry).
   loadError?: string;
 }
@@ -130,7 +133,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           messages: [],
           generating: false,
           model: LOCKED_MODEL,
-          permissionMode: LOCKED_PERMISSION_MODE,
+          permissionMode: options.askFirst === false ? "bypassPermissions" : "manual",
           agent: LOCKED_AGENT,
           inputTokens: 0,
           voiceMode: false,
@@ -166,6 +169,8 @@ export function useSessionManager(options: SessionManagerOptions) {
   const compactNudgeRef = useRef<Record<string, boolean>>({});
   const optionsRef = useRef(options);
   optionsRef.current = options;
+  // A conversation this phone starts begins in the phone's Ask first choice.
+  const defaultMode = () => (optionsRef.current.askFirst === false ? "bypassPermissions" : "manual");
   // Messages sent while Claude is still answering, per tab, oldest first.
   // They show in the chat at once and go to Claude when the turn ends (see
   // send-queue.ts). turnRunningRef is set the moment a turn starts, so two
@@ -280,6 +285,18 @@ export function useSessionManager(options: SessionManagerOptions) {
         // a turn started anywhere, a message waiting, an answer given
         // elsewhere, or catching up on a turn already under way.
         const onTab = (fn: (t: TabSession) => TabSession) => setState((prev) => ({ ...prev, tabs: prev.tabs.map((t) => (t.id === tabId ? fn(t) : t)) }));
+        if (event.type === "hyo_session_info") {
+          // What the conversation's process really runs with: shown here,
+          // whichever device started it or changed it.
+          onTab((t) => ({
+            ...t,
+            infoKnown: true,
+            ...(typeof event.permissionMode === "string" ? { permissionMode: event.permissionMode } : {}),
+            ...(typeof event.model === "string" && event.model ? { model: event.model } : {}),
+            ...(typeof event.agent === "string" ? { agent: event.agent } : {}),
+          }));
+          return;
+        }
         if (event.type === "hyo_user_message" && event.silent) {
           // Claude was asked to carry on after a compaction: same reply, no message.
           turnRunningRef.current[tabId] = true;
@@ -797,7 +814,7 @@ export function useSessionManager(options: SessionManagerOptions) {
             messages: [],
             generating: false,
             model: activeTab?.model || LOCKED_MODEL,
-            permissionMode: activeTab?.permissionMode || LOCKED_PERMISSION_MODE,
+            permissionMode: defaultMode(),
             agent: LOCKED_AGENT,
             voiceMode: false,
           },
@@ -835,7 +852,7 @@ export function useSessionManager(options: SessionManagerOptions) {
               messages: [],
               generating: false,
               model: LOCKED_MODEL,
-              permissionMode: LOCKED_PERMISSION_MODE,
+              permissionMode: defaultMode(),
               agent: LOCKED_AGENT,
               voiceMode: false,
             },
@@ -909,6 +926,14 @@ export function useSessionManager(options: SessionManagerOptions) {
   // before the subsequent list request reads it back.
   const setTaskMeta = useCallback(
     (sessionId: string, patch: { pinned?: boolean; closed?: boolean; lastActive?: string }) => {
+      // Unpinning closes it everywhere, the way a close does, unless it's
+      // the conversation in view here: then it stays open, as an ordinary
+      // row. Told to the Mac before the pin itself, so it lands first.
+      if (patch.pinned === false) {
+        const inView = stateRef.current.tabs.find((t) => t.id === stateRef.current.activeTabId);
+        if (inView?.cliSessionId === sessionId) tellMac.open(sessionId, inView.title);
+        else tellMac.close(sessionId);
+      }
       persistTaskMeta(options.gatewayUrl, sessionId, patch);
       setTimeout(() => refreshPastSessions(), 0);
     },
@@ -1108,7 +1133,10 @@ export function useSessionManager(options: SessionManagerOptions) {
       const transport = ensureTransport(tabId);
       transport.setAppendSystemPrompt(promptFor(tab));
       // The main chat's reminder rides on every message (never shown).
-      transport.sendUserMessage(tab.isMain && !meta?.isCompaction ? withMainChatReminder(content) : content, options.askFirst, { qid });
+      // The conversation's permission mode goes with it (used if the phone
+      // is the one starting its process; a running one keeps its own).
+      const mode = tab.permissionMode || defaultMode();
+      transport.sendUserMessage(tab.isMain && !meta?.isCompaction ? withMainChatReminder(content) : content, mode !== "bypassPermissions", { qid, permissionMode: mode });
     },
     [options, makeProcessEvent, updateTabLastAssistant]
   );
@@ -1210,6 +1238,10 @@ export function useSessionManager(options: SessionManagerOptions) {
   }, [updateTabLastAssistant]);
 
   const setTabPermissionMode = useCallback((permissionMode: string) => {
+    // The conversation's mode: its process on the Mac takes it (every view
+    // shows it). A new conversation starts in it with its first message.
+    const t = stateRef.current.tabs.find((x) => x.id === stateRef.current.activeTabId);
+    if (t?.cliSessionId || t?.isMain) ensureTransport(t.id).setPermissionMode(permissionMode);
     setState((prev) => ({
       ...prev,
       tabs: prev.tabs.map((tab) =>
@@ -1254,7 +1286,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     messages: [],
     generating: false,
     model: like?.model || LOCKED_MODEL,
-    permissionMode: like?.permissionMode || LOCKED_PERMISSION_MODE,
+    permissionMode: defaultMode(),
     agent: LOCKED_AGENT,
     inputTokens: 0,
     voiceMode: false,
@@ -1439,7 +1471,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     messages: [],
     generating: false,
     model: LOCKED_MODEL,
-    permissionMode: LOCKED_PERMISSION_MODE,
+    permissionMode: defaultMode(),
     agent: LOCKED_AGENT,
     inputTokens: 0,
     voiceMode: false,
@@ -1616,7 +1648,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           messages: [],
           generating: false,
           model: LOCKED_MODEL,
-          permissionMode: LOCKED_PERMISSION_MODE,
+          permissionMode: defaultMode(),
           agent: LOCKED_AGENT,
           inputTokens: 0,
           voiceMode: false,
@@ -1859,7 +1891,8 @@ export function useSessionManager(options: SessionManagerOptions) {
     activeMessages: activeTab?.messages || [],
     activeGenerating: activeTab?.generating || false,
     activeModel: activeTab?.model || LOCKED_MODEL,
-    activePermissionMode: activeTab?.permissionMode || LOCKED_PERMISSION_MODE,
+    activePermissionMode: activeTab?.permissionMode || defaultMode(),
+    activeInfoKnown: !!activeTab?.infoKnown,
     activeAgent: activeTab?.agent || LOCKED_AGENT,
     activeVoiceMode: activeTab?.voiceMode || false,
     activeTabHasSession: !!activeTab?.cliSessionId,

@@ -77,6 +77,22 @@ export interface ProcLike {
   sendInterrupt(): void;
   stop(): void;
   isRunning(): boolean;
+  /** Change the permission mode of the running process; returns the request's id (its answer comes back as a control_response). */
+  setPermissionMode?(mode: string): string | void;
+}
+
+/** What a conversation's process is really running with, as every view shows it. */
+export interface SessionInfo {
+  permissionMode: string;
+  /** The model and agent, once the conversation has run here. */
+  model?: string;
+  agent?: string;
+}
+
+/** The CLI reports "manual" (Ask first) under its older name. */
+export function normalizeMode(mode: string | undefined | null): string {
+  if (!mode || mode === "default") return "manual";
+  return mode;
 }
 
 export type MakeProc = (
@@ -206,6 +222,14 @@ export class SessionOwner {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private released = false;
   private _seq = 0;
+  // The permission mode the conversation runs in (what Claude last reported,
+  // or what was last chosen), the mode its process was launched with, and a
+  // mode change Claude couldn't make in place (it needs a fresh process).
+  private mode: string | null = null;
+  private launchedMode: string | null = null;
+  private modeRequest: { id: string; mode: string } | null = null;
+  private relaunchWhenIdle = false;
+  private lastInfo = "";
 
   constructor(private make: MakeProc, private opts: OwnerOptions = {}) {
     this._sessionId = opts.sessionId ?? null;
@@ -247,6 +271,51 @@ export class SessionOwner {
     return !!this.turn;
   }
 
+  /** What the conversation's process is really running with (null before it has ever run). */
+  get info(): SessionInfo | null {
+    const spec = this.procSpec || this.lastSpec;
+    if (!spec && !this.mode) return null;
+    return {
+      permissionMode: normalizeMode(this.mode ?? spec?.permissionMode),
+      ...(spec ? { model: spec.model, agent: spec.agent || "" } : {}),
+    };
+  }
+
+  /** Tell every view what the conversation runs with, when that changes. */
+  private announceInfo(): void {
+    const info = this.info;
+    if (!info) return;
+    const key = JSON.stringify(info);
+    if (key === this.lastInfo) return;
+    this.lastInfo = key;
+    this.broadcast({ type: "hyo_session_info", ...info });
+  }
+
+  /**
+   * Change the conversation's permission mode, from any view. Claude changes
+   * it in place where it can; a mode it can only start in (Never ask, for a
+   * process launched asking) takes a fresh process, once nothing is running,
+   * which carries on the conversation. Every view shows the new mode.
+   */
+  setPermissionMode(mode: string): void {
+    const m = normalizeMode(mode);
+    this.mode = m;
+    if (this.lastSpec) this.lastSpec = { ...this.lastSpec, permissionMode: m };
+    if (this.procSpec) this.procSpec = { ...this.procSpec, permissionMode: m };
+    if (this.proc && this.proc.isRunning() && m !== this.launchedMode) {
+      const id = this.proc.setPermissionMode?.(m);
+      if (id) this.modeRequest = { id, mode: m };
+      else this.relaunch();
+    }
+    this.announceInfo();
+  }
+
+  /** A fresh process for the conversation now, or as soon as nothing is running. */
+  private relaunch(): void {
+    if (!this.busy && !this.queue.length) this.stopProc();
+    else this.relaunchWhenIdle = true;
+  }
+
   // ---- subscribing ----
 
   /** Start receiving every event, caught up on what's under way. Returns the subscriber id. */
@@ -263,6 +332,8 @@ export class SessionOwner {
         tasks: running.map((j) => ({ task_id: j.id, description: j.title, task_type: "local_agent" })),
       });
     }
+    const info = this.info;
+    if (info) sub.onEvent({ type: "hyo_session_info", ...info });
     const replay = this.replay();
     if (replay) sub.onEvent(replay);
     return id;
@@ -325,8 +396,10 @@ export class SessionOwner {
     let spec = item.spec;
     const base = this.procSpec || this.lastSpec;
     if (spec.adopt && base) {
-      spec = { ...spec, model: base.model, agent: base.agent, effort: base.effort, permissionMode: base.permissionMode };
+      spec = { ...spec, model: base.model, agent: base.agent, effort: base.effort };
     }
+    // A conversation keeps its permission mode whichever view sends.
+    if (this.mode) spec = { ...spec, permissionMode: this.mode };
     if (this.proc && this.proc.isRunning() && this.procSpec && specKey(this.procSpec) !== specKey(spec) && !this.busy) {
       this.stopProc();
     }
@@ -382,7 +455,12 @@ export class SessionOwner {
     this.procSpec = full;
     this.lastSpec = full;
     this.procStartedAt = Date.now();
+    this.launchedMode = normalizeMode(full.permissionMode);
+    if (!this.mode) this.mode = this.launchedMode;
+    this.relaunchWhenIdle = false;
+    this.modeRequest = null;
     proc.spawn();
+    this.announceInfo();
     return true;
   }
 
@@ -418,6 +496,22 @@ export class SessionOwner {
       const next = applyJobEvent(this.jobs, e);
       if (next) this.jobs = next;
     }
+    // What Claude reports its permission mode is, and how a change went.
+    if (e?.type === "system" && typeof e.permissionMode === "string" && (e.subtype === "init" || e.subtype === "status")) {
+      const reported = normalizeMode(e.permissionMode);
+      if (!this.modeRequest || this.modeRequest.mode === reported) {
+        this.mode = reported;
+        if (this.procSpec) this.procSpec = { ...this.procSpec, permissionMode: reported };
+        if (this.lastSpec) this.lastSpec = { ...this.lastSpec, permissionMode: reported };
+      }
+    }
+    if (e?.type === "control_response" && this.modeRequest && e.response?.request_id === this.modeRequest.id) {
+      const asked = this.modeRequest.mode;
+      this.modeRequest = null;
+      // Claude can't switch to it in place: start a fresh process in it.
+      if (e.response?.subtype === "error") this.relaunch();
+      else this.mode = asked;
+    }
     if (e?.type === "control_request" && e.request_id && e.request?.subtype === "can_use_tool") {
       this.openAsks.set(e.request_id, e);
       this.answered.delete(e.request_id);
@@ -431,6 +525,7 @@ export class SessionOwner {
     }
     this.record(e);
     this.broadcast(e);
+    if (e?.type === "system" || e?.type === "control_response") this.announceInfo();
     if (e?.type === "result" && !isSidechain(e)) {
       this.generating = false;
       this.turn = null;
@@ -537,6 +632,10 @@ export class SessionOwner {
   /** Nothing is running: stop an idle process after a long quiet spell, and let go if nobody's watching. */
   private whenQuiet(): void {
     if (this.busy || this.queue.length) return;
+    if (this.relaunchWhenIdle) {
+      this.relaunchWhenIdle = false;
+      this.stopProc();
+    }
     const idleMs = this.opts.procIdleMs ?? DEFAULT_PROC_IDLE_MS;
     if (!this.opts.keep && idleMs > 0 && this.proc && !this.idleTimer) {
       this.idleTimer = unref(
@@ -799,6 +898,11 @@ export class OwnerTransport implements ProcLike {
     return this.owner.restart();
   }
 
+  /** Change the conversation's permission mode (every view shows it). */
+  setPermissionMode(mode: string): void {
+    this.owner.setPermissionMode(mode);
+  }
+
   isRunning(): boolean {
     return !!this.sub;
   }
@@ -968,6 +1072,16 @@ export function gatewaySession(m: any, ws: object, sink: GatewayClientSink, ctx:
     case "restart":
       if (tabId) phoneTabs.get(tabId)?.owner.restart();
       return true;
+    case "set_permission_mode": {
+      // From the phone, for the conversation in that tab (it may not be
+      // subscribed yet: a conversation it just opened).
+      if (!tabId || typeof m.mode !== "string") return true;
+      const pt = phoneTabs.get(tabId);
+      const sid = typeof m.sessionId === "string" && m.sessionId ? m.sessionId : null;
+      const owner = pt?.owner || ownerFor(ctx, tabId, sid);
+      owner?.setPermissionMode(m.mode);
+      return true;
+    }
     case "stop":
       if (tabId) dropPhoneTab(tabId);
       return true;

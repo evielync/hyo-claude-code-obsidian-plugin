@@ -238,3 +238,22 @@ export function transcriptModel(lines: any[]): { model: string | null; contextTo
   }
   return { model: null, contextTokens: 0 };
 }
+
+/** The permission modes a conversation can run in, as both devices name them. */
+export const PERMISSION_MODES = [
+  {
+    id: "manual",
+    name: "Ask first",
+    desc: "Asks before tools not in your allow list",
+  },
+  {
+    id: "acceptEdits",
+    name: "Auto-edit",
+    desc: "Also auto-approves file writes and edits",
+  },
+  {
+    id: "bypassPermissions",
+    name: "Never ask",
+    desc: "All tools run automatically — no prompts",
+  },
+];
