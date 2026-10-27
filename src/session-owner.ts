@@ -97,6 +97,19 @@ export function normalizeMode(mode: string | undefined | null): string {
   return mode;
 }
 
+/**
+ * What a view says when the conversation's process ends under it, the same
+ * on every device. Views only hear about a process that ended on its own: one
+ * Hyo stopped or swapped on purpose (a call starting, a model, mode or effort
+ * change, an idle spell, a restart) is never reported (see `onProcClose`), so
+ * its SIGTERM exit (code 143) never shows as a crash. A clean exit, or one
+ * outside a turn, says nothing.
+ */
+export function unexpectedExitNotice(code: number | null, wasGenerating: boolean): string | null {
+  if (code === 0 || code === null || !wasGenerating) return null;
+  return `_Claude process exited unexpectedly (code ${code}). Send your message again to carry on, or start a new conversation._`;
+}
+
 export type MakeProc = (
   spec: OwnerSpec,
   on: { onMessage: (e: any) => void; onError: (e: string) => void; onClose: (code: number | null) => void }
@@ -507,7 +520,9 @@ export class SessionOwner {
   }
 
   private onProcClose(proc: ProcLike, code: number | null): void {
-    if (this.proc !== proc) return; // a process we stopped on purpose
+    // A process we stopped or swapped on purpose: stopProc let go of it first,
+    // so its exit (SIGTERM, code 143) reaches no view.
+    if (this.proc !== proc) return;
     const quick = Date.now() - this.procStartedAt < CRASH_LOOP_MS;
     this.proc = null;
     this.procSpec = null;

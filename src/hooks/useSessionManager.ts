@@ -4,7 +4,7 @@ import { turnStarted, queued as queuedElsewhere, permissionAnswered, replayBase,
 import { newStreamState, processContentBlocks, buildSnapshot, endTurn, startsTurnOfItsOwn, openReply, isInjectedContext, type StreamState } from "../reply-stream";
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { normalizeModelId } from "../claude-transport";
-import { OwnerTransport, mainChatOwner, sessionOwner, findSessionOwner } from "../session-owner";
+import { OwnerTransport, mainChatOwner, sessionOwner, findSessionOwner, unexpectedExitNotice } from "../session-owner";
 
 // Every tab's Claude connection: a subscription to the Mac's one process for
 // its conversation, shared with other panels and the phone (session-owner.ts).
@@ -1158,11 +1158,13 @@ export function useSessionManager(options: SessionManagerOptions) {
         }));
         turnEnded(tabId);
         updateTabLastAssistant(tabId, () => ({ streaming: false }));
-        // If process exited with error while generating, show error message
-        if (code !== 0 && code !== null && wasGenerating) {
+        // A process that ended on its own mid-turn: say so. (One Hyo stopped
+        // or swapped on purpose never gets here.)
+        const notice = unexpectedExitNotice(code, !!wasGenerating);
+        if (notice) {
           const errorMsg: Message = {
             role: "assistant",
-            content: `_Claude process exited unexpectedly (code ${code}). Send your message again to carry on, or start a new conversation._`,
+            content: notice,
             thinking: "",
             toolCalls: [],
             orderedBlocks: [],

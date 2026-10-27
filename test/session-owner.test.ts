@@ -21,6 +21,7 @@ import {
   fileLock,
   displayText,
   MAIN_CHAT_WIRE_ID,
+  unexpectedExitNotice,
   type OwnerSpec,
   type ProcLike,
 } from "../src/session-owner";
@@ -512,4 +513,99 @@ test("effort picked on any view: the conversation carries on with it in a fresh 
   owner.send(a, spec({ effort: "low", sessionId: null }), "next");
   assert.equal(procs[1].spec.effort, "high");
   assert.equal(procs[1].spec.sessionId, "s-1");
+});
+
+// Like a real Claude process: stopping it sends SIGTERM, and it then exits
+// with code 143, as on the iPad on 27 Oct.
+function sigtermFakes() {
+  const f = fakes();
+  const make = (spec: OwnerSpec, on: any) => {
+    const proc = f.make(spec, on);
+    const rec = f.procs.at(-1)!;
+    const stop = proc.stop.bind(proc);
+    proc.stop = () => {
+      stop();
+      rec.close(143);
+    };
+    return proc;
+  };
+  return { procs: f.procs, make };
+}
+
+test("a process Hyo stops or swaps on purpose never shows as a crash on any device; a real crash still does", async () => {
+  const { procs, make } = sigtermFakes();
+  setSessionOwnerFactory({ make, procIdleMs: 30, graceMs: 0 });
+  try {
+    const owner = sessionOwner("/work", "s-1")!;
+    // The laptop: a panel's transport, and what its view would say.
+    const laptopSays: string[] = [];
+    let laptopGenerating = false;
+    const panel = new OwnerTransport(owner, () => spec(), {
+      onMessage: (e: any) => {
+        if (e.type === "hyo_user_message") laptopGenerating = true;
+        if (e.type === "result") laptopGenerating = false;
+      },
+      onError: () => {},
+      onClose: (code) => {
+        const n = unexpectedExitNotice(code, laptopGenerating);
+        if (n) laptopSays.push(n);
+        laptopGenerating = false;
+      },
+    });
+    panel.spawn();
+    // The phone, through the gateway.
+    const phone: any[] = [];
+    const ctx = { cwd: "/work", mintId: () => "x", specFor: (m: any, sid: string | null) => spec({ sessionId: sid, adopt: true, appendSystemPrompt: m.appendSystemPrompt ?? "MAIN" }) };
+    gatewaySession({ type: "attach", tabId: "ipad", sessionId: "s-1" }, {}, { send: (o: any) => phone.push(o) }, ctx);
+    const phoneClosed = () => phone.filter((o) => o.subtype === "tab_closed");
+    const turn = (text: string) => {
+      panel.sendUserMessage(text);
+      procs.at(-1)!.emit(result);
+    };
+
+    turn("hi");
+    // A call starting on the phone swaps Claude's instructions.
+    gatewaySession({ type: "prompt", tabId: "ipad", sessionId: "s-1", text: "on a call", appendSystemPrompt: "MAIN+VOICE" }, {}, { send: (o: any) => phone.push(o) }, ctx);
+    assert.equal(procs.length, 2, "swapped");
+    assert.equal(procs[0].stopped, true);
+    procs[1].emit(result);
+    // A model change, an effort change, a mode Claude can only start in, a restart.
+    owner.setModel("claude-sonnet-5-5");
+    assert.equal(procs[1].stopped, true);
+    turn("after the model change");
+    owner.setEffort("high");
+    turn("after the effort change");
+    owner.setPermissionMode("bypassPermissions");
+    turn("after the mode change");
+    assert.equal(owner.restart(), true);
+    turn("after a restart");
+    // An idle spell.
+    const before = procs.length;
+    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(procs.at(-1)!.stopped, true, "stopped for being idle");
+    assert.equal(procs.length, before);
+    for (let i = 0; i < procs.length; i++) assert.equal(procs[i].stopped, true, `process ${i} was stopped on purpose`);
+
+    assert.deepEqual(laptopSays, [], "the laptop shows nothing");
+    assert.deepEqual(phoneClosed(), [], "the phone is told nothing");
+
+    // A real crash mid-turn still shows, on both.
+    panel.sendUserMessage("one more");
+    procs.at(-1)!.close(1);
+    assert.equal(laptopSays.length, 1);
+    assert.match(laptopSays[0], /exited unexpectedly \(code 1\)/);
+    assert.deepEqual(phoneClosed().map((o) => o.code), [1]);
+    assert.match(unexpectedExitNotice(phoneClosed()[0].code, true)!, /code 1/);
+  } finally {
+    gatewaySessionReset();
+    shutdownSessionOwners();
+    setSessionOwnerFactory(null);
+  }
+});
+
+test("the exit notice: only a non-clean exit mid-turn", () => {
+  assert.equal(unexpectedExitNotice(0, true), null);
+  assert.equal(unexpectedExitNotice(null, true), null);
+  assert.equal(unexpectedExitNotice(1, false), null);
+  assert.match(unexpectedExitNotice(1, true)!, /^_Claude process exited unexpectedly \(code 1\)\./);
 });

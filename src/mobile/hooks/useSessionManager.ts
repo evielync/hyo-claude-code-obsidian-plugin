@@ -4,7 +4,7 @@ import { turnStarted, queued as queuedElsewhere, permissionAnswered, replayBase,
 import { newStreamState, processContentBlocks, buildSnapshot, endTurn, startsTurnOfItsOwn, openReply, isInjectedContext, type StreamState } from "../../reply-stream";
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { GatewayTransport } from "../gateway-transport";
-import { MAIN_CHAT_WIRE_ID } from "../../session-owner";
+import { MAIN_CHAT_WIRE_ID, unexpectedExitNotice } from "../../session-owner";
 import { VOICE_PERSONA } from "../voice/voice-persona";
 import type {
   Message,
@@ -1033,11 +1033,13 @@ export function useSessionManager(options: SessionManagerOptions) {
         }));
         turnEnded(tabId);
         updateTabLastAssistant(tabId, () => ({ streaming: false }));
-        // If the CLI process exited with an error while generating, say so.
-        if (code !== 0 && code !== null && wasGenerating) {
+        // A process that ended on its own mid-turn: say so. (One Hyo stopped
+        // or swapped on purpose never gets here.)
+        const notice = unexpectedExitNotice(code, !!wasGenerating);
+        if (notice) {
           const errorMsg: Message = {
             role: "assistant",
-            content: `_Claude process exited unexpectedly (code ${code}). Send your message again to carry on, or start a new conversation._`,
+            content: notice,
             thinking: "",
             toolCalls: [],
             orderedBlocks: [],
