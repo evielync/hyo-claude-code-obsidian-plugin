@@ -88,6 +88,8 @@ export interface PermissionRequestData {
   input?: any;
   /** The background job asking, by name, when it isn't the chat itself. */
   asker?: string;
+  /** That job's id (the request's agent_id): its asks go when it ends. */
+  jobId?: string;
   resolved?: "allowed" | "denied";
 }
 

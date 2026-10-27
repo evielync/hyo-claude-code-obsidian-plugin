@@ -1,5 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef } from "react";
 import { ChatMessage } from "./ChatMessage";
+import { PermissionRequest } from "./PermissionRequest";
+import { waitingAsks } from "../../background-jobs";
 import { StreamingMessage } from "./StreamingMessage";
 import type { Message } from "../hooks/useChatEngine";
 import type { ClaudeUpdateRunner } from "../../components/ClaudeUpdateCard";
@@ -173,6 +175,11 @@ export function ChatMessages({
           />
         );
       })}
+      {/* Asks still waiting that belong to a finished reply (a background
+          job's, mostly): here at the bottom, where she'll see them. */}
+      {waitingAsks(messages).map((request) => (
+        <PermissionRequest key={`ask-${request.requestId}`} request={request} onRespond={onPermissionResponse} />
+      ))}
     </div>
   );
 }

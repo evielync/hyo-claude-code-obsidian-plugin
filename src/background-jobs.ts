@@ -192,3 +192,47 @@ export class IdleGate {
 export function maySwapProcess(o: { running: boolean; midTurn: boolean; jobs: JobMap | undefined; promptChanged: boolean }): boolean {
   return o.running && o.promptChanged && !o.midTurn && !hasRunningJobs(o.jobs);
 }
+
+/**
+ * Permission asks still waiting on a reply that has finished. A finished
+ * reply shows no cards (only the reply being written does), and a background
+ * job's ask lands on whichever reply was last, usually finished: that's how
+ * an ask sat unseen while a job waited for it. The chat shows these at the
+ * bottom, after everything else.
+ */
+export function waitingAsks<R extends { resolved?: string }>(
+  messages: { role: string; streaming?: boolean; permissionRequests?: R[] }[]
+): R[] {
+  const out: R[] = [];
+  for (const m of messages) {
+    if (m.role !== "assistant" || m.streaming) continue;
+    for (const r of m.permissionRequests || []) if (!r.resolved) out.push(r);
+  }
+  return out;
+}
+
+/**
+ * Asks nobody can answer any more go: those from background jobs that have
+ * ended (`ended`, by job id), or every unanswered ask when the process
+ * itself ended (`ended` null). Returns the same array when nothing changes.
+ */
+export function asksEnded<M extends { permissionRequests?: { resolved?: string; jobId?: string }[] }>(
+  messages: M[],
+  ended: Set<string> | null
+): M[] {
+  const gone = (r: { resolved?: string; jobId?: string }) => !r.resolved && (ended === null || (!!r.jobId && ended.has(r.jobId)));
+  let changed = false;
+  const out = messages.map((m) => {
+    if (!m.permissionRequests?.some(gone)) return m;
+    changed = true;
+    return { ...m, permissionRequests: m.permissionRequests.filter((r) => !gone(r)) };
+  });
+  return changed ? out : messages;
+}
+
+/** Jobs in `before` that aren't in `after`: the ones that just ended. */
+export function endedJobs(before: JobMap | undefined, after: JobMap | undefined): Set<string> {
+  const out = new Set<string>();
+  for (const id of Object.keys(before || {})) if (!after || !after[id]) out.add(id);
+  return out;
+}

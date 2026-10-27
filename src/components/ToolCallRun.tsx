@@ -24,7 +24,8 @@ export function useShowAllToolCalls(): boolean {
       listeners.add(l);
       return () => listeners.delete(l);
     },
-    () => showAll
+    () => showAll,
+    () => showAll // rendered outside the app (tests)
   );
 }
 

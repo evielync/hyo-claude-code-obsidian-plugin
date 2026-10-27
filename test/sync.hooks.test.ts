@@ -37,6 +37,7 @@ import { setSessionOwnerFactory, shutdownSessionOwners, gatewaySessionReset } fr
 import { OpenConversationsStore, setOpenConversationsFactory, type OpenEntry } from "../src/open-conversations";
 import { getProjectDir, hasTranscript, transcriptLineCount, listPinned } from "../src/session-parser";
 import { GatewayClient } from "../src/mobile/gateway-client";
+import { waitingAsks } from "../src/background-jobs";
 
 const fake = join(process.cwd(), "test", "fixtures", "fake-claude.mjs");
 chmodSync(fake, 0o755);
@@ -350,4 +351,71 @@ test("unpinning closes the conversation on both devices, unless it's the one in 
   P().setTaskMeta(b, { pinned: false });
   await waitFor("closed on the phone", () => !has(P(), b));
   await waitFor("closed on the laptop too, even though it's in view there", () => !has(D(), b));
+});
+
+// Issue 26 Oct: a background job's ask lands on a reply that has already
+// finished, which showed no card, so the job waited for good.
+test("a background job's ask on a finished reply shows on both devices, is answered once, and goes when the job ends", async (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), "hyo-hooks-bg-"));
+  process.env.FAKE_PROJECT_DIR = getProjectDir(cwd);
+  setSessionOwnerFactory({
+    make: (spec, on) => new ClaudeTransport({ ...spec, sessionId: spec.sessionId || undefined, resume: !!spec.sessionId && hasTranscript(spec.cwd, spec.sessionId), ...on }),
+    transcriptLines: (c, sid) => transcriptLineCount(c, sid),
+    graceMs: 300,
+  });
+  let saved: OpenEntry[] | null = [];
+  setOpenConversationsFactory(() => new OpenConversationsStore({ load: () => saved, save: (e) => (saved = e), seed: () => [] }));
+  const config: any = { vault: cwd, cwd, getCwd: () => cwd, cliPath: fake, defaultAgent: "", defaultModel: "claude-opus-5-5", getLiveVoice: () => ({}), onConnectUrl: () => {}, onStatus: () => {}, updateClaude: async () => ({ ok: false }) };
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((r) => server.once("listening", () => r()));
+  server.on("connection", (ws) => attachGatewaySocket(ws as any, { config: () => config, env: () => process.env }));
+  const url = `ws://127.0.0.1:${(server.address() as any).port}`;
+  const desk = mountHook(useDesk as any, { cliPath: fake, cwd, model: "claude-opus-5-5", effort: "medium", permissionMode: "default", defaultAgent: "", autoGenerateTitles: false, mainChat: false }) as any;
+  const phone = mountHook(usePhone as any, { gatewayUrl: url, model: "claude-sonnet-5-5", agent: "", askFirst: true, mainChat: false }) as any;
+  t.after(() => {
+    desk.unmount();
+    phone.unmount();
+    GatewayClient.get(url).destroy();
+    gatewaySessionReset();
+    shutdownSessionOwners();
+    setSessionOwnerFactory(null);
+    setOpenConversationsFactory(null);
+    server.close();
+  });
+  const D = () => desk.result();
+  const P = () => phone.result();
+  await waitFor("the phone connects", () => GatewayClient.get(url).getStatus() === "connected");
+
+  D().sendMessage("check my email in the background bgjob");
+  await waitFor("the reply", () => replies(D().tabs.at(-1)).includes("Echo: check my email in the background bgjob"));
+  const sid = D().tabs.at(-1).cliSessionId;
+  const dTab = () => D().tabs.find((x: any) => x.cliSessionId === sid);
+  const pTab = () => P().tabs.find((x: any) => x.cliSessionId === sid);
+  await waitFor("the phone has it open", () => !!pTab() && replies(pTab()).length > 0);
+  P().switchTab(pTab().id);
+  await phone.flush();
+
+  // The job asks after the reply finished: a card waiting on both, labelled with the job.
+  await waitFor("the ask waits on the laptop", () => waitingAsks(dTab().messages).length === 1);
+  await waitFor("the ask waits on the phone", () => waitingAsks(pTab().messages).length === 1);
+  for (const tab of [dTab(), pTab()]) {
+    const [ask] = waitingAsks(tab.messages) as any[];
+    assert.equal(ask.toolName, "Bash");
+    assert.equal(ask.asker, "Check Gmail", "labelled with the job");
+    assert.equal(tab.generating, false, "on a finished reply");
+  }
+  // Answered on the phone: resolved on both, and the job carries on and ends.
+  P().sendPermissionResponse(waitingAsks(pTab().messages)[0].requestId, "allow");
+  await waitFor("gone on the phone", () => waitingAsks(pTab().messages).length === 0);
+  await waitFor("gone on the laptop", () => waitingAsks(dTab().messages).length === 0);
+  await waitFor("the job ended on the laptop", () => Object.keys(dTab().jobs || {}).length === 0);
+
+  // A job that ends without an answer takes its ask with it, on both.
+  D().switchTab(dTab().id);
+  await desk.flush();
+  D().sendMessage("another one bgquit");
+  await waitFor("the second ask waits on the laptop", () => waitingAsks(dTab().messages).length === 1);
+  await waitFor("the second ask waits on the phone", () => waitingAsks(pTab().messages).length === 1);
+  await waitFor("cleared on the laptop when the job ends", () => waitingAsks(dTab().messages).length === 0);
+  await waitFor("cleared on the phone when the job ends", () => waitingAsks(pTab().messages).length === 0);
 });

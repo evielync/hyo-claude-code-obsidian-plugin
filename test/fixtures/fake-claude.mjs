@@ -7,6 +7,9 @@
 //
 // Per message: "ask" in the text asks for permission first; "slow" streams
 // slowly (so someone can join mid-turn). The reply is "Echo: <text>".
+// "bgjob" starts a background job that asks for permission after the reply
+// has finished, and ends once answered; "bgquit" does the same but the job
+// ends on its own without an answer.
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -61,6 +64,17 @@ async function turn(text) {
   write({ type: "result", subtype: "success", is_error: false, result: reply, session_id: sessionId });
 }
 
+// A background job inside this process: it asks after the turn that started
+// it has finished, carrying the job's id as agent_id, as Claude Code does.
+async function backgroundJob(task_id, quit) {
+  await sleep(80);
+  const request_id = `req-${++n}`;
+  write({ type: "control_request", request_id, request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "gmail search" }, agent_id: task_id } });
+  if (quit) await sleep(300);
+  else await new Promise((r) => pendingAnswers.set(request_id, r));
+  write({ type: "system", subtype: "task_notification", task_id, status: quit ? "failed" : "completed", summary: "done", session_id: sessionId });
+}
+
 const rl = createInterface({ input: process.stdin });
 rl.on("line", (line) => {
   if (!line.trim()) return;
@@ -90,6 +104,15 @@ rl.on("line", (line) => {
   if (m.type === "user") {
     const c = m.message?.content;
     const text = typeof c === "string" ? c : (c || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
+    const bg = /\bbg(job|quit)\b/.exec(text);
+    if (bg) {
+      const task_id = `bg-${++n}`;
+      queue = queue.then(() => {
+        write({ type: "system", subtype: "task_started", task_id, description: "Check Gmail", subagent_type: "general-purpose", session_id: sessionId });
+        return turn(text);
+      }).then(() => void backgroundJob(task_id, bg[1] === "quit"));
+      return;
+    }
     // Claude answers one message at a time.
     queue = queue.then(() => turn(text));
   }

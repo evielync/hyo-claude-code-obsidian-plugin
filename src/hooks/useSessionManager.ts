@@ -23,7 +23,7 @@ import { repairSession, isThinkingBlockApiError, type RepairResult } from "../se
 import { generateConversationTitle } from "../title-generator";
 import { Platform } from "obsidian";
 import { parseClaudeUpdateError, isClaudeAuthError } from "../models";
-import { applyJobEvent, hasRunningJobs, jobAsking, jobList, IdleGate, type JobMap, type BackgroundJob } from "../background-jobs";
+import { applyJobEvent, hasRunningJobs, jobAsking, jobList, IdleGate, asksEnded, endedJobs, type JobMap, type BackgroundJob } from "../background-jobs";
 import { appendedPrompt, withMainChatReminder, withMainChat, mainFirst, canCloseTab, canReorder, startupActive, MAIN_CHAT_TITLE } from "../main-chat";
 import { openConversations, reconcileTabs, syncChanges, syncedSid, type OpenEntry } from "../open-conversations";
 // Node built-in; deferred so this module loads on mobile.
@@ -181,10 +181,12 @@ export function useSessionManager(options: SessionManagerOptions) {
     g.whenIdle(fn);
   };
   const setJobs = (tabId: string, jobs: JobMap) => {
+    // A job that ended takes its unanswered asks with it.
+    const ended = endedJobs(jobsRef.current[tabId], jobs);
     jobsRef.current[tabId] = jobs;
     setState((prev) => ({
       ...prev,
-      tabs: prev.tabs.map((t) => (t.id === tabId ? { ...t, jobs } : t)),
+      tabs: prev.tabs.map((t) => (t.id === tabId ? { ...t, jobs, ...(ended.size ? { messages: asksEnded(t.messages, ended) } : {}) } : t)),
     }));
     // Out of this event's handling first, so a restart never runs inside it.
     setTimeout(() => gate(tabId).update(jobsRef.current[tabId]), 0);
@@ -531,7 +533,7 @@ export function useSessionManager(options: SessionManagerOptions) {
             return {
               permissionRequests: [
                 ...existing,
-                { requestId, toolName, input: req.input, ...(asker ? { asker } : {}) },
+                { requestId, toolName, input: req.input, ...(asker ? { asker } : {}), ...(req.agent_id ? { jobId: String(req.agent_id) } : {}) },
               ],
             };
           });
@@ -1154,9 +1156,10 @@ export function useSessionManager(options: SessionManagerOptions) {
         const wasGenerating = stateRef.current.tabs.find((t) => t.id === tabId)?.generating;
         // Its background agents ended with it.
         if (jobsRunning(tabId)) setJobs(tabId, {});
+        // Nothing can answer its asks any more.
         setState((prev) => ({
           ...prev,
-          tabs: prev.tabs.map((tab) => (tab.id === tabId ? { ...tab, generating: false } : tab)),
+          tabs: prev.tabs.map((tab) => (tab.id === tabId ? { ...tab, generating: false, messages: asksEnded(tab.messages, null) } : tab)),
         }));
         turnEnded(tabId);
         updateTabLastAssistant(tabId, () => ({ streaming: false }));
