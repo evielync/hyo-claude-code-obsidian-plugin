@@ -14,6 +14,8 @@
 //   { type:'attach',       tabId, sessionId }
 //   { type:'restart',      tabId }
 //   { type:'set_permission_mode', tabId, sessionId?, mode }
+//   { type:'set_model', tabId, sessionId?, model }  { type:'set_effort', tabId, sessionId?, effort }
+//   { type:'repair_session', requestId, sessionId }
 //   { type:'rename',       sessionId, title }
 //   { type:'set_task_meta', sessionId, patch }
 //   { type:'prompt',       tabId, text, content?, qid?, sessionId?, askFirst?, agent?, model?, appendSystemPrompt? }
@@ -46,6 +48,7 @@ import { Platform, Notice } from "obsidian";
 import { debug } from "./debug";
 import { getProjectDir, saveCustomTitle, setTaskMeta, saveVoiceCall, getVoiceCalls, readTranscriptEntries, parseSessionEntries, type HistoryMessage } from "./session-parser";
 import { transcriptModel, resumeModel } from "./models";
+import { repairSession } from "./session-repair";
 import { callOnlySessions } from "./voice/voice-call";
 import { buildLiveInstructions, readAgentIdentity } from "./voice/gpt-live";
 import {
@@ -1130,6 +1133,7 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
             cliPath: cfg.cliPath,
             cwd,
             model: p.model || cfg.defaultModel,
+            ...(typeof p.effort === "string" && p.effort ? { effort: p.effort } : {}),
             // The mode the phone has for this conversation (it only applies
             // if the phone is the one starting it; a running conversation
             // keeps its own). Older phones send only Ask first on or off.
@@ -1169,6 +1173,28 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
           if (typeof m.tabId === "string" && before === undefined && sessionId) {
             gatewayAttach(sessionCtx, m.tabId, sessionId, ws, sink);
           }
+          break;
+        }
+        case "repair_session": {
+          // The phone's "Recover session": the same repair the desktop runs,
+          // on the Mac, which has the file. Then the conversation's process
+          // starts fresh on the cleaned file (once nothing runs in it).
+          const sessionId = typeof m.sessionId === "string" ? m.sessionId : "";
+          let result: any;
+          try {
+            const own = sessionId ? findSessionOwner(cwd, sessionId) : null;
+            const main = mainChatOwner(cwd);
+            const owner = own || (main && main.sessionId === sessionId ? main : null);
+            if (!sessionId) result = { success: false, linesRemoved: 0, capturedUserText: null, reason: "No session ID for this tab" };
+            else if (owner?.busy) result = { success: false, linesRemoved: 0, capturedUserText: null, reason: "background work is still running in this chat. Try again once it has finished" };
+            else {
+              result = repairSession(path.join(getProjectDir(cwd), `${sessionId}.jsonl`));
+              if (result.success) owner?.restart();
+            }
+          } catch (e: any) {
+            result = { success: false, linesRemoved: 0, capturedUserText: null, reason: e?.message || String(e) };
+          }
+          send({ type: "repair_result", requestId: m.requestId, result });
           break;
         }
         case "search_sessions":

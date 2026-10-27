@@ -103,6 +103,7 @@ export class GatewayClient {
   private openListeners = new Set<(entries: OpenEntry[], meta: { ack?: number; sync?: number }) => void>();
   private connectListeners = new Set<() => void>();
   private renamePending = new Map<string, PendingRPC<string>>();
+  private repairPending = new Map<string, PendingRPC<any>>();
   private titlePending = new Map<string, PendingRPC<string | null>>();
   // Claude updates run on the Mac; progress comes back as it goes.
   private claudeUpdatePending = new Map<
@@ -287,7 +288,7 @@ export class GatewayClient {
     this.historyPending.clear();
     this.openListeners.clear();
     this.connectListeners.clear();
-    for (const map of [this.renamePending, this.titlePending]) {
+    for (const map of [this.renamePending, this.titlePending, this.repairPending]) {
       for (const p of map.values()) {
         clearTimeout(p.timer);
         p.reject(new Error("Gateway connection closed"));
@@ -430,6 +431,15 @@ export class GatewayClient {
         }
         return;
       }
+      case "repair_result": {
+        const pending = this.repairPending.get(msg.requestId);
+        if (pending) {
+          this.repairPending.delete(msg.requestId);
+          clearTimeout(pending.timer);
+          pending.resolve(msg.result);
+        }
+        return;
+      }
       case "renamed": {
         const pending = this.renamePending.get(msg.sessionId);
         if (pending) {
@@ -505,7 +515,7 @@ export class GatewayClient {
     agent?: string,
     model?: string,
     content?: any[],
-    extra: { qid?: string; silent?: boolean; permissionMode?: string } = {}
+    extra: { qid?: string; silent?: boolean; permissionMode?: string; effort?: string } = {}
   ): void {
     this.send({ type: "prompt", tabId, text, content, sessionId, resume, askFirst, appendSystemPrompt, agent, model, ...extra });
   }
@@ -527,6 +537,27 @@ export class GatewayClient {
   /** Start hearing a conversation live in this tab, caught up on any turn under way. */
   attach(tabId: string, sessionId?: string | null): void {
     this.send({ type: "attach", tabId, sessionId: sessionId || undefined });
+  }
+
+  /**
+   * Repair a conversation poisoned by an orphaned thinking block, on the Mac
+   * (the desktop's own repair). Resolves with its result; never hangs.
+   */
+  repairSession(sessionId: string): Promise<{ success: boolean; linesRemoved: number; capturedUserText: string | null; reason?: string }> {
+    const requestId = genId();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.repairPending.delete(requestId);
+        resolve({ success: false, linesRemoved: 0, capturedUserText: null, reason: this.status === "connected" ? "your Mac didn't answer in time" : "can't reach your Mac right now" });
+      }, RPC_TIMEOUT_MS);
+      this.repairPending.set(requestId, { resolve, reject: () => {}, timer });
+      this.send({ type: "repair_session", requestId, sessionId });
+    });
+  }
+
+  /** Change a conversation's reasoning effort on the Mac. */
+  setEffort(tabId: string, sessionId: string | undefined, effort: string): void {
+    this.send({ type: "set_effort", tabId, sessionId, effort });
   }
 
   /** Change a conversation's model on the Mac. */

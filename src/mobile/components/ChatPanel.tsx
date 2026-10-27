@@ -35,8 +35,10 @@ import { VoiceWaveform } from "./VoiceWaveform";
 import { useSkills, type Skill } from "../hooks/useSkills";
 import type HyoPlugin from "../../main";
 import { estimateTokens, formatTokens } from "../attachments";
-import { MODEL_OPTIONS, PERMISSION_MODES as PHONE_PERMISSION_MODES } from "../../models";
+import { MODEL_OPTIONS, PERMISSION_MODES as PHONE_PERMISSION_MODES, EFFORT_OPTIONS, DEFAULT_EFFORT, getContextLimit } from "../../models";
 import { useAgents } from "../hooks/useAgents";
+import { ReleaseCard } from "../../components/ReleaseCard";
+import { ReleaseNotes } from "../../components/ReleaseNotes";
 
 interface AttachedFile {
   name: string;
@@ -87,6 +89,25 @@ function playPermissionChime() {
 }
 
 export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
+  // Release card, as on the desktop: shown when the installed version is
+  // newer than the last one acknowledged (the setting syncs, so seeing it on
+  // one device counts for both). A fresh install gets no card.
+  const currentVersion = plugin.manifest.version;
+  const [showReleaseCard, setShowReleaseCard] = useState(
+    () => !!plugin.settings.lastSeenVersion && plugin.settings.lastSeenVersion !== currentVersion
+  );
+  const [showReleaseNotes, setShowReleaseNotes] = useState(false);
+  const dismissReleaseCard = useCallback(() => {
+    setShowReleaseCard(false);
+    plugin.settings.lastSeenVersion = currentVersion;
+    void plugin.saveData(plugin.settings);
+  }, [plugin, currentVersion]);
+  useEffect(() => {
+    if (!plugin.settings.lastSeenVersion) {
+      plugin.settings.lastSeenVersion = currentVersion;
+      void plugin.saveData(plugin.settings);
+    }
+  }, [plugin, currentVersion]);
   const {
     tabs,
     activeTabId,
@@ -101,6 +122,10 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     setTabPermissionMode,
     setTabModel,
     setTabAgent,
+    setTabEffort,
+    activeEffort,
+    activeInputTokens,
+    activeContextWindow,
     addVoiceCall,
     setVoiceEngine,
     newTab,
@@ -583,6 +608,8 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     [plugin.settings.gatewayUrl]
   );
   const [sessionPanelOpen, setSessionPanelOpen] = useState(false);
+  const [customModel, setCustomModel] = useState("");
+  const [customModelsVersion, setCustomModelsVersion] = useState(0);
   // What the conversation in view really runs with: its process's own model,
   // agent and permission mode once the Mac has said, else what this phone
   // would start it with.
@@ -599,6 +626,35 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     [setTabAgent]
   );
   const setModel = useCallback((value: string) => setTabModel(value), [setTabModel]);
+  // Built-in models plus the ones added by ID (kept in Settings, shared with
+  // the desktop), the same list the desktop's picker shows.
+  const allModelOpts = useMemo(
+    () => [
+      ...MODEL_OPTIONS,
+      ...(plugin.settings.customModels || []).filter((id) => !MODEL_OPTIONS.some((m) => m.id === id)).map((id) => ({ id, name: id, context: "" })),
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [plugin.settings.customModels, customModelsVersion]
+  );
+  const addCustomModel = useCallback(
+    (raw: string) => {
+      const id = raw.trim();
+      if (!id) return;
+      if (!MODEL_OPTIONS.some((m) => m.id === id) && !(plugin.settings.customModels || []).includes(id)) {
+        plugin.settings.customModels = [...(plugin.settings.customModels || []), id];
+        void plugin.saveSettings();
+        setCustomModelsVersion((v) => v + 1);
+      }
+      setTabModel(id);
+    },
+    [plugin, setTabModel]
+  );
+  // Effort falls back to the default rather than echoing an unknown value, as on the desktop.
+  const effortOpt = EFFORT_OPTIONS.find((e) => e.id === activeEffort) || EFFORT_OPTIONS.find((e) => e.id === DEFAULT_EFFORT)!;
+  // The context gauge, worked out as the desktop's is.
+  const contextLimit = Math.max(activeContextWindow ?? 0, getContextLimit(currentModel));
+  const contextPct = activeInputTokens > 0 ? Math.min(100, (activeInputTokens / contextLimit) * 100) : 0;
+  const contextBarClass = contextPct > 80 ? "danger" : contextPct > 50 ? "warning" : "";
   const setMode = useCallback((mode: string) => setTabPermissionMode(mode), [setTabPermissionMode]);
 
   // AI Commands seam: expose `runCommand` so an external trigger (the AI
@@ -1053,6 +1109,16 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           onOrbClick={!voiceMode.isLive && voiceMode.voiceState === "speaking" ? voiceMode.stopAudio : undefined}
         />
       )}
+      {showReleaseCard && (
+        <ReleaseCard
+          sinceVersion={plugin.settings.lastSeenVersion}
+          version={currentVersion}
+          onDismiss={dismissReleaseCard}
+          onOpenNotes={() => setShowReleaseNotes(true)}
+        />
+      )}
+      {showReleaseNotes && <ReleaseNotes onClose={() => setShowReleaseNotes(false)} />}
+
       {activeMessages.length > 0 ? (
         <ChatMessages
           messages={activeMessages}
@@ -1065,8 +1131,8 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
           loadingOlder={activeLoadingOlder}
           olderError={activeOlderError}
           onLoadOlder={() => loadOlder(activeTabId)}
-          onRecover={() => {
-            const result = recoverSession(activeTabId);
+          onRecover={async () => {
+            const result = await recoverSession(activeTabId);
             if (result.success) {
               if (result.capturedUserText) {
                 setInputValues((prev) => ({
@@ -1418,10 +1484,47 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
             </div>
             <div className="hyo-session-sec">
               <div className="hyo-session-sec-label">Model</div>
-              {MODEL_OPTIONS.map((m) => (
+              {allModelOpts.map((m) => (
                 <button key={m.id} className={`hyo-session-opt${currentModel === m.id ? " sel" : ""}`} onClick={() => setModel(m.id)}>
                   <span className="hyo-session-opt-name">{m.name}</span>
+                  {m.context && <span className="hyo-session-opt-desc">{m.context}</span>}
                   {currentModel === m.id && <span className="hyo-session-opt-tick">✓</span>}
+                </button>
+              ))}
+              {!allModelOpts.some((m) => m.id === currentModel) && (
+                <button className="hyo-session-opt sel">
+                  <span className="hyo-session-opt-name">{currentModel}</span>
+                  <span className="hyo-session-opt-tick">✓</span>
+                </button>
+              )}
+              <form
+                className="hyo-session-custom"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (customModel.trim()) {
+                    addCustomModel(customModel);
+                    setCustomModel("");
+                  }
+                }}
+              >
+                <input className="hyo-session-custom-input" placeholder="Custom model ID…" value={customModel} onChange={(e) => setCustomModel(e.target.value)} />
+                <button type="submit" className="hyo-session-custom-btn" disabled={!customModel.trim()}>
+                  Use
+                </button>
+              </form>
+            </div>
+            <div className="hyo-session-sec">
+              <div className="hyo-session-sec-label">Effort</div>
+              {EFFORT_OPTIONS.map((o) => (
+                <button key={o.id} className={`hyo-session-opt${effortOpt.id === o.id ? " sel" : ""}`} onClick={() => setTabEffort(o.id)}>
+                  <span className="hyo-session-opt-text">
+                    <span className="hyo-session-opt-name">
+                      {o.name}
+                      {o.id === DEFAULT_EFFORT && <span className="hyo-session-opt-badge">Default</span>}
+                    </span>
+                    <span className="hyo-session-opt-desc">{o.desc}</span>
+                  </span>
+                  {effortOpt.id === o.id && <span className="hyo-session-opt-tick">✓</span>}
                 </button>
               ))}
             </div>
@@ -1434,6 +1537,35 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
                 </button>
               ))}
             </div>
+            {activeInputTokens > 0 && (
+              <div className="hyo-session-sec">
+                <div className="hyo-session-sec-label">Context window</div>
+                <div className="hyo-session-context">
+                  <div className="hyo-session-context-row">
+                    <span>Used</span>
+                    <span>
+                      {formatTokens(activeInputTokens)} / {formatTokens(contextLimit)}
+                    </span>
+                  </div>
+                  <div className="hyo-usage-bar-inline">
+                    <div className={`hyo-usage-bar-inline-fill ${contextBarClass}`} style={{ width: contextPct + "%" }} />
+                  </div>
+                  <div className="hyo-session-context-row small">
+                    <span>Remaining until auto-compact</span>
+                    <span>{Math.max(0, 100 - Math.round(contextPct))}%</span>
+                  </div>
+                  <button
+                    className="hyo-session-compact"
+                    onClick={() => {
+                      compact();
+                      setSessionPanelOpen(false);
+                    }}
+                  >
+                    Compact now
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </>
       )}

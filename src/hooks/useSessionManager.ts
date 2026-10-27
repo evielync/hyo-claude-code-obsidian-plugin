@@ -304,6 +304,7 @@ export function useSessionManager(options: SessionManagerOptions) {
             ...t,
             infoKnown: true,
             ...(typeof event.permissionMode === "string" ? { permissionMode: event.permissionMode } : {}),
+            ...(typeof event.effort === "string" && event.effort ? { effort: event.effort } : {}),
             ...(typeof event.model === "string" && event.model ? { model: event.model } : {}),
             ...(typeof event.agent === "string" ? { agent: event.agent } : {}),
           }));
@@ -1382,6 +1383,8 @@ export function useSessionManager(options: SessionManagerOptions) {
   }, []);
 
   const setTabEffort = useCallback((effort: string) => {
+    // The conversation's effort: it carries on with it (every view shows it).
+    transportsRef.current[stateRef.current.activeTabId]?.setEffort(effort);
     setState((prev) => ({
       ...prev,
       tabs: prev.tabs.map((tab) =>

@@ -497,3 +497,19 @@ test("a model picked on any view: the conversation carries on on it in a fresh p
   assert.equal(procs[1].spec.model, "claude-haiku-5-5");
   assert.equal(procs[1].spec.sessionId, "s-1");
 });
+
+test("effort picked on any view: the conversation carries on with it in a fresh process, and every view shows it", () => {
+  const { procs, make } = fakes();
+  const owner = new SessionOwner(make, { sessionId: "s-1" });
+  const phone = listen();
+  const a = owner.subscribe(listen().sub);
+  owner.subscribe(phone.sub);
+  owner.send(a, spec({ effort: "medium" }), "go");
+  procs[0].emit(result);
+  owner.setEffort("high");
+  assert.equal(phone.events.filter((e) => e.type === "hyo_session_info").at(-1).effort, "high");
+  assert.equal(procs[0].stopped, true, "idle: a fresh process now");
+  owner.send(a, spec({ effort: "low", sessionId: null }), "next");
+  assert.equal(procs[1].spec.effort, "high");
+  assert.equal(procs[1].spec.sessionId, "s-1");
+});

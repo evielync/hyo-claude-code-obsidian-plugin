@@ -264,6 +264,14 @@ test("every composer control on the phone does what it does on the desktop, for 
   D().setTabModel("claude-opus-5-5");
   await waitFor("the phone shows the laptop's model", () => P().activeModel === "claude-opus-5-5");
 
+  // Effort, picked on the phone: the laptop shows it and the next process has it.
+  P().setTabEffort("high");
+  await waitFor("the laptop shows the phone's effort", () => dTab().effort === "high");
+  D().sendMessage("thinking harder");
+  await waitFor("reply", () => replies(pTab()).includes("Echo: thinking harder"));
+  assert.equal(spawned.at(-1)!.effort, "high");
+  assert.equal(spawned.at(-1)!.model, "claude-opus-5-5");
+
   // The agent, picked on the phone: as on the desktop, a new conversation with it in this tab.
   assert.equal(P().setTabAgent("researcher"), true);
   await phone.flush();

@@ -84,6 +84,8 @@ export interface ProcLike {
 /** What a conversation's process is really running with, as every view shows it. */
 export interface SessionInfo {
   permissionMode: string;
+  /** The reasoning effort, once chosen or run with. */
+  effort?: string;
   /** The model and agent, once the conversation has run here. */
   model?: string;
   agent?: string;
@@ -228,6 +230,8 @@ export class SessionOwner {
   private mode: string | null = null;
   // The model the conversation runs on (chosen on any device).
   private model: string | null = null;
+  // Its reasoning effort ("" is the CLI's default).
+  private effort: string | null = null;
   private launchedMode: string | null = null;
   private modeRequest: { id: string; mode: string } | null = null;
   private relaunchWhenIdle = false;
@@ -277,8 +281,10 @@ export class SessionOwner {
   get info(): SessionInfo | null {
     const spec = this.procSpec || this.lastSpec;
     if (!spec && !this.mode) return null;
+    const effort = this.effort ?? spec?.effort;
     return {
       permissionMode: normalizeMode(this.mode ?? spec?.permissionMode),
+      ...(effort ? { effort } : {}),
       ...(this.model ? { model: this.model } : {}),
       ...(spec ? { model: this.model || spec.model, agent: spec.agent || "" } : {}),
     };
@@ -324,6 +330,19 @@ export class SessionOwner {
     this.model = model;
     if (this.lastSpec) this.lastSpec = { ...this.lastSpec, model };
     if (this.proc && this.proc.isRunning() && this.procSpec && this.procSpec.model !== model) this.relaunch();
+    this.announceInfo();
+  }
+
+  /**
+   * Change the conversation's reasoning effort, from any view. Like the
+   * model it's set when Claude starts, so the conversation carries on in a
+   * fresh process with it: now if nothing is running, else once it's done.
+   */
+  setEffort(effort: string): void {
+    if (!effort) return;
+    this.effort = effort;
+    if (this.lastSpec) this.lastSpec = { ...this.lastSpec, effort };
+    if (this.proc && this.proc.isRunning() && this.procSpec && (this.procSpec.effort || "") !== effort) this.relaunch();
     this.announceInfo();
   }
 
@@ -420,6 +439,7 @@ export class SessionOwner {
     // setModel).
     if (this.mode) spec = { ...spec, permissionMode: this.mode };
     if (this.model) spec = { ...spec, model: this.model };
+    if (this.effort) spec = { ...spec, effort: this.effort };
     if (this.proc && this.proc.isRunning() && this.procSpec && specKey(this.procSpec) !== specKey(spec) && !this.busy) {
       this.stopProc();
     }
@@ -478,6 +498,7 @@ export class SessionOwner {
     this.launchedMode = normalizeMode(full.permissionMode);
     if (!this.mode) this.mode = this.launchedMode;
     if (!this.model) this.model = full.model;
+    if (!this.effort && full.effort) this.effort = full.effort;
     this.relaunchWhenIdle = false;
     this.modeRequest = null;
     proc.spawn();
@@ -929,6 +950,11 @@ export class OwnerTransport implements ProcLike {
     this.owner.setModel(model);
   }
 
+  /** Change the conversation's reasoning effort (every view shows it). */
+  setEffort(effort: string): void {
+    this.owner.setEffort(effort);
+  }
+
   isRunning(): boolean {
     return !!this.sub;
   }
@@ -1098,6 +1124,13 @@ export function gatewaySession(m: any, ws: object, sink: GatewayClientSink, ctx:
     case "restart":
       if (tabId) phoneTabs.get(tabId)?.owner.restart();
       return true;
+    case "set_effort": {
+      if (!tabId || typeof m.effort !== "string" || !m.effort) return true;
+      const pt = phoneTabs.get(tabId);
+      const sid = typeof m.sessionId === "string" && m.sessionId ? m.sessionId : null;
+      (pt?.owner || ownerFor(ctx, tabId, sid))?.setEffort(m.effort);
+      return true;
+    }
     case "set_model": {
       if (!tabId || typeof m.model !== "string" || !m.model) return true;
       const pt = phoneTabs.get(tabId);

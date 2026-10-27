@@ -138,7 +138,7 @@ export class GatewayTransport {
     debug("[hyo-gateway] Tab registered:", this.tabId);
   }
 
-  sendUserMessage(content: string | any[], askFirst?: boolean, extra: { qid?: string; silent?: boolean; permissionMode?: string } = {}): void {
+  sendUserMessage(content: string | any[], askFirst?: boolean, extra: { qid?: string; silent?: boolean; permissionMode?: string; effort?: string } = {}): void {
     const blocks = typeof content === "string" ? undefined : content;
     const text = typeof content === "string" ? content : flattenContentBlocks(content);
     // sessionId/resume are consulted by the gateway whenever it has no live
@@ -148,6 +148,11 @@ export class GatewayTransport {
     // session rather than starting a fresh one. askFirst likewise reflects
     // the live "Ask First" toggle at send time rather than being fixed at spawn.
     this.client.sendPrompt(this.tabId, text, this.options.sessionId, this.options.resume, askFirst, this.options.appendSystemPrompt, this.options.agent, this.options.model, blocks, extra);
+  }
+
+  /** Change the conversation's reasoning effort on the Mac (every view shows it). */
+  setEffort(effort: string): void {
+    this.client.setEffort(this.tabId, this.options.sessionId, effort);
   }
 
   /** Change the conversation's model on the Mac (every view shows it). */

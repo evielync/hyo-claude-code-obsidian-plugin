@@ -7,7 +7,8 @@ import { transformScreenBlocks } from "../voice/voice-persona";
 import type { Message } from "../hooks/useChatEngine";
 import { HIDDEN_TOOLS } from "../hooks/useChatEngine";
 import { THINKING_BLOCK_ERROR_RE } from "../session-repair";
-import { parseClaudeUpdateError } from "../../models";
+import { parseClaudeUpdateError, isClaudeAuthError } from "../../models";
+import { ClaudeSignInCard } from "../../components/ClaudeSignInCard";
 import { ClaudeUpdateCard, type ClaudeUpdateRunner } from "../../components/ClaudeUpdateCard";
 
 interface ChatMessageProps {
@@ -165,7 +166,15 @@ function AssistantMessage({ message, onRecover, onClaudeUpdate, onPermissionResp
   // connected, the card's button has that Mac update it; otherwise the card
   // says to open Hyo on that Mac.
   const updateInfo = message.streaming ? null : parseClaudeUpdateError(fullText);
-  const updateCard = updateInfo ? <ClaudeUpdateCard required={updateInfo.required} onUpdate={onClaudeUpdate} /> : null;
+  // Claude's login expired on the Mac: the desktop's sign-in card, which on
+  // a phone says to sign in from Hyo on the Mac (signing in opens a browser
+  // there).
+  const signIn = !updateInfo && !message.streaming && isClaudeAuthError(fullText);
+  const updateCard = updateInfo ? (
+    <ClaudeUpdateCard required={updateInfo.required} onUpdate={onClaudeUpdate} />
+  ) : signIn ? (
+    <ClaudeSignInCard />
+  ) : null;
 
   // Any text block at the same turn index as a Skill tool call is skill content — hide it.
   const skillTurnIndices = new Set(

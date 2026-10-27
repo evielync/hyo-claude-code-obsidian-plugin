@@ -2664,6 +2664,22 @@ button.hyo-ask-send:disabled {
 .hyo-session-opt-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 .hyo-session-opt-name { text-transform: capitalize; }
 .hyo-session-opt-tick { margin-left: auto; color: var(--text-accent); font-weight: 700; }
+.hyo-session-opt-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hyo-session-opt-desc { font-size: 12px; font-weight: 400; color: var(--text-muted); line-height: 1.35; }
+.hyo-session-opt-badge {
+  margin-left: 6px; padding: 1px 6px; border-radius: 6px;
+  background: var(--background-secondary); color: var(--text-muted);
+  font-size: 10.5px; font-weight: 600; text-transform: none;
+}
+/* A model by ID, as the desktop's picker has. */
+.hyo-session-custom { display: flex; gap: 8px; padding: 6px 2px 2px; }
+.hyo-session-custom input.hyo-session-custom-input { flex: 1; min-width: 0; height: 38px; font-size: 14px; border-radius: 10px; }
+.hyo-plugin button.hyo-session-custom-btn { height: 38px; padding: 0 14px; border-radius: 10px; font-size: 14px; }
+/* The context gauge and Compact now, as in the desktop's context popup. */
+.hyo-session-context { padding: 4px 4px 2px; }
+.hyo-session-context-row { display: flex; justify-content: space-between; font-size: 14px; padding: 4px 0; }
+.hyo-session-context-row.small { font-size: 12px; color: var(--text-muted); }
+.hyo-plugin button.hyo-session-compact { width: 100%; height: 40px; margin-top: 8px; border-radius: 10px; font-size: 14px; }
 
 /* ── Mobile UI styles (scoped to .is-mobile so desktop is untouched) ─── */
 .is-mobile /* Hyo Plugin — Obsidian theme-aware styles */

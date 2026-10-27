@@ -16,7 +16,7 @@ import type {
 import { listPastSessions, loadSessionHistory, saveCustomTitle, setTaskMeta as persistTaskMeta, saveVoiceCall, type PastSession } from "../session-parser";
 import { LIVE_BACKEND_PERSONA } from "../../voice/voice-persona";
 import { handoffRequestText, HANDOFF_MARKER, threadCalls, insertCallLine, sessionSpawn, callHome, type VoiceCallRecord } from "../../voice/voice-call";
-import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
+import { isThinkingBlockApiError, type RepairResult } from "../session-repair";
 import { generateConversationTitle } from "../title-generator";
 import { parseClaudeUpdateError } from "../../models";
 import { applyJobEvent, hasRunningJobs, jobAsking, jobList, maySwapProcess, IdleGate, type JobMap, type BackgroundJob } from "../../background-jobs";
@@ -48,6 +48,8 @@ export interface TabSession {
   messages: Message[];
   generating: boolean;
   model: string;
+  // Reasoning effort, as on the desktop (unset: the CLI's default).
+  effort?: string;
   permissionMode: string;
   agent: string;
   inputTokens: number;
@@ -295,6 +297,7 @@ export function useSessionManager(options: SessionManagerOptions) {
             ...t,
             infoKnown: true,
             ...(typeof event.permissionMode === "string" ? { permissionMode: event.permissionMode } : {}),
+            ...(typeof event.effort === "string" && event.effort ? { effort: event.effort } : {}),
             ...(typeof event.model === "string" && event.model ? { model: event.model } : {}),
             ...(typeof event.agent === "string" ? { agent: event.agent } : {}),
           }));
@@ -1139,7 +1142,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       // The conversation's permission mode goes with it (used if the phone
       // is the one starting its process; a running one keeps its own).
       const mode = tab.permissionMode || defaultMode();
-      transport.sendUserMessage(tab.isMain && !meta?.isCompaction ? withMainChatReminder(content) : content, mode !== "bypassPermissions", { qid, permissionMode: mode });
+      transport.sendUserMessage(tab.isMain && !meta?.isCompaction ? withMainChatReminder(content) : content, mode !== "bypassPermissions", { qid, permissionMode: mode, ...(tab.effort ? { effort: tab.effort } : {}) });
     },
     [options, makeProcessEvent, updateTabLastAssistant]
   );
@@ -1245,6 +1248,16 @@ export function useSessionManager(options: SessionManagerOptions) {
    * on the new model (a fresh process on the Mac once nothing is running),
    * and every view shows it. A new conversation starts on it.
    */
+  /** Reasoning effort for the conversation in view, as on the desktop. */
+  const setTabEffort = useCallback((effort: string) => {
+    const t = stateRef.current.tabs.find((x) => x.id === stateRef.current.activeTabId);
+    if (t?.cliSessionId || t?.isMain) ensureTransport(t.id).setEffort(effort);
+    setState((prev) => ({
+      ...prev,
+      tabs: prev.tabs.map((tab) => (tab.id === prev.activeTabId ? { ...tab, effort } : tab)),
+    }));
+  }, []);
+
   const setTabModel = useCallback((model: string) => {
     const t = stateRef.current.tabs.find((x) => x.id === stateRef.current.activeTabId);
     if (t?.cliSessionId || t?.isMain) ensureTransport(t.id).setModel(model);
@@ -1712,14 +1725,13 @@ export function useSessionManager(options: SessionManagerOptions) {
     sendMessage("/compact", { isCompaction: true });
   }, [sendMessage]);
 
-  // On desktop this surgically repaired a session poisoned by an orphaned
-  // `thinking` block, editing the .jsonl directly via fs. There's no fs on
-  // mobile and the gateway protocol doesn't expose a repair RPC, so
-  // repairSession always reports failure here — the "Recover session"
-  // button still appears (ChatMessage.tsx detects the same error text) but
-  // tells the user recovery isn't available yet instead of silently no-op'ing.
+  // Recover a session poisoned by an orphaned `thinking` block (the result
+  // of an output-cap mid-stream truncation): the Mac runs the desktop's own
+  // repair on the file and restarts the conversation's process on it, then
+  // the broken tail comes off here. Resolves with the result, as the
+  // desktop's does, so the panel can prefill the message to send again.
   const recoverSession = useCallback(
-    (tabId: string): RepairResult => {
+    async (tabId: string): Promise<RepairResult> => {
       const tab = stateRef.current.tabs.find((t) => t.id === tabId);
       if (!tab?.cliSessionId) {
         return {
@@ -1729,20 +1741,11 @@ export function useSessionManager(options: SessionManagerOptions) {
           reason: "No session ID for this tab",
         };
       }
-
-      const result = repairSession(tab.cliSessionId);
+      const url = optionsRef.current.gatewayUrl;
+      const result: RepairResult = url
+        ? await GatewayClient.get(url).repairSession(tab.cliSessionId)
+        : { success: false, linesRemoved: 0, capturedUserText: null, reason: "this phone isn't connected to a Mac" };
       if (!result.success) return result;
-
-      // Kill the existing transport so the next sendMessage spawns a fresh
-      // process that --resumes against the cleaned file.
-      const existing = transportsRef.current[tabId];
-      if (existing) {
-        try {
-          existing.stop();
-        } catch {}
-        delete transportsRef.current[tabId];
-      }
-
       // Strip the corrupt trailing messages from the in-memory state so the
       // chat UI matches the file. Walk back from the end, removing assistant
       // API errors and the user retries that triggered them, plus any
@@ -1930,6 +1933,8 @@ export function useSessionManager(options: SessionManagerOptions) {
     activeInfoKnown: !!activeTab?.infoKnown,
     setTabModel,
     setTabAgent,
+    setTabEffort,
+    activeEffort: activeTab?.effort || "",
     activeAgent: activeTab?.agent || LOCKED_AGENT,
     activeVoiceMode: activeTab?.voiceMode || false,
     activeTabHasSession: !!activeTab?.cliSessionId,

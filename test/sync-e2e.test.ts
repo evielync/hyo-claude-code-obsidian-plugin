@@ -279,3 +279,26 @@ test("opening a conversation can never hang: no answer means a plain error", asy
   await waitFor("the phone notices the Mac went away", () => client.getStatus() !== "connected");
   await assert.rejects(client.getHistory("whatever", { timeoutMs: 200 }), /Can't reach your Mac right now/);
 });
+
+test("Recover session from the phone: the Mac repairs the file and says how it went", async (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), "hyo-e2e-repair-"));
+  const dir = getProjectDir(cwd);
+  mkdirSync(dir, { recursive: true });
+  const config: any = { vault: cwd, cwd, getCwd: () => cwd, cliPath: fake, defaultAgent: "", defaultModel: "m", getLiveVoice: () => ({}), onConnectUrl: () => {}, onStatus: () => {}, updateClaude: async () => ({ ok: false }) };
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((r) => server.once("listening", () => r()));
+  server.on("connection", (ws) => attachGatewaySocket(ws as any, { config: () => config, env: () => process.env }));
+  const url = `ws://127.0.0.1:${(server.address() as any).port}`;
+  const client = GatewayClient.get(url);
+  t.after(() => {
+    client.destroy();
+    server.close();
+  });
+  // A healthy conversation: nothing to repair, and the reason comes back.
+  writeFileSync(join(dir, "ok.jsonl"), JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }) + "\n");
+  const r1 = await client.repairSession("ok");
+  assert.equal(r1.success, false);
+  assert.match(r1.reason || "", /No corruption/);
+  const r2 = await client.repairSession("missing");
+  assert.match(r2.reason || "", /not found/);
+});
