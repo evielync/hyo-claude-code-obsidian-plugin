@@ -9,6 +9,7 @@ import {
   spokenForVoice,
   handoffTask,
   isJustAcknowledgement,
+  errorNoteForVoice,
   type CallEndReason,
   type VoiceCallRecord,
 } from "./voice-call";
@@ -281,6 +282,15 @@ export class LiveCall {
   /** A permission ask answered on screen: the voice knows, quietly, so nobody has to say "done". */
   permissionAnswered(allowed: boolean): void {
     this.note(allowed ? NOTE_ALLOWED : NOTE_DECLINED);
+  }
+
+  /**
+   * Hyo showed an error in the chat: the voice knows what it said, quietly,
+   * the same way it hears a permission answered on screen, so "I got an
+   * error" has a real answer.
+   */
+  errorShown(text: string): void {
+    if (text.trim()) this.note(errorNoteForVoice(text.trim()));
   }
 
   /** Something on screen needs the user (permission ask, question): the voice knows, as in 0.6.x. */

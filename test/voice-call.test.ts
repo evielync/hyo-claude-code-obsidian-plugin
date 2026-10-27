@@ -31,6 +31,8 @@ import {
   placeAtHangUp,
   callHome,
   HANDOFF_NOTE_TEXT,
+  shownErrorText,
+  shownErrorsBlock,
   type VoiceCallRecord,
 } from "../src/voice/voice-call";
 import { LIVE_BACKEND_PERSONA, transformScreenBlocks } from "../src/voice/voice-persona";
@@ -309,4 +311,17 @@ test("turns ride along from the call that's on now, then only the new ones", () 
   const el = startCall("elevenlabs", 0, T0);
   addTurn(el, "user", "x", T0);
   assert.equal(takeUnseenTurns([line(el)]).turns.length, 0);
+});
+
+test("which chat messages are errors Claude never saw", () => {
+  assert.equal(shownErrorText({ role: "assistant", content: "_Claude process exited unexpectedly (code 1). Send your message again._", hyoError: true }),
+    "Claude process exited unexpectedly (code 1). Send your message again.");
+  assert.equal(shownErrorText({ role: "assistant", content: "API Error: 529 Overloaded" }), "API Error: 529 Overloaded");
+  assert.match(shownErrorText({ role: "assistant", content: "API Error: 400 ...", claudeUpdate: { status: "needed", required: "2.1.0" } })!, /needs updating to 2\.1\.0/);
+  assert.match(shownErrorText({ role: "assistant", content: "401", claudeSignIn: { status: "needed" } })!, /sign-in has expired/);
+  assert.equal(shownErrorText({ role: "assistant", content: "Here's the API Error: section of the doc." }), null, "a reply that mentions errors isn't one");
+  assert.equal(shownErrorText({ role: "assistant", content: "x", hyoError: true, streaming: true }), null);
+  assert.equal(shownErrorText({ role: "user", content: "API Error: 1", hyoError: true }), null);
+  assert.equal(shownErrorsBlock([]), "");
+  assert.match(shownErrorsBlock(["a", "b"]), /these errors[\s\S]*- a\n- b/);
 });

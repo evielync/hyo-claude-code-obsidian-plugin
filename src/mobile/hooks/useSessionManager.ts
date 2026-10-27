@@ -358,6 +358,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           updateTabLastAssistant(tabId, () => ({
             streaming: false,
             content: "_The main chat is already running in another copy of Obsidian on your computer. Use that one, or quit it and try again._",
+            hyoError: true,
           }));
           setState((prev) => ({ ...prev, tabs: prev.tabs.map((t) => (t.id === tabId ? { ...t, generating: false } : t)) }));
           turnEnded(tabId);
@@ -1040,6 +1041,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           const errorMsg: Message = {
             role: "assistant",
             content: notice,
+            hyoError: true,
             thinking: "",
             toolCalls: [],
             orderedBlocks: [],

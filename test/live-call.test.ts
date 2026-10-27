@@ -13,7 +13,7 @@ import {
   PROGRESS_GAP_MS,
   TRANSCRIPT_GRACE_MS,
 } from "../src/voice/live-call";
-import type { VoiceCallRecord } from "../src/voice/voice-call";
+import { ShownErrors, errorNoteForVoice, type VoiceCallRecord } from "../src/voice/voice-call";
 
 // A controllable clock for window timers and performance.now().
 let now = 0;
@@ -301,4 +301,33 @@ test("nothing Hyo gives the voice for a reply is more than one append", async ()
   assert.equal(says.length, 1);
   assert.ok(says[0].text.length <= 1200, `${says[0].text.length} chars`);
   assert.equal(c.s.sent.length, 2, "the started note and one spoken result: no burst");
+});
+
+test("Ev's 27 Oct call: an error shown in the chat reaches the voice quietly and Claude with the next ask", async () => {
+  const c = makeCall();
+  await c.call.start();
+  // The call starts mid-conversation, after an old error.
+  const old = { role: "assistant", content: "_Claude process exited unexpectedly (code 1). Send your message again to carry on, or start a new conversation._", hyoError: true };
+  const thread: any[] = [{ role: "user", content: "scan the videos" }, old];
+  const errors = new ShownErrors();
+  errors.begin(thread);
+  c.s.o.onTurn("user", "Scan my last ten videos.");
+  c.s.o.onDelegation("d1", "");
+  c.s.sent = [];
+  // The reply lands, then Hyo shows an error under it.
+  thread.push({ role: "assistant", content: "Done: ten videos scanned." });
+  assert.deepEqual(errors.take(thread), [], "a reply isn't an error");
+  thread.push({ role: "assistant", content: "_Claude couldn't reach the server._", hyoError: true });
+  const fresh = errors.take(thread);
+  assert.deepEqual(fresh, ["Claude couldn't reach the server."], "only the new one, plain");
+  for (const t of fresh) c.call.errorShown(t);
+  assert.deepEqual(c.s.sent, [{ kind: "think", text: errorNoteForVoice("Claude couldn't reach the server."), id: "d1" }], "told quietly, never spoken");
+  assert.match(c.s.sent[0].text, /"Claude couldn't reach the server\."/);
+  // Looking again finds nothing new; a call line landing doesn't either.
+  thread.splice(1, 0, { role: "system", content: "", voiceCall: { turns: [] } });
+  assert.deepEqual(errors.take(thread), []);
+  // "Did that run alright? I got an error." goes to Claude with the error in front.
+  const block = errors.forClaude();
+  assert.match(block, /^\[Hyo showed the user this error in the chat during the voice call; you didn't see it\]\n- Claude couldn't reach the server\.\n\[End of errors\]$/);
+  assert.equal(errors.forClaude(), "", "handed over once");
 });

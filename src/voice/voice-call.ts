@@ -538,3 +538,90 @@ export function isJustAcknowledgement(text: string): boolean {
 export function aboutYouFromNote(text: string): string {
   return (text || "").replace(/^---\s*\n[\s\S]*?\n---\s*(\n|$)/, "").trim();
 }
+
+// ---------------------------------------------------------------------------
+// Errors shown in the chat during a call
+// ---------------------------------------------------------------------------
+
+/** The parts of a chat message that say whether it's an error Hyo showed. */
+export interface ErrorCarrier {
+  role: string;
+  content?: string;
+  streaming?: boolean;
+  hyoError?: boolean;
+  claudeUpdate?: { status: string; required?: string };
+  claudeSignIn?: { status: string };
+  voiceCall?: unknown;
+}
+
+/**
+ * The error a chat message shows, in plain words, if it is one Claude never
+ * saw: one Hyo wrote itself (the process ended, Claude couldn't start), the
+ * update or sign-in card a failed turn turns into, or an API error the turn
+ * ended on. Anything else is null.
+ */
+export function shownErrorText(m: ErrorCarrier): string | null {
+  if (m.role !== "assistant" || m.streaming || m.voiceCall) return null;
+  const text = m.content || "";
+  if (m.hyoError) return text.replace(/^[\s_]+|[\s_]+$/g, "") || null;
+  if (m.claudeUpdate?.status === "needed") {
+    return `Claude needs updating${m.claudeUpdate.required ? ` to ${m.claudeUpdate.required}` : ""} before it can use this model. Hyo is offering to update it.`;
+  }
+  if (m.claudeSignIn?.status === "needed") return "Claude's sign-in has expired. Hyo is offering to sign in again.";
+  const api = text.match(/^\s*API Error\b[^\n]*/m);
+  if (api) return api[0].trim().slice(0, 400);
+  return null;
+}
+
+/** What the voice is told, silently, when an error shows in the chat during a call. */
+export function errorNoteForVoice(text: string): string {
+  return `Hyo just showed the user this error in the chat: "${text}". If they mention an error, this is the one they saw. The backend agent will be told it with the next request.`;
+}
+
+/** What goes in front of Claude's next message: the errors shown that it never saw. */
+export function shownErrorsBlock(texts: string[]): string {
+  if (!texts.length) return "";
+  return `[Hyo showed the user ${texts.length === 1 ? "this error" : "these errors"} in the chat during the voice call; you didn't see ${texts.length === 1 ? "it" : "them"}]\n${texts.map((t) => `- ${t}`).join("\n")}\n[End of errors]`;
+}
+
+/**
+ * Errors that appear in a conversation's chat during a call, each passed on
+ * once: to the voice straight away, and to Claude with its next message.
+ * Counted by text, so a reply or call line landing in between doesn't make
+ * an old error look new.
+ */
+export class ShownErrors {
+  private seen = new Map<string, number>();
+  private pending: string[] = [];
+
+  private static counts(messages: ErrorCarrier[]): Map<string, number> {
+    const n = new Map<string, number>();
+    for (const m of messages) {
+      const t = shownErrorText(m);
+      if (t) n.set(t, (n.get(t) || 0) + 1);
+    }
+    return n;
+  }
+
+  /** A call starts: errors already in the chat aren't news. */
+  begin(messages: ErrorCarrier[]): void {
+    this.seen = ShownErrors.counts(messages);
+  }
+
+  /** Errors that have appeared since the last look. They wait for Claude too. */
+  take(messages: ErrorCarrier[]): string[] {
+    const now = ShownErrors.counts(messages);
+    const fresh: string[] = [];
+    for (const [t, n] of now) for (let i = this.seen.get(t) || 0; i < n; i++) fresh.push(t);
+    this.seen = now;
+    this.pending.push(...fresh);
+    return fresh;
+  }
+
+  /** The block for Claude's next message (empty if none), handed over once. */
+  forClaude(): string {
+    const block = shownErrorsBlock(this.pending);
+    this.pending = [];
+    return block;
+  }
+}

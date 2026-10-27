@@ -27,6 +27,9 @@ export interface Message {
   // A reply Claude started itself, with nobody sending anything: a
   // background job finished and it's reporting back.
   selfStarted?: boolean;
+  // An error Hyo itself put in the chat (the process ended, Claude couldn't
+  // start). Claude never sees these; during a call they're passed on.
+  hyoError?: boolean;
   // Waiting for the turn under way to finish (sent here or on another device).
   queuedId?: string;
   // The id this message went to the conversation's owner with (session-owner.ts).

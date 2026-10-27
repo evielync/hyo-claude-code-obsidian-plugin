@@ -17,6 +17,7 @@ import { describeStep, attentionLine } from "../../voice/voice-words";
 import {
   unseenTurnsBlock,
   takeUnseenTurns,
+  ShownErrors,
   claudeMessageCount,
   placeAtHangUp,
   startCall,
@@ -332,6 +333,9 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
   // was said on it that Claude hasn't seen yet — it rides along with the
   // next thing sent from that tab.
   const callTabIdRef = useRef<string | null>(null);
+  // Errors Hyo shows in the call's chat: told to the voice as they appear,
+  // and to Claude with the next thing sent, since neither sees the chat.
+  const shownErrorsRef = useRef(new ShownErrors());
   const currentCallRef = useRef<() => VoiceCallRecord | null>(() => null);
   const sendToClaude = useCallback(
     (content: string | any[], meta?: { displayText?: string; attachedFileNames?: string[]; handoff?: boolean }) => {
@@ -339,7 +343,8 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
       const current = callTabIdRef.current === tabId ? currentCallRef.current() : null;
       const { turns, advanced } = takeUnseenTurns(activeMessagesRef.current, current);
       for (const rec of advanced) if (rec !== current) addVoiceCall(tabId, { ...rec });
-      const prefix = unseenTurnsBlock(turns);
+      const errors = callTabIdRef.current === tabId ? shownErrorsRef.current.forClaude() : "";
+      const prefix = [errors, unseenTurnsBlock(turns)].filter(Boolean).join("\n\n");
       if (!prefix) return sendMessage(content, meta);
       if (typeof content === "string") {
         return sendMessage(`${prefix}\n\n${content}`, { ...meta, displayText: meta?.displayText ?? content });
@@ -486,6 +491,19 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callOpen, liveViewOpen]);
+
+  // An error shown in the call's chat (the process ended, Claude couldn't
+  // start, an API error): the voice hears what it said straight away, and
+  // Claude gets it with the next message (sendToClaude). Errors already in
+  // the chat when the call started aren't news.
+  useEffect(() => {
+    if (callStartedAt) shownErrorsRef.current.begin(activeMessagesRef.current);
+  }, [callStartedAt]);
+  const { notifyErrorShown } = voiceMode;
+  useEffect(() => {
+    if (!callStartedAt || activeTabId !== callTabIdRef.current) return;
+    for (const text of shownErrorsRef.current.take(activeMessages)) notifyErrorShown(text);
+  }, [activeMessages, activeTabId, callStartedAt, notifyErrorShown]);
 
   // The voice overhears Claude's work: each tool call, once its input is in,
   // in plain words. The latest shows in the call bar.

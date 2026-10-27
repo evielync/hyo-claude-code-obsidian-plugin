@@ -475,6 +475,11 @@ export function useVoiceMode({
     liveRef.current?.permissionAnswered(allowed);
   }, []);
 
+  /** Hyo showed an error in the chat: the voice knows what it said. */
+  const notifyErrorShown = useCallback((text: string) => {
+    liveRef.current?.errorShown(text);
+  }, []);
+
   /** A step Claude is taking, in plain words: a short silent progress note. */
   const notifyProgress = useCallback((label: string | null) => {
     liveRef.current?.step(label);
@@ -838,6 +843,7 @@ export function useVoiceMode({
     finishReply,
     notifyProgress,
     notifyPermissionAnswered,
+    notifyErrorShown,
     noteSilently,
     recordTurn,
     currentCall,
