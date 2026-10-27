@@ -1,4 +1,5 @@
 import { App, FuzzySuggestModal, Modal, Notice, PluginSettingTab, Setting, Platform, TFile, setIcon } from "obsidian";
+import { MAIN_CHAT_AVAILABLE } from "./main-chat";
 // Node built-ins are desktop-only; deferred so this module loads on mobile.
 const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
 const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
@@ -358,7 +359,8 @@ export class HyoSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    // Main chat isn't in this release (see MAIN_CHAT_AVAILABLE).
+    if (MAIN_CHAT_AVAILABLE) new Setting(containerEl)
       .setName("Main chat")
       .setDesc(
         "One ongoing conversation with your agent, always there as the first tab. Ask for something and it hands the work to a background helper and answers straight away, so you can keep asking for more. Each result comes back into the chat when it's done. Your other tabs work as they do now."

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { mainChatOn } from "../../main-chat";
 import type { App } from "obsidian";
 import type HyoPlugin from "../../main";
 import { ChatPanel } from "./ChatPanel";
@@ -114,7 +115,7 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
     askFirst: plugin.settings.askFirst,
     permissionMode: plugin.settings.permissionMode,
     settingsVersion,
-    mainChat: !!plugin.settings.mainChat,
+    mainChat: mainChatOn(plugin.settings),
     mainChatSessionId: plugin.settings.mainChatSessionId || "",
     onMainChatSession,
   });

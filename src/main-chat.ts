@@ -103,6 +103,21 @@ export function appendedPrompt(isMain: boolean | undefined, persona: string | un
   return parts.length ? parts.join("\n\n") : undefined;
 }
 
+// ---- Whether it's on ---------------------------------------------------------
+
+/**
+ * Main chat is held back from this release: its switch isn't in Settings and
+ * it's off for everyone, including anyone whose synced settings already say
+ * `mainChat: true`. Their saved `mainChat` and `mainChatSessionId` are left
+ * as they are, so flipping this brings it back where it was.
+ */
+export const MAIN_CHAT_AVAILABLE = false;
+
+/** Whether the main chat is on, from the settings. */
+export function mainChatOn(settings: { mainChat?: boolean }): boolean {
+  return MAIN_CHAT_AVAILABLE && !!settings.mainChat;
+}
+
 // ---- The pinned tab ---------------------------------------------------------
 
 export const MAIN_CHAT_TITLE = "Main chat";

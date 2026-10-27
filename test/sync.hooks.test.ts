@@ -38,6 +38,7 @@ import { OpenConversationsStore, setOpenConversationsFactory, type OpenEntry } f
 import { getProjectDir, hasTranscript, transcriptLineCount, listPinned } from "../src/session-parser";
 import { GatewayClient } from "../src/mobile/gateway-client";
 import { waitingAsks } from "../src/background-jobs";
+import { mainChatOn } from "../src/main-chat";
 import { writeFileSync, mkdirSync } from "node:fs";
 
 const fake = join(process.cwd(), "test", "fixtures", "fake-claude.mjs");
@@ -421,9 +422,10 @@ test("a background job's ask on a finished reply shows on both devices, is answe
   await waitFor("cleared on the phone when the job ends", () => waitingAsks(pTab().messages).length === 0);
 });
 
-// A reopened long conversation carries on on the model and [1m] window it
-// grew in, on both devices, even when the phone is the one that starts it.
-test("a reopened long conversation carries on on its own model and window, desktop and phone", async (t) => {
+// Main chat is held back from this release. The long-conversation fix built
+// alongside it (carry a reopened conversation on its own model, with the
+// [1m] window it grew in) must work with it off, as the apps now pass it.
+test("with Main chat off, a reopened long conversation carries on on its own model and window, desktop and phone", async (t) => {
   const cwd = mkdtempSync(join(tmpdir(), "hyo-hooks-long-"));
   const dir = getProjectDir(cwd);
   process.env.FAKE_PROJECT_DIR = dir;
@@ -450,8 +452,13 @@ test("a reopened long conversation carries on on its own model and window, deskt
   await new Promise<void>((r) => server.once("listening", () => r()));
   server.on("connection", (ws) => attachGatewaySocket(ws as any, { config: () => config, env: () => process.env }));
   const url = `ws://127.0.0.1:${(server.address() as any).port}`;
-  const desk = mountHook(useDesk as any, { cliPath: fake, cwd, model: "claude-opus-5-5", effort: "medium", permissionMode: "default", defaultAgent: "", autoGenerateTitles: false, mainChat: false }) as any;
-  const phone = mountHook(usePhone as any, { gatewayUrl: url, model: "claude-sonnet-5-5", agent: "", askFirst: true, mainChat: false }) as any;
+  // Ev's synced settings still say mainChat: true, from testing.
+  const synced = { mainChat: true, mainChatSessionId: "main-from-testing" };
+  const mainChat = mainChatOn(synced);
+  assert.equal(mainChat, false, "off, whatever the settings say");
+  assert.deepEqual(synced, { mainChat: true, mainChatSessionId: "main-from-testing" }, "the saved settings are left alone");
+  const desk = mountHook(useDesk as any, { cliPath: fake, cwd, model: "claude-opus-5-5", effort: "medium", permissionMode: "default", defaultAgent: "", autoGenerateTitles: false, mainChat, mainChatSessionId: synced.mainChatSessionId }) as any;
+  const phone = mountHook(usePhone as any, { gatewayUrl: url, model: "claude-sonnet-5-5", agent: "", askFirst: true, mainChat, mainChatSessionId: synced.mainChatSessionId }) as any;
   t.after(() => {
     desk.unmount();
     phone.unmount();

@@ -12,6 +12,8 @@ import {
   canCloseTab,
   canReorder,
   startupActive,
+  mainChatOn,
+  MAIN_CHAT_AVAILABLE,
 } from "../src/main-chat";
 import {
   applyJobEvent,
@@ -247,4 +249,21 @@ test("the phone reads the conversation's own model, never a sub-agent's", () => 
   ];
   assert.deepEqual(transcriptModel(lines), { model: "claude-opus-4-6", contextTokens: 250_002 });
   assert.equal(extractSessionModel(lines), "claude-opus-4-6[1m]");
+});
+
+// ---- Held back from this release --------------------------------------------
+
+test("Main chat is off for everyone in this build, and its switch is hidden", () => {
+  assert.equal(MAIN_CHAT_AVAILABLE, false);
+  const synced = { mainChat: true, mainChatSessionId: "main-from-testing" };
+  assert.equal(mainChatOn(synced), false, "off even when synced settings say on");
+  assert.deepEqual(synced, { mainChat: true, mainChatSessionId: "main-from-testing" }, "saved settings untouched, so it can come back");
+  assert.equal(mainChatOn({}), false);
+  // Both apps read it through mainChatOn; the Settings switch only draws when it's available.
+  for (const f of ["src/components/HyoApp.tsx", "src/mobile/components/HyoApp.tsx"]) {
+    const src = readFileSync(join(process.cwd(), f), "utf8");
+    assert.match(src, /mainChat: mainChatOn\(plugin\.settings\)/, f);
+    assert.doesNotMatch(src, /mainChat: !!plugin\.settings\.mainChat/, f);
+  }
+  assert.match(readFileSync(join(process.cwd(), "src/settings.ts"), "utf8"), /if \(MAIN_CHAT_AVAILABLE\) new Setting\(containerEl\)\s*\.setName\("Main chat"\)/);
 });
