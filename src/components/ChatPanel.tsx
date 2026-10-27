@@ -4,8 +4,8 @@ import type { App } from "obsidian";
 import { Notice } from "obsidian";
 import { ChatMessages } from "./ChatMessages";
 import { ConversationSwitcher } from "./ConversationSwitcher";
-import { searchSessionText } from "../session-parser";
-import { buildTaskList, type BoardTask } from "../task-state";
+import { searchSessionText, transcriptLastWrite } from "../session-parser";
+import { buildTaskList, type BoardTask, type OpenHint } from "../task-state";
 import type { TaskMeta } from "../settings";
 import { HyoStatusBar } from "./HyoStatusBar";
 import { ReleaseCard } from "./ReleaseCard";
@@ -215,9 +215,24 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     return m;
   }, [pastSessions, pinnedSessionIds]);
 
+  // History only loads the newest 150 transcripts, so an open conversation
+  // that's gone quiet can fall outside it. Read its transcript's last write
+  // directly so its time is real.
+  const openHints = useMemo(() => {
+    const cwd = resolveWorkingDirectory(plugin.settings.workingDirectory, (app.vault.adapter as any).basePath as string);
+    const loaded = new Set(pastSessions.map((p) => p.id));
+    const hints: Record<string, OpenHint> = {};
+    for (const t of tabs) {
+      if (!t.cliSessionId || loaded.has(t.cliSessionId)) continue;
+      const at = transcriptLastWrite(cwd, t.cliSessionId);
+      if (at) hints[t.cliSessionId] = { lastActive: at };
+    }
+    return hints;
+  }, [tabs, pastSessions, plugin.settings.workingDirectory, app]);
+
   const boardTasks = useMemo(
-    () => buildTaskList(tabs, pastSessions, taskMeta),
-    [tabs, pastSessions, taskMeta]
+    () => buildTaskList(tabs, pastSessions, taskMeta, Date.now(), openHints),
+    [tabs, pastSessions, taskMeta, openHints]
   );
   const tabIds = useMemo(() => tabs.map((t) => t.id), [tabs]);
 

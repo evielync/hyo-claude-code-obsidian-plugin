@@ -160,7 +160,9 @@ export function buildTaskList(
       isOpen: true,
       pinned: !!meta.pinned,
       closed: !!meta.closed,
-      lastActive: times.length ? Math.max(...times) : now,
+      // Nothing known: a brand-new conversation is "now"; an existing one
+      // shows no time rather than a made-up one.
+      lastActive: times.length ? Math.max(...times) : tab.cliSessionId ? 0 : now,
       live: tab,
       past: null,
     });
@@ -240,9 +242,11 @@ export function groupTasks<T extends { pinned: boolean; lastActive: number }>(
   const byLabel = new Map<string, T[]>();
   const dayOfLabel = new Map<string, number>();
   for (const t of rest) {
-    const day = startOfDay(t.lastActive || now);
+    // No known time sorts to the bottom, never into Today.
+    const day = t.lastActive ? startOfDay(t.lastActive) : 0;
     let label: string;
-    if (day === today) label = "Today";
+    if (day === 0) label = "Earlier";
+    else if (day === today) label = "Today";
     else if (day === today - dayMs) label = "Yesterday";
     else if (day > today - 7 * dayMs)
       label = new Date(t.lastActive).toLocaleDateString(undefined, {

@@ -167,6 +167,18 @@ export function hasTranscript(cwd: string, sessionId: string): boolean {
   });
 }
 
+/** When Claude last wrote this conversation's transcript (epoch ms), or null if there's no transcript. */
+export function transcriptLastWrite(cwd: string, sessionId: string): number | null {
+  for (const d of getCandidateProjectDirs(cwd)) {
+    try {
+      return Math.round(fs.statSync(path.join(d, `${sessionId}.jsonl`)).mtimeMs);
+    } catch {
+      // not in this directory
+    }
+  }
+  return null;
+}
+
 /** Every call in a conversation, older per-turn saves included, in thread order. */
 export function getVoiceCalls(cwd: string, sessionId: string): VoiceCallRecord[] {
   const m = loadMetadata(cwd)[sessionId];
