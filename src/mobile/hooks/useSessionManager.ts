@@ -1,3 +1,4 @@
+import { asksHeld } from "../../held-asks";
 import { debug } from "../debug";
 import { addOutgoing, startQueued } from "../../send-queue";
 import { turnStarted, queued as queuedElsewhere, permissionAnswered, replayBase, queueDropped, hasQueued, steering, steered } from "../../live-sync";
@@ -345,6 +346,14 @@ export function useSessionManager(options: SessionManagerOptions) {
         }
         if (event.type === "hyo_permission_answered") {
           onTab((t) => ({ ...t, messages: permissionAnswered(t.messages, event) }));
+          return;
+        }
+        // The asks Claude is still waiting on: any other card shown is over.
+        if (event.type === "hyo_asks_open") {
+          onTab((t) => {
+            const messages = asksHeld(t.messages, event);
+            return messages === t.messages ? t : { ...t, messages };
+          });
           return;
         }
         if (event.type === "hyo_queue_dropped") {
