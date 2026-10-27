@@ -88,10 +88,11 @@ test("history: earlier calls as what was said, hand-off prompts skipped, replies
   ]);
 });
 
-test("Claude's call instructions are 0.6.x's, and say the reply also shows in the chat", () => {
+test("Claude's call instructions are 0.6.x's: a spoken opening, the detail below it in the chat", () => {
   assert.match(LIVE_BACKEND_PERSONA, /^# You are the backend of a live voice call/);
   assert.match(LIVE_BACKEND_PERSONA, /Your whole reply also shows in the chat beside the call\./);
-  assert.match(LIVE_BACKEND_PERSONA, /Return|relevant facts/);
+  assert.match(LIVE_BACKEND_PERSONA, /relevant facts/);
+  assert.match(LIVE_BACKEND_PERSONA, /Put any detail below it, formatted normally/);
   assert.match(HANDOFF_NOTE, /^\(Asked on a live voice call\. Answer for listening/);
 });
 

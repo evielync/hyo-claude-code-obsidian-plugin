@@ -119,10 +119,11 @@ test("a hand-off: Claude gets the whole ask, the voice gets a silent 'started' n
   assert.match(c.jobs[0].prompt, /What's on today\?\n\n\(Asked on a live voice call\./);
   assert.deepEqual(c.s.sent, [{ kind: "think", text: NOTE_STARTED, id: "d1" }]);
   c.s.sent = [];
-  c.call.finishReply("Five on today; the check-in prep comes first.\n[SCREEN]\n- Check-in prep\n- Script the short\n[/SCREEN]");
-  assert.deepEqual(c.s.sent, [{ kind: "say", text: "Five on today; the check-in prep comes first.", id: "d1" }], "one spoken result, no list");
+  c.call.finishReply("Five on today; the check-in prep comes first.\n\n- Check-in prep\n- Script the short");
+  const said = "Five on today; the check-in prep comes first. (The rest is in the chat.)";
+  assert.deepEqual(c.s.sent, [{ kind: "say", text: said, id: "d1" }], "one spoken result, no list");
   assert.equal(c.call.working, false);
-  assert.equal(c.call.callRecord.handoffs[0].answer, "Five on today; the check-in prep comes first.");
+  assert.equal(c.call.callRecord.handoffs[0].answer, said);
 });
 
 test("Ev's fourth call: her whole rambling question goes, including what she's still saying; the next job carries only what's new", async () => {

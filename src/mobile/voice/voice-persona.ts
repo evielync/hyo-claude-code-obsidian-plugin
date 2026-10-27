@@ -136,25 +136,17 @@ export function lastSentenceBoundary(s: string): number {
 }
 
 /**
- * Rewrite [SCREEN]…[/SCREEN] blocks into an Obsidian "screen" callout for
- * display in the transcript, so the detail shows as a clean prepared-to-read
- * card instead of leaking the raw markers. This is what makes the transcript
- * the durable home for screen detail — nothing floats, nothing is lost on
- * dismiss. Non-voice replies never contain the markers, so this is a no-op for
- * them. Handles an unclosed block (mid-stream) by treating the remainder as the
- * card body.
+ * Show a reply's [SCREEN]…[/SCREEN] detail as part of the reply: the markers
+ * go and the detail reads as normal chat text. The chat is open beside a
+ * call, so detail needs no card of its own. (Replies saved by 0.7.0 calls and
+ * the ElevenLabs engine still carry the markers.) Non-voice replies never
+ * contain them, so this is a no-op for them. An unclosed block (mid-stream)
+ * runs to the end.
  */
 export function transformScreenBlocks(text: string): string {
   if (!text || !text.includes(SCREEN_OPEN)) return text;
 
-  const toCallout = (inner: string): string => {
-    const body = inner
-      .trim()
-      .split("\n")
-      .map((l) => "> " + l)
-      .join("\n");
-    return `\n> [!screen] On screen\n${body}\n`;
-  };
+  const toDetail = (inner: string): string => `\n\n${inner.trim()}\n\n`;
 
   // Same depth-counted walk as parseVoiceResponse, so malformed/double-opened or
   // unclosed markers still render as one clean callout with no raw tags showing.
@@ -172,7 +164,7 @@ export function transformScreenBlocks(text: string): string {
       if (depth > 0) {
         depth--;
         if (depth === 0) {
-          out += toCallout(cur);
+          out += toDetail(cur);
           cur = "";
         }
       }
@@ -183,6 +175,6 @@ export function transformScreenBlocks(text: string): string {
     else out += text[i];
     i++;
   }
-  if (depth > 0 && cur.trim()) out += toCallout(cur);
+  if (depth > 0 && cur.trim()) out += toDetail(cur);
   return out.replace(/\n{3,}/g, "\n\n");
 }

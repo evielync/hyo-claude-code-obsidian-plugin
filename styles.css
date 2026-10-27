@@ -2456,39 +2456,6 @@ button.hyo-ask-send:disabled {
   color: var(--text-normal);
 }
 
-/* --- Voice "on screen" card (inline in the transcript) --- */
-/* Chad's [SCREEN] detail renders as an Obsidian callout of type "screen" — a
-   clean prepared-to-read card that lives in the conversation, so it persists
-   and can't be lost on a stray dismiss. */
-.callout[data-callout="screen"] {
-  --callout-color: var(--interactive-accent-rgb, 110, 84, 232);
-  border: 1px solid color-mix(in srgb, var(--interactive-accent) 30%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--interactive-accent) 6%, var(--background-primary));
-  margin: 10px 0;
-  padding: 6px 14px 10px;
-}
-
-.callout[data-callout="screen"] .callout-title {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--interactive-accent);
-  padding: 4px 0 6px;
-  gap: 6px;
-}
-
-.callout[data-callout="screen"] .callout-icon {
-  display: none;
-}
-
-.callout[data-callout="screen"] .callout-content > :first-child {
-  margin-top: 0;
-}
-.callout[data-callout="screen"] .callout-content > :last-child {
-  margin-bottom: 0;
-}
 /* ============================================================
    History: the panel's second side. Premium list feel —
    soft-shadowed cards, no hard borders, sticky day headers.

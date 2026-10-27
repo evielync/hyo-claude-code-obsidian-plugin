@@ -30,8 +30,11 @@ import {
   newSessionId,
   placeAtHangUp,
   callHome,
+  HANDOFF_NOTE_TEXT,
   type VoiceCallRecord,
 } from "../src/voice/voice-call";
+import { LIVE_BACKEND_PERSONA, transformScreenBlocks } from "../src/voice/voice-persona";
+import { transformScreenBlocks as transformScreenBlocksPhone } from "../src/mobile/voice/voice-persona";
 
 const T0 = Date.parse("2026-10-22T04:14:00Z");
 
@@ -120,14 +123,34 @@ test("hand-off prompts read back as the spoken request", () => {
   assert.equal(unseenTurnsBlock([]), "");
 });
 
-test("the voice gets the spoken part of Claude's reply; [SCREEN] detail stays in the chat (0.6.x)", () => {
-  assert.equal(spokenForVoice("Five on today; the check-in prep comes first. The list is on screen.\n[SCREEN]\n- CoK check-in prep\n- Script the short\n[/SCREEN]"),
-    "Five on today; the check-in prep comes first. The list is on screen.");
-  assert.equal(spokenForVoice("[SCREEN]\n| a | b |\n[/SCREEN]"), "It's in the chat now.", "only detail: point to it");
+test("the voice gets the opening of Claude's reply; the detail below stays in the chat", () => {
+  // A normal chat reply: spoken opening, then a list.
+  assert.equal(spokenForVoice("Five on today; the check-in prep comes first.\n\n- CoK check-in prep\n- Script the short"),
+    "Five on today; the check-in prep comes first. (The rest is in the chat.)");
+  // A list straight under the opening line, no blank line.
+  assert.equal(spokenForVoice("Here's where it stands:\n| a | b |\n|---|---|"), "Here's where it stands: (The rest is in the chat.)");
+  assert.equal(spokenForVoice("## Today\n- a"), "It's in the chat now.", "only detail: point to it");
   assert.equal(spokenForVoice(""), "Done.");
   assert.equal(spokenForVoice("Moved **three** tasks to [[Tasks/Friday|Friday]]."), "Moved three tasks to Friday.");
-  // A stray marker never leaks.
+  // Replies saved by 0.7.0 calls still carry [SCREEN] blocks: still detail, never spoken.
+  assert.equal(spokenForVoice("Five on today.\n[SCREEN]\n- Check-in prep\n[/SCREEN]"), "Five on today. (The rest is in the chat.)");
+  assert.equal(spokenForVoice("[SCREEN]\n| a | b |\n[/SCREEN]"), "It's in the chat now.");
   assert.doesNotMatch(spokenForVoice("Here.\n[SCREEN]\nx\n[/SCREEN]\n[/SCREEN]"), /SCREEN/);
+});
+
+test("Claude is never asked for [SCREEN] blocks on a GPT-Live call", () => {
+  assert.doesNotMatch(HANDOFF_NOTE_TEXT, /SCREEN/);
+  assert.doesNotMatch(LIVE_BACKEND_PERSONA, /SCREEN|on screen/i);
+});
+
+test("[SCREEN] detail in an old reply shows as normal chat text, never an 'On screen' card (desktop and phone)", () => {
+  for (const transform of [transformScreenBlocks, transformScreenBlocksPhone]) {
+    const out = transform("Five on today.\n[SCREEN]\n**Due**\n- Check-in prep\n[/SCREEN]");
+    assert.doesNotMatch(out, /SCREEN|\[!screen\]|On screen/);
+    assert.match(out, /^Five on today\.\n\n\*\*Due\*\*/);
+    assert.match(out, /- Check-in prep/);
+    assert.equal(transform("No markers here."), "No markers here.");
+  }
 });
 
 test("a reply longer than a spoken answer becomes one append: the facts up front, never several pieces", () => {
@@ -183,7 +206,7 @@ test("Claude gets the whole ask since the last hand-off, word for word, with the
   assert.match(prompt, /User: Morning\./, "the unseen call turns ride along");
   assert.match(prompt, /You \(voice\): Morning! What's up\?/);
   assert.ok(prompt.includes(`\n\n${said}\n\n`), "the request itself, verbatim");
-  assert.match(prompt, /\(Asked on a live voice call\. Answer for listening: short, spoken, no lists; put detail in a \[SCREEN\] block\.\)$/);
+  assert.ok(prompt.endsWith(HANDOFF_NOTE_TEXT), "ends with the hand-off note");
   assert.equal(handoffRequestText(prompt), said, "reads back as the request on reopen");
   // Nothing new since the last job: nothing to send.
   assert.deepEqual(handoffTask(turns, 4, 4, ""), { prompt: "", said: "" });

@@ -22,8 +22,8 @@ import {
  *   - a hand-off gets one silent "started on this" note, short silent
  *     progress notes while Claude works, and one spoken "still working" if
  *     it runs past 25 seconds;
- *   - Claude's finished reply goes back as the spoken part only (its
- *     [SCREEN] detail stays in the chat), as one commentary append;
+ *   - Claude's finished reply goes back as its spoken opening only (the
+ *     detail below it stays in the chat), as one commentary append;
  *   - a result overtaken by a newer request is kept silent.
  * On top of that, the real fixes:
  *   - Claude gets everything the user said since the last hand-off, word

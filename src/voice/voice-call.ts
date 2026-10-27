@@ -299,23 +299,37 @@ export function plainForVoice(md: string): string {
 /** The spoken part fits one append (≤ 500 tokens). */
 export const SPOKEN_MAX_CHARS = 1200;
 
+/** A line that starts the detail: a heading, list item, table row, code fence or quote. */
+function startsDetail(line: string): boolean {
+  return /^\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|\||```|~~~|>)/.test(line);
+}
+
+const REST_IN_CHAT = "(The rest is in the chat.)";
+
 /**
- * What the voice says for Claude's reply: the spoken part (everything
- * outside [SCREEN] blocks, which stay in the chat), as plain words. As 0.6.x:
- * an empty spoken part with detail on screen is "It's on screen now."
+ * What the voice says for Claude's reply: its opening, as plain words. On a
+ * call Claude writes a normal chat reply that opens with a few spoken
+ * sentences and puts any detail (lists, tables, code) below; the detail
+ * stays in the chat and the voice is told so. Replies from before the call
+ * bar may still carry [SCREEN] blocks; those count as detail too.
  */
 export function spokenForVoice(markdown: string): string {
-  const plain = plainForVoice(markdown || "");
+  const md = markdown || "";
+  const lines = md.replace(SCREEN_RE, "\n```\n").split("\n");
+  let i = 0;
+  while (i < lines.length && !startsDetail(lines[i])) i++;
+  const plain = plainForVoice(lines.slice(0, i).join("\n"));
+  const more = !!plainForVoice(lines.slice(i).join("\n").replace(/```/g, "")) || md.includes("[SCREEN]");
   if (plain.length > SPOKEN_MAX_CHARS) {
     // Claude wrote more than a spoken answer: the facts up front, the rest
     // stays in the chat (docs: give GPT-Live the relevant facts; keep
     // lengthy output in the backend). One append, never a burst.
     const cut = plain.slice(0, SPOKEN_MAX_CHARS - 40);
     const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "), cut.lastIndexOf("\n"));
-    return `${(end > 200 ? cut.slice(0, end + 1) : cut).trim()} (The rest is in the chat.)`;
+    return `${(end > 200 ? cut.slice(0, end + 1) : cut).trim()} ${REST_IN_CHAT}`;
   }
-  if (plain) return plain;
-  return (markdown || "").includes("[SCREEN]") ? "It's in the chat now." : "Done.";
+  if (plain) return more ? `${plain} ${REST_IN_CHAT}` : plain;
+  return more ? "It's in the chat now." : "Done.";
 }
 
 /** Finished Claude messages right now — where a call ending now goes (`after`, `endAfter`). */
@@ -498,8 +512,8 @@ export function handoffTask(
   return { prompt: parts.join("\n\n"), said };
 }
 
-/** 0.6.x's note on every hand-off (also in voice-persona.ts as HANDOFF_NOTE). */
-export const HANDOFF_NOTE_TEXT = `${HANDOFF_MARKER} Answer for listening: short, spoken, no lists; put detail in a [SCREEN] block.)`;
+/** The note on every hand-off (also in voice-persona.ts as HANDOFF_NOTE). */
+export const HANDOFF_NOTE_TEXT = `${HANDOFF_MARKER} Answer for listening: open with a short spoken answer, no lists; any detail goes below it, in the chat.)`;
 
 /**
  * Words that only answer the voice or agree ("Done", "yes", "go ahead",

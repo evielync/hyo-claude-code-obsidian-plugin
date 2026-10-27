@@ -24,19 +24,19 @@ export { HANDOFF_MARKER, HANDOFF_NOTE_TEXT as HANDOFF_NOTE } from "./voice-call"
  * separate voice model owns the conversation and speaks Claude's reply in its
  * own words, so Claude never has to fill silence or keep the call alive.
  * The 0.6.x wording (OpenAI's "Start with your existing backend prompt"
- * shape), with one change: the whole reply now also shows in the chat.
+ * shape), with the call bar's change: the user has the chat open beside the
+ * call, so the reply is a normal chat reply whose opening works spoken.
  */
 export const LIVE_BACKEND_PERSONA = `# You are the backend of a live voice call
 
-A separate voice model is talking with the user right now, as you, in real time. When the user asks for something that needs your files, tools or knowledge, the voice hands it to you and keeps the conversation going while you work. When you reply, the voice reads the spoken part of your reply and says it to the user in its own words. Your whole reply also shows in the chat beside the call.
+A separate voice model is talking with the user right now, as you, in real time. When the user asks for something that needs your files, tools or knowledge, the voice hands it to you and keeps the conversation going while you work. When you reply, the voice says the opening of your reply to the user in its own words. Your whole reply also shows in the chat beside the call.
 
 The request you receive is a voice transcript. Transcripts can contain mistakes, unfinished phrases and later corrections. Use the latest context and verified records. If a needed detail is still unclear, ask for that detail instead of guessing.
 
 ## What that means for how you answer
-- **Do the work, then answer plainly.** The spoken part is a few sentences the way you'd say them out loud: the relevant facts, whether the task is complete, and what comes next. Use confirmed values; never report an action as done unless it is. No "let me check", no "one sec", no acknowledgements — the voice already covered that. Anything long or detailed belongs on screen.
-- **No lists, headings, markdown, code, URLs, file paths or IDs in the spoken part.** Numbers the natural way.
-- **Detail goes on screen.** Anything better seen than heard — a list, a table, options, a draft, numbers, quotes, anything long — goes inside one ${SCREEN_OPEN} … ${SCREEN_CLOSE} block. It is shown in the chat, not spoken. Outside the block, one line saying what's on screen.
-- **Keep the plumbing hidden.** Never name tools, never narrate steps or errors. If something failed, say what happened in plain words.
+- **Write a normal chat reply that opens with the spoken answer.** Open with a few sentences the way you'd say them out loud: the relevant facts, whether the task is complete, and what comes next. The voice says that opening. Put any detail below it, formatted normally (lists, tables, drafts, links); the user reads it in the chat. Don't repeat detail that's already in the chat.
+- **The opening is for listening.** No lists, headings, markdown, code, URLs, file paths or IDs in those first sentences. Numbers the natural way. Use confirmed values; never report an action as done unless it is. No "let me check", no "one sec", no acknowledgements — the voice already covered that.
+- **Keep the plumbing hidden in the opening.** Never name tools or narrate steps there. If something failed, say what happened in plain words.
 - **Sub-agents run inline, never in the background.** (Agent tool: \`run_in_background: false\`.) A background result has no way back into this conversation. The user keeps talking to the voice while an inline sub-agent runs, so nothing goes quiet — you just come back with the result when it's done.
 - **Ask when you need a call made.** If something needs the user's decision or permission, say so in one line; the voice will put it to them.`;
 
@@ -182,25 +182,17 @@ export function lastSentenceBoundary(s: string): number {
 }
 
 /**
- * Rewrite [SCREEN]…[/SCREEN] blocks into an Obsidian "screen" callout for
- * display in the transcript, so the detail shows as a clean prepared-to-read
- * card instead of leaking the raw markers. This is what makes the transcript
- * the durable home for screen detail — nothing floats, nothing is lost on
- * dismiss. Non-voice replies never contain the markers, so this is a no-op for
- * them. Handles an unclosed block (mid-stream) by treating the remainder as the
- * card body.
+ * Show a reply's [SCREEN]…[/SCREEN] detail as part of the reply: the markers
+ * go and the detail reads as normal chat text. The chat is open beside a
+ * call, so detail needs no card of its own. (Replies saved by 0.7.0 calls and
+ * the ElevenLabs engine still carry the markers.) Non-voice replies never
+ * contain them, so this is a no-op for them. An unclosed block (mid-stream)
+ * runs to the end.
  */
 export function transformScreenBlocks(text: string): string {
   if (!text || !text.includes(SCREEN_OPEN)) return text;
 
-  const toCallout = (inner: string): string => {
-    const body = inner
-      .trim()
-      .split("\n")
-      .map((l) => "> " + l)
-      .join("\n");
-    return `\n> [!screen] On screen\n${body}\n`;
-  };
+  const toDetail = (inner: string): string => `\n\n${tidyScreen(inner)}\n\n`;
 
   // Same depth-counted walk as parseVoiceResponse, so malformed/double-opened or
   // unclosed markers still render as one clean callout with no raw tags showing.
@@ -218,7 +210,7 @@ export function transformScreenBlocks(text: string): string {
       if (depth > 0) {
         depth--;
         if (depth === 0) {
-          out += toCallout(cur);
+          out += toDetail(cur);
           cur = "";
         }
       }
@@ -229,6 +221,6 @@ export function transformScreenBlocks(text: string): string {
     else out += text[i];
     i++;
   }
-  if (depth > 0 && cur.trim()) out += toCallout(cur);
+  if (depth > 0 && cur.trim()) out += toDetail(cur);
   return out.replace(/\n{3,}/g, "\n\n");
 }
