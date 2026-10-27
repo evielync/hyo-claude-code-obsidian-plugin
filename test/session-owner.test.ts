@@ -609,3 +609,51 @@ test("the exit notice: only a non-clean exit mid-turn", () => {
   assert.equal(unexpectedExitNotice(1, false), null);
   assert.match(unexpectedExitNotice(1, true)!, /^_Claude process exited unexpectedly \(code 1\)\./);
 });
+
+// ---- asks that end without an answer ----
+
+const ask = (id: string, extra: any = {}) => ({ type: "control_request", request_id: id, request: { subtype: "can_use_tool", tool_name: "Bash", input: {}, ...extra } });
+const lastOpen = (events: any[]) => [...events].reverse().find((e) => e.type === "hyo_asks_open");
+
+test("a turn that ends while it waits on an approval (stopped): every view is told nothing's waiting", () => {
+  const { procs, make } = fakes();
+  const owner = new SessionOwner(make, { sessionId: "s-1" });
+  const laptop = listen();
+  const phone = listen();
+  const l = owner.subscribe(laptop.sub);
+  owner.subscribe(phone.sub);
+  owner.send(l, spec(), "tidy the inbox", "q1");
+  procs[0].emit(ask("r-1"));
+  owner.interrupt();
+  procs[0].emit({ type: "result", subtype: "error_during_execution" });
+  for (const v of [laptop, phone]) assert.deepEqual(lastOpen(v.events), { type: "hyo_asks_open", ids: [], turnOver: true });
+  // Someone opening it later isn't shown the old approval either.
+  const later = listen();
+  owner.subscribe(later.sub);
+  assert.equal(later.events.find((e) => e.type === "hyo_replay"), undefined);
+  assert.deepEqual(lastOpen(later.events).ids, []);
+});
+
+test("a background job's approval outlives the turn; it goes when the process does", () => {
+  const { procs, make } = fakes();
+  const owner = new SessionOwner(make, { sessionId: "s-1" });
+  const v = listen();
+  const id = owner.subscribe(v.sub);
+  owner.send(id, spec(), "research this", "q1");
+  procs[0].emit(ask("r-job", { agent_id: "job-1" }));
+  procs[0].emit(result);
+  assert.deepEqual(lastOpen(v.events).ids, ["r-job"]);
+  procs[0].close(1);
+  assert.deepEqual(lastOpen(v.events).ids, []);
+});
+
+test("an approval Claude withdraws is no longer open", () => {
+  const { procs, make } = fakes();
+  const owner = new SessionOwner(make, { sessionId: "s-1" });
+  const v = listen();
+  const id = owner.subscribe(v.sub);
+  owner.send(id, spec(), "go", "q1");
+  procs[0].emit(ask("r-1"));
+  procs[0].emit({ type: "control_cancel_request", request_id: "r-1" });
+  assert.deepEqual(lastOpen(v.events).ids, []);
+});

@@ -385,6 +385,7 @@ export class SessionOwner {
     if (info) sub.onEvent({ type: "hyo_session_info", ...info });
     const replay = this.replay();
     if (replay) sub.onEvent(replay);
+    sub.onEvent(this.asksOpen(!this.turn));
     return id;
   }
 
@@ -418,6 +419,15 @@ export class SessionOwner {
         console.error("[hyo] A conversation view failed to take an event:", err);
       }
     }
+  }
+
+  /** The asks still waiting on an answer, so every view can drop any it shows that aren't. */
+  private asksOpen(turnOver = false): any {
+    return { type: "hyo_asks_open", ids: [...this.openAsks.keys()], ...(turnOver ? { turnOver: true } : {}) };
+  }
+
+  private announceAsks(turnOver = false): void {
+    this.broadcast(this.asksOpen(turnOver));
   }
 
   // ---- sending ----
@@ -531,6 +541,7 @@ export class SessionOwner {
     this.turn = null;
     this.jobs = {};
     this.openAsks.clear();
+    this.announceAsks(true);
     this.opts.lock?.release();
     for (const s of [...this.subs.values()]) s.onClose?.(code);
     // Messages still waiting: start again for them, unless it just died on
@@ -573,6 +584,8 @@ export class SessionOwner {
       this.openAsks.set(e.request_id, e);
       this.answered.delete(e.request_id);
     }
+    // Claude withdrew an ask (the turn was stopped while it waited).
+    const withdrawn = e?.type === "control_cancel_request" && !!e.request_id && this.openAsks.delete(e.request_id);
     // A turn Claude starts itself (a job finished) is a turn under way too.
     if (!this.generating && isMainContent(e)) {
       this.generating = true;
@@ -583,10 +596,16 @@ export class SessionOwner {
     this.record(e);
     this.broadcast(e);
     if (e?.type === "system" || e?.type === "control_response") this.announceInfo();
+    if (withdrawn) this.announceAsks();
     if (e?.type === "result" && !isSidechain(e)) {
       this.generating = false;
       this.turn = null;
       this._seq++;
+      // Once the turn is over, nothing of its own can still be waiting on an
+      // answer (it was stopped, or Claude moved on). A background job's ask
+      // lives on until it's answered or the job ends.
+      for (const [id, ask] of this.openAsks) if (!ask?.request?.agent_id) this.openAsks.delete(id);
+      this.announceAsks(true);
       try {
         this.opts.onTurnEnd?.(this);
       } catch (err) {
@@ -676,6 +695,7 @@ export class SessionOwner {
     this.turn = null;
     this.jobs = {};
     this.openAsks.clear();
+    this.announceAsks(true);
     this.opts.lock?.release();
     try {
       p?.stop();
