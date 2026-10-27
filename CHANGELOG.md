@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.0
+
+**The one where tabs get a makeover and sync between your devices**
+
+[Watch Ev walk through this update](https://www.tella.tv/video/vid_cmvqh2fza00gd02p0ak9d15jf/view)
+
+- **Tabs have been redesigned.** Instead of a row of tabs, there's one button showing the conversation you're in. Tap it to see every open conversation, with your pinned ones at the top. History lives in the second tab, for the conversations you've closed.
+- **Pin the conversations you keep coming back to.** Pinned conversations stay at the top of your open list on your Mac and your phone. Unpin one when you're done and it moves to History.
+- **Your conversations sync live.** Send a message on your phone and you'll see it, and the reply, on your Mac, and the other way round. Your open conversations are the same on both.
+- **Close Hyo on your phone and the work keeps going.** The conversation carries on on your Mac and is there when you come back. Closing a conversation no longer stops a reply or a background job either.
+- **Send while your agent is still replying.** Your next message waits its turn and shows as queued on both devices.
+- **Your phone works the same as your Mac.** Changing the model, agent, permission mode or effort on your phone changes the conversation you're in, and every device shows what that conversation is really using. The context gauge and Compact now are on your phone too.
+- **Long conversations open quickly on your phone.** The newest messages load first, and older ones load as you scroll up.
+- **Fixed:** approval requests from background jobs now show up, so a job never sits waiting for an OK you can't see.
+- **Fixed:** voice calls no longer show "On screen" cards or a false "process exited" error, and if an error shows during a call, your agent knows what it said.
+- **Fixed:** conversations open on your phone even when Hyo's working directory is a different folder from your vault.
+- **Fixed:** one tap opens a conversation on your phone, with no more double taps.
+
 ## 0.7.0
 
 **The one where voice mode becomes a phone call**
