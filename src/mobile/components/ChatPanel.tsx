@@ -6,6 +6,7 @@ import { ConversationSwitcher } from "../../components/ConversationSwitcher";
 import { BackgroundJobs } from "../../components/BackgroundJobs";
 import { searchPastSessions } from "../session-parser";
 import { buildTaskList, type BoardTask } from "../task-state";
+import { useHyoLink } from "../../hyo-link";
 import type { TaskMeta } from "../../settings";
 import type { useSessionManager } from "../hooks/useSessionManager";
 import { useVoiceMode } from "../hooks/useVoiceMode";
@@ -261,6 +262,18 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
 
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
   const inputValue = inputValues[activeTabId] ?? "";
+  // obsidian://hyo links: open a conversation, or put text in a new one's box.
+  useHyoLink({
+    host: plugin,
+    tabs,
+    activeTabId,
+    pastSessions,
+    newTab,
+    switchTab,
+    openPastSession,
+    pastFor: (id) => ({ id, title: "", date: new Date(), size: 0 }),
+    setDraft: (tabId, text) => setInputValues((prev) => ({ ...prev, [tabId]: text })),
+  });
   // Which tabs have unsent text: a conversation closed on the Mac stays open
   // here while its box has text (see setDraft).
   useEffect(() => {

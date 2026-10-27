@@ -23,6 +23,7 @@ import { updateClaude, detectClaude } from "./cli-probe";
 import { compareVersions } from "./models";
 import { setShowAllToolCalls } from "./components/ToolCallRun";
 import { resolveWorkingDirectory } from "./working-directory";
+import { parseHyoLink, type HyoLinkRequest } from "./hyo-link";
 
 // Per-device key for "This computer is the gateway" (see isGatewayHost).
 const GATEWAY_HOST_KEY = "hyo-gateway-host";
@@ -38,6 +39,10 @@ export default class HyoPlugin extends Plugin {
   // panel is already open, `runCommand` is set and we call it directly.
   pendingCommand: { prompt: string; notePath?: string } | null = null;
   runCommand: ((prompt: string, notePath?: string) => void) | null = null;
+
+  // obsidian://hyo links (see hyo-link.ts): parked until the chat panel takes them.
+  pendingLink: HyoLinkRequest | null = null;
+  openLink: ((req: HyoLinkRequest) => void) | null = null;
 
   // Status bar indicator for mobile access (desktop only) — always shows
   // whether the gateway is actually up, so a silent failure is visible.
@@ -150,6 +155,16 @@ export default class HyoPlugin extends Plugin {
       name: "Open chat panel",
       hotkeys: [{ modifiers: ["Mod", "Shift"], key: "h" }],
       callback: () => this.activateView(),
+    });
+
+    // obsidian://hyo opens the chat panel on desktop and phone; session= and
+    // prompt= open a conversation or prefill a new one (see hyo-link.ts).
+    this.registerObsidianProtocolHandler("hyo", async (params) => {
+      const req = parseHyoLink(params as Record<string, string | undefined>);
+      await this.activateView();
+      if (!req) return;
+      if (this.openLink) this.openLink(req);
+      else this.pendingLink = req;
     });
 
     this.addSettingTab(new HyoSettingTab(this.app, this));

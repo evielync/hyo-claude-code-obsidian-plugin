@@ -6,6 +6,7 @@ import { ChatMessages } from "./ChatMessages";
 import { ConversationSwitcher } from "./ConversationSwitcher";
 import { searchSessionText, transcriptLastWrite } from "../session-parser";
 import { buildTaskList, type BoardTask, type OpenHint } from "../task-state";
+import { useHyoLink } from "../hyo-link";
 import type { TaskMeta } from "../settings";
 import { HyoStatusBar } from "./HyoStatusBar";
 import { ReleaseCard } from "./ReleaseCard";
@@ -262,6 +263,18 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   activeAgentRef.current = activeAgent;
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
   const inputValue = inputValues[activeTabId] ?? "";
+  // obsidian://hyo links: open a conversation, or put text in a new one's box.
+  useHyoLink({
+    host: plugin,
+    tabs,
+    activeTabId,
+    pastSessions,
+    newTab,
+    switchTab,
+    openPastSession,
+    pastFor: (id) => ({ id, title: "", date: new Date(), size: 0 }),
+    setDraft: (tabId, text) => setInputValues((prev) => ({ ...prev, [tabId]: text })),
+  });
   // Which tabs have unsent text: a conversation closed on another device
   // stays open here while its box has text (see setDraft).
   useEffect(() => {
