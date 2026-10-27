@@ -1149,7 +1149,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       // The conversation's permission mode goes with it (used if the phone
       // is the one starting its process; a running one keeps its own).
       const mode = tab.permissionMode || defaultMode();
-      transport.sendUserMessage(tab.isMain && !meta?.isCompaction ? withMainChatReminder(content) : content, mode !== "bypassPermissions", { qid, permissionMode: mode, ...(tab.effort ? { effort: tab.effort } : {}) });
+      transport.sendUserMessage(tab.isMain && !meta?.isCompaction ? withMainChatReminder(content) : content, mode !== "bypassPermissions", { qid, permissionMode: mode, ...(tab.effort ? { effort: tab.effort } : {}), ...(tab.model ? { model: tab.model } : {}) });
     },
     [options, makeProcessEvent, updateTabLastAssistant]
   );

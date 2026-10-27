@@ -138,7 +138,10 @@ export class GatewayTransport {
     debug("[hyo-gateway] Tab registered:", this.tabId);
   }
 
-  sendUserMessage(content: string | any[], askFirst?: boolean, extra: { qid?: string; silent?: boolean; permissionMode?: string; effort?: string } = {}): void {
+  sendUserMessage(content: string | any[], askFirst?: boolean, sendExtra: { qid?: string; silent?: boolean; permissionMode?: string; effort?: string; model?: string } = {}): void {
+    // The tab's model as it is now: a conversation's history (and the model
+    // it was built on) can arrive after this transport was made.
+    const { model, ...extra } = sendExtra;
     const blocks = typeof content === "string" ? undefined : content;
     const text = typeof content === "string" ? content : flattenContentBlocks(content);
     // sessionId/resume are consulted by the gateway whenever it has no live
@@ -147,7 +150,7 @@ export class GatewayTransport {
     // current from the CLI's own init event, so a respawn resumes the same
     // session rather than starting a fresh one. askFirst likewise reflects
     // the live "Ask First" toggle at send time rather than being fixed at spawn.
-    this.client.sendPrompt(this.tabId, text, this.options.sessionId, this.options.resume, askFirst, this.options.appendSystemPrompt, this.options.agent, this.options.model, blocks, extra);
+    this.client.sendPrompt(this.tabId, text, this.options.sessionId, this.options.resume, askFirst, this.options.appendSystemPrompt, this.options.agent, model || this.options.model, blocks, extra);
   }
 
   /** Change the conversation's reasoning effort on the Mac (every view shows it). */

@@ -38,6 +38,7 @@ import { OpenConversationsStore, setOpenConversationsFactory, type OpenEntry } f
 import { getProjectDir, hasTranscript, transcriptLineCount, listPinned } from "../src/session-parser";
 import { GatewayClient } from "../src/mobile/gateway-client";
 import { waitingAsks } from "../src/background-jobs";
+import { writeFileSync, mkdirSync } from "node:fs";
 
 const fake = join(process.cwd(), "test", "fixtures", "fake-claude.mjs");
 chmodSync(fake, 0o755);
@@ -418,4 +419,73 @@ test("a background job's ask on a finished reply shows on both devices, is answe
   await waitFor("the second ask waits on the phone", () => waitingAsks(pTab().messages).length === 1);
   await waitFor("cleared on the laptop when the job ends", () => waitingAsks(dTab().messages).length === 0);
   await waitFor("cleared on the phone when the job ends", () => waitingAsks(pTab().messages).length === 0);
+});
+
+// A reopened long conversation carries on on the model and [1m] window it
+// grew in, on both devices, even when the phone is the one that starts it.
+test("a reopened long conversation carries on on its own model and window, desktop and phone", async (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), "hyo-hooks-long-"));
+  const dir = getProjectDir(cwd);
+  process.env.FAKE_PROJECT_DIR = dir;
+  mkdirSync(dir, { recursive: true });
+  const sid = "0b6c8a52-5d1e-4c3e-9a51-6f2f6f9a1c11";
+  const lines = [
+    { type: "user", sessionId: sid, uuid: "u1", message: { role: "user", content: [{ type: "text", text: "the long one" }] } },
+    { type: "assistant", sessionId: sid, uuid: "a1", isSidechain: false, message: { id: "m1", role: "assistant", model: "claude-opus-4-6", content: [{ type: "text", text: "A long answer." }], usage: { input_tokens: 3, cache_read_input_tokens: 266_000 } } },
+  ];
+  writeFileSync(join(dir, `${sid}.jsonl`), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  const spawned: any[] = [];
+  setSessionOwnerFactory({
+    make: (spec, on) => {
+      spawned.push(spec);
+      return new ClaudeTransport({ ...spec, sessionId: spec.sessionId || undefined, resume: !!spec.sessionId && hasTranscript(spec.cwd, spec.sessionId), ...on });
+    },
+    transcriptLines: (c, s2) => transcriptLineCount(c, s2),
+    graceMs: 300,
+  });
+  let saved: OpenEntry[] | null = [];
+  setOpenConversationsFactory(() => new OpenConversationsStore({ load: () => saved, save: (e) => (saved = e), seed: () => [] }));
+  const config: any = { vault: cwd, cwd, getCwd: () => cwd, cliPath: fake, defaultAgent: "", defaultModel: "claude-opus-5-5", getLiveVoice: () => ({}), onConnectUrl: () => {}, onStatus: () => {}, updateClaude: async () => ({ ok: false }) };
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((r) => server.once("listening", () => r()));
+  server.on("connection", (ws) => attachGatewaySocket(ws as any, { config: () => config, env: () => process.env }));
+  const url = `ws://127.0.0.1:${(server.address() as any).port}`;
+  const desk = mountHook(useDesk as any, { cliPath: fake, cwd, model: "claude-opus-5-5", effort: "medium", permissionMode: "default", defaultAgent: "", autoGenerateTitles: false, mainChat: false }) as any;
+  const phone = mountHook(usePhone as any, { gatewayUrl: url, model: "claude-sonnet-5-5", agent: "", askFirst: true, mainChat: false }) as any;
+  t.after(() => {
+    desk.unmount();
+    phone.unmount();
+    GatewayClient.get(url).destroy();
+    gatewaySessionReset();
+    shutdownSessionOwners();
+    setSessionOwnerFactory(null);
+    setOpenConversationsFactory(null);
+    server.close();
+  });
+  const D = () => desk.result();
+  const P = () => phone.result();
+  await waitFor("the phone connects", () => GatewayClient.get(url).getStatus() === "connected");
+  await desk.flush();
+  await phone.flush();
+  assert.ok(!D().tabs.some((x: any) => x.isMain), "no main chat on the laptop");
+  assert.ok(!P().tabs.some((x: any) => x.isMain), "no main chat on the phone");
+
+  D().openPastSession({ id: sid, title: "The long one" } as any);
+  await desk.flush();
+  const dTab = () => D().tabs.find((x: any) => x.cliSessionId === sid);
+  await waitFor("the laptop opens it", () => !!dTab() && dTab().messages.length > 0);
+  assert.equal(dTab().model, "claude-opus-4-6[1m]", "the laptop carries on its model, in the window it grew in");
+
+  P().openPastSession({ id: sid, title: "The long one" } as any);
+  await phone.flush();
+  const pTab = () => P().tabs.find((x: any) => x.cliSessionId === sid);
+  await waitFor("the phone loads it", () => !!pTab() && !pTab().loading && pTab().messages.length > 0);
+  assert.equal(pTab().model, "claude-opus-4-6[1m]", "so does the phone, not its own default");
+  // The phone starts the process: it runs on the conversation's model.
+  P().switchTab(pTab().id);
+  await phone.flush();
+  P().sendMessage("carry on");
+  await waitFor("the reply", () => replies(pTab()).includes("Echo: carry on"));
+  assert.equal(spawned.at(-1).model, "claude-opus-4-6[1m]");
+  assert.equal(spawned.at(-1).sessionId, sid, "the same conversation");
 });
