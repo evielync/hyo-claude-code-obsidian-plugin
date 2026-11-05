@@ -263,6 +263,19 @@ export function listPinned(cwd: string): { id: string; title: string; order: str
   return out;
 }
 
+/** How many conversations the list loads; the task list pages through them with "Load more". */
+export const SESSION_WINDOW = 150;
+
+/**
+ * The newest `limit` conversations plus every pinned one, however old. Pins
+ * don't use up the window. `rows` comes newest first, and so does the result.
+ * The desktop list and the phone's (gateway-host.ts) both cut with this.
+ */
+export function newestPlusPinned<T>(rows: T[], isPinned: (row: T) => boolean, limit: number = SESSION_WINDOW): T[] {
+  let unpinned = 0;
+  return rows.filter((r) => isPinned(r) || unpinned++ < limit);
+}
+
 export function listPastSessions(cwd: string): PastSession[] {
   const candidates = getCandidateProjectDirs(cwd);
   const seenIds = new Set<string>();
@@ -308,10 +321,10 @@ export function listPastSessions(cwd: string): PastSession[] {
   }
 
   allEntries.sort((a, b) => b.stat.mtime.getTime() - a.stat.mtime.getTime());
-  // Fetch a healthy window; the task list paginates this with "Load more".
-  const entries = allEntries.slice(0, 150);
-
   const metadata = loadMetadata(cwd);
+  // Fetch a healthy window, plus every pinned conversation however old.
+  const entries = newestPlusPinned(allEntries, (f) => !!metadata[f.name.replace(".jsonl", "")]?.pinned);
+
   // Conversations that are only a voice call so far (no transcript yet).
   const hasTranscript = (id: string) =>
     candidates.some((d) => {
@@ -351,7 +364,10 @@ export function listPastSessions(cwd: string): PastSession[] {
       lastActiveMeta: meta.lastActive,
     };
   });
-  return [...fromFiles, ...callOnly].sort((a, b) => b.date.getTime() - a.date.getTime()).slice(0, 150);
+  return newestPlusPinned(
+    [...fromFiles, ...callOnly].sort((a, b) => b.date.getTime() - a.date.getTime()),
+    (s) => !!s.pinned
+  );
 }
 
 // Read the last real message from a session file — its role and a short text
