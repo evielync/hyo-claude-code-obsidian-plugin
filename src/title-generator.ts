@@ -3,6 +3,7 @@ import { Platform } from "obsidian";
 // Node built-ins are desktop-only; deferred so this module loads on mobile.
 const spawn: typeof import("child_process").spawn = Platform.isMobile ? (undefined as any) : require("child_process").spawn;
 const os: typeof import("os") = Platform.isMobile ? (undefined as any) : require("os");
+const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
 
 interface TitleGenOptions {
   cliPath: string;
@@ -54,6 +55,37 @@ function cleanTitle(raw: string): string | null {
 }
 
 /**
+ * Where the one-shot title call runs, and the PATH it sees. The folder is the
+ * system temp folder (on Windows "/tmp" doesn't exist, and spawn fails with an
+ * ENOENT that names claude.exe rather than the missing folder). The extra
+ * directories are Mac and Linux install locations; Windows keeps the PATH it
+ * inherited, which already covers npm and winget installs.
+ */
+export function titleSpawnOptions(
+  platform: NodeJS.Platform = process.platform,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+  home: string = os.homedir(),
+): { cwd: string; env: NodeJS.ProcessEnv } {
+  const env = { ...baseEnv };
+  if (platform !== "win32") {
+    env.PATH = [
+      "/usr/local/bin",
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      path.join(home, ".local", "bin"),
+      path.join(home, ".npm-global", "bin"),
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+      path.join(home, ".bun", "bin"),
+      baseEnv.PATH || "",
+    ].join(path.delimiter);
+  }
+  return { cwd: os.tmpdir(), env };
+}
+
+/**
  * Generate a conversation title using Claude Haiku in --print mode.
  * Returns null on any failure — caller should keep the existing title.
  */
@@ -72,26 +104,10 @@ export async function generateConversationTitle(
       "--no-session-persistence",
     ];
 
-    const home = os.homedir();
-    const env = { ...process.env };
-    env.PATH = [
-      "/usr/local/bin",
-      "/opt/homebrew/bin",
-      "/opt/homebrew/sbin",
-      `${home}/.npm-global/bin`,
-      "/usr/bin",
-      "/bin",
-      "/usr/sbin",
-      "/sbin",
-      `${home}/.bun/bin`,
-      process.env.PATH || "",
-    ].join(":");
-
     debug("[hyo][title] Spawning CLI for title generation...");
 
     const proc = spawn(cliPath, args, {
-      cwd: "/tmp",
-      env,
+      ...titleSpawnOptions(),
       stdio: ["ignore", "pipe", "pipe"],
     });
 
