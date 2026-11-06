@@ -24,6 +24,18 @@ const pick = (flag) => {
   const i = args.indexOf(flag);
   return i >= 0 ? args[i + 1] : undefined;
 };
+// One-shot title call (`--print <prompt>`): the title is "About: " and the
+// user message it was asked about, so a test can see which message was used.
+// FAKE_TITLE_LOG records where it ran and the PATH it saw.
+if (args.includes("--print")) {
+  const prompt = pick("--print") || "";
+  const m = prompt.match(/<user>([\s\S]*?)<\/user>/) || prompt.match(/user message:\s*"([\s\S]*?)"\s*Assistant replied/);
+  if (process.env.FAKE_TITLE_LOG) {
+    appendFileSync(process.env.FAKE_TITLE_LOG, JSON.stringify({ cwd: process.cwd(), path: process.env.PATH, prompt }) + "\n");
+  }
+  console.log(`About: ${(m ? m[1] : "").trim()}`);
+  process.exit(0);
+}
 const sessionId = pick("--resume") || pick("--session-id") || randomUUID();
 const dir = process.env.FAKE_PROJECT_DIR;
 const transcript = dir ? join(dir, `${sessionId}.jsonl`) : null;

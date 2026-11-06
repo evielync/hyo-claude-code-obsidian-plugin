@@ -22,6 +22,7 @@ import { listPastSessions, loadSessionHistory, loadSessionModel, saveCustomTitle
 import { handoffRequestText, threadCalls, insertCallLine, sessionSpawn, callHome, type VoiceCallRecord } from "../voice/voice-call";
 import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
 import { generateConversationTitle } from "../title-generator";
+import { autoTitleRequest } from "../conversation-title";
 import { Platform } from "obsidian";
 import { parseClaudeUpdateError, isClaudeAuthError } from "../models";
 import { applyJobEvent, hasRunningJobs, jobAsking, jobList, IdleGate, asksEnded, endedJobs, type JobMap, type BackgroundJob } from "../background-jobs";
@@ -32,18 +33,6 @@ const path: typeof import("path") = Platform.isMobile ? (undefined as any) : req
 
 // Re-export for convenience
 export type { PastSession };
-
-// A bare greeting opener ("hi chad", "hey", "good morning") carries no topic —
-// used to skip it when picking what to title a conversation from, so voice
-// chats started with a hello don't end up titled off the hello (or untitled).
-function isTrivialOpener(text: string): boolean {
-  const s = text.trim().toLowerCase().replace(/[.!,?'"]/g, "");
-  if (!s) return true;
-  if (s.split(/\s+/).length > 6) return false;
-  return /^(hi|hey|hello|hiya|heya|yo|sup|hola|morning|good morning|good afternoon|good evening|hey there)\b/.test(
-    s
-  );
-}
 
 // ------- types -------
 
@@ -626,64 +615,30 @@ export function useSessionManager(options: SessionManagerOptions) {
           if (options.autoGenerateTitles && ownTurnRef.current[tabId]) {
             const currentTab = stateRef.current.tabs.find((t) => t.id === tabId);
             if (currentTab && !currentTab.isMain && currentTab.messages.length >= 2) {
-              const msgs = currentTab.messages;
-              const textOf = (m: Message) =>
-                m.displayText ||
-                (typeof m.content === "string" ? m.content : "");
-              // Title from the first user message with real substance — skip a
-              // "hi chad" opener so the title reflects the actual topic. If only
-              // a greeting exists so far, wait for the next turn.
-              const firstUser =
-                msgs.find(
-                  (m) =>
-                    m.role === "user" &&
-                    !m.isCompaction &&
-                    !isTrivialOpener(textOf(m))
-                ) || undefined;
-              const userIdx = firstUser ? msgs.indexOf(firstUser) : -1;
-              const firstAssistant =
-                userIdx >= 0
-                  ? msgs
-                      .slice(userIdx + 1)
-                      .find((m) => m.role === "assistant" && !m.isCompaction && !m.voice)
-                  : undefined;
-
-              if (firstUser && firstAssistant) {
-                const userText = textOf(firstUser);
-                const truncatedTitle =
-                  userText.slice(0, 40) + (userText.length > 40 ? "..." : "");
-
-                // Only generate if title hasn't been manually set
-                const needsTitle =
-                  currentTab.title === "New conversation" ||
-                  currentTab.title === truncatedTitle;
-
-                if (needsTitle && userText) {
-                  const titleBeforeGeneration = currentTab.title;
-                  const assistantText =
-                    typeof firstAssistant.content === "string"
-                      ? firstAssistant.content
-                      : "";
-
-                  debug("[hyo][title] Generating for tab", tabId);
-
-                  generateConversationTitle({
-                    cliPath: options.cliPath,
-                    userMessage: userText,
-                    assistantMessage: assistantText,
-                  }).then((generatedTitle) => {
-                    if (!generatedTitle) {
-                      console.warn("[hyo][title] Generation returned null");
-                      return;
-                    }
-                    const tab = stateRef.current.tabs.find((t) => t.id === tabId);
-                    if (!tab || tab.title !== titleBeforeGeneration) return;
-                    debug("[hyo][title] Renamed:", generatedTitle);
-                    renameTab(tabId, generatedTitle);
-                  }).catch((err) => {
-                    console.error("[hyo][title] Error:", err);
-                  });
-                }
+              // Titled from the first message with real substance, so a
+              // conversation opened with "Hi Norm" is named after what it's
+              // about. Only while the title is still Hyo's own placeholder:
+              // one typed by hand is never replaced.
+              const req = autoTitleRequest(currentTab.title, currentTab.messages);
+              if (req) {
+                const titleBeforeGeneration = currentTab.title;
+                debug("[hyo][title] Generating for tab", tabId);
+                generateConversationTitle({
+                  cliPath: options.cliPath,
+                  userMessage: req.userText,
+                  assistantMessage: req.assistantText,
+                }).then((generatedTitle) => {
+                  if (!generatedTitle) {
+                    console.warn("[hyo][title] Generation returned null");
+                    return;
+                  }
+                  const tab = stateRef.current.tabs.find((t) => t.id === tabId);
+                  if (!tab || tab.title !== titleBeforeGeneration) return;
+                  debug("[hyo][title] Renamed:", generatedTitle);
+                  renameTab(tabId, generatedTitle);
+                }).catch((err) => {
+                  console.error("[hyo][title] Error:", err);
+                });
               }
             }
           }

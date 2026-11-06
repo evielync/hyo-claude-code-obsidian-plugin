@@ -2,6 +2,7 @@ import { debug } from "./debug";
 import { Platform } from "obsidian";
 import { isSelfStartedPrompt, isInjectedContext, steerAsUserEntry } from "./reply-stream";
 import { transcriptModel, resumeModel } from "./models";
+import { isTrivialOpener, historyFallbackTitle } from "./conversation-title";
 import { mergeStoredCalls, upsertCall, callOnlySessions, type VoiceCallRecord } from "./voice/voice-call";
 import type * as fsTypes from "fs"; // type-only (erased at build) for annotations
 // Node built-ins are desktop-only; deferred so this module loads on mobile.
@@ -777,6 +778,16 @@ function extractTitle(filePath: string): string | null {
     const text = buf.toString("utf8", 0, bytesRead);
     const lines = text.split("\n");
 
+    // A "Hi Norm" opener says nothing about the conversation: the title is the
+    // first user message with substance, or the greeting if that's all there is.
+    let greeting: string | null = null;
+    const consider = (title: string, raw: string): boolean => {
+      if (!title) return false;
+      if (!isTrivialOpener(raw)) return true;
+      if (greeting === null) greeting = title;
+      return false;
+    };
+
     for (const line of lines) {
       if (!line.trim()) continue;
       try {
@@ -833,19 +844,20 @@ function extractTitle(filePath: string): string | null {
 
             // Prefer text title, fall back to first file name
             if (textTitle) {
-              return textTitle.slice(0, 60).replace(/\n/g, " ").trim();
-            }
-            if (fileNames.length > 0) {
-              return fileNames[0].slice(0, 60);
+              if (consider(historyFallbackTitle(textTitle), textTitle)) return historyFallbackTitle(textTitle);
+            } else if (fileNames.length > 0) {
+              if (consider(fileNames[0].slice(0, 60), fileNames[0])) return fileNames[0].slice(0, 60);
             }
           } else if (typeof content === "string") {
-            return stripVoiceCallWrapping(content).slice(0, 60).replace(/\n/g, " ").trim();
+            const t = stripVoiceCallWrapping(content);
+            if (consider(historyFallbackTitle(t), t)) return historyFallbackTitle(t);
           }
         }
       } catch {
         continue;
       }
     }
+    if (greeting !== null) return greeting;
 
     // Fallback: some sessions open with heavy pasted context that leaves no
     // usable user title. Use the first assistant text line instead.

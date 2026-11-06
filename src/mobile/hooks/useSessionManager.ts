@@ -19,6 +19,7 @@ import { LIVE_BACKEND_PERSONA } from "../../voice/voice-persona";
 import { handoffRequestText, HANDOFF_MARKER, threadCalls, insertCallLine, sessionSpawn, callHome, type VoiceCallRecord } from "../../voice/voice-call";
 import { isThinkingBlockApiError, type RepairResult } from "../session-repair";
 import { generateConversationTitle } from "../title-generator";
+import { autoTitleRequest } from "../../conversation-title";
 import { parseClaudeUpdateError } from "../../models";
 import { applyJobEvent, hasRunningJobs, jobAsking, jobList, maySwapProcess, IdleGate, asksEnded, endedJobs, type JobMap, type BackgroundJob } from "../../background-jobs";
 import { appendedPrompt, withMainChatReminder, withMainChat, mainFirst, canCloseTab, canReorder, startupActive, MAIN_CHAT_TITLE } from "../../main-chat";
@@ -593,47 +594,29 @@ export function useSessionManager(options: SessionManagerOptions) {
           if (options.autoGenerateTitles && ownTurnRef.current[tabId]) {
             const currentTab = stateRef.current.tabs.find((t) => t.id === tabId);
             if (currentTab && !currentTab.isMain && currentTab.messages.length >= 2) {
-              const firstUser = currentTab.messages.find((m) => m.role === "user" && !m.isCompaction);
-              const firstAssistant = currentTab.messages.find((m) => m.role === "assistant" && !m.isCompaction);
-
-              if (firstUser && firstAssistant) {
-                const userText =
-                  firstUser.displayText ||
-                  (typeof firstUser.content === "string" ? firstUser.content : "");
-                const truncatedTitle =
-                  userText.slice(0, 40) + (userText.length > 40 ? "..." : "");
-
-                // Only generate if title hasn't been manually set
-                const needsTitle =
-                  currentTab.title === "New conversation" ||
-                  currentTab.title === truncatedTitle;
-
-                if (needsTitle && userText) {
-                  const titleBeforeGeneration = currentTab.title;
-                  const assistantText =
-                    typeof firstAssistant.content === "string"
-                      ? firstAssistant.content
-                      : "";
-
-                  debug("[hyo][title] Generating for tab", tabId);
-
-                  generateConversationTitle({
-                    gatewayUrl: options.gatewayUrl,
-                    userMessage: userText,
-                    assistantMessage: assistantText,
-                  }).then((generatedTitle) => {
-                    if (!generatedTitle) {
-                      console.warn("[hyo][title] Generation returned null");
-                      return;
-                    }
-                    const tab = stateRef.current.tabs.find((t) => t.id === tabId);
-                    if (!tab || tab.title !== titleBeforeGeneration) return;
-                    debug("[hyo][title] Renamed:", generatedTitle);
-                    renameTab(tabId, generatedTitle);
-                  }).catch((err) => {
-                    console.error("[hyo][title] Error:", err);
-                  });
-                }
+              // Same rule as the desktop: titled from the first message with
+              // real substance (a "Hi Norm" opener is skipped), and only while
+              // the title is still Hyo's own placeholder.
+              const req = autoTitleRequest(currentTab.title, currentTab.messages);
+              if (req) {
+                const titleBeforeGeneration = currentTab.title;
+                debug("[hyo][title] Generating for tab", tabId);
+                generateConversationTitle({
+                  gatewayUrl: options.gatewayUrl,
+                  userMessage: req.userText,
+                  assistantMessage: req.assistantText,
+                }).then((generatedTitle) => {
+                  if (!generatedTitle) {
+                    console.warn("[hyo][title] Generation returned null");
+                    return;
+                  }
+                  const tab = stateRef.current.tabs.find((t) => t.id === tabId);
+                  if (!tab || tab.title !== titleBeforeGeneration) return;
+                  debug("[hyo][title] Renamed:", generatedTitle);
+                  renameTab(tabId, generatedTitle);
+                }).catch((err) => {
+                  console.error("[hyo][title] Error:", err);
+                });
               }
             }
           }

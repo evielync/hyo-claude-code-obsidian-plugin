@@ -49,6 +49,7 @@ import { Platform, Notice } from "obsidian";
 import { debug } from "./debug";
 import { getProjectDir, saveCustomTitle, setTaskMeta, saveVoiceCall, getVoiceCalls, readTranscriptEntries, parseSessionEntries, type HistoryMessage } from "./session-parser";
 import { transcriptModel, resumeModel } from "./models";
+import { isTrivialOpener } from "./conversation-title";
 import { repairSession } from "./session-repair";
 import { callOnlySessions } from "./voice/voice-call";
 import { buildLiveInstructions, readAgentIdentity } from "./voice/gpt-live";
@@ -202,7 +203,10 @@ function extractTitle(fullPath: string): string {
 }
 void extractTitle; // kept for parity with the source script; listSessions uses firstUserText below
 
+// The first user message with substance (a "Hi Norm" opener is skipped), or
+// the greeting if that's all there is. The phone's History titles from this.
 function firstUserText(fullPath: string): string {
+  let greeting = "";
   const CHUNK = 65536;
   const MAX_SCAN = 5 * 1024 * 1024;
   let fd: number | undefined;
@@ -239,7 +243,9 @@ function firstUserText(fullPath: string): string {
                   .join(" ")
               : "";
         const cleaned = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
-        if (cleaned) return cleaned;
+        if (!cleaned) continue;
+        if (!isTrivialOpener(cleaned)) return cleaned;
+        if (!greeting) greeting = cleaned;
       }
     }
   } catch {
@@ -253,7 +259,7 @@ function firstUserText(fullPath: string): string {
       }
     }
   }
-  return "";
+  return greeting;
 }
 const ROUTER_SIG = /capture-router|route this (?:single )?capture|BACKFILL MODE/i;
 
