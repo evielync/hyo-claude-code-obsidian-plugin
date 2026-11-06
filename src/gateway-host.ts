@@ -47,7 +47,7 @@
 
 import { Platform, Notice } from "obsidian";
 import { debug } from "./debug";
-import { getProjectDir, saveCustomTitle, setTaskMeta, saveVoiceCall, getVoiceCalls, readTranscriptEntries, parseSessionEntries, type HistoryMessage } from "./session-parser";
+import { getProjectDir, saveCustomTitle, setTaskMeta, saveVoiceCall, getVoiceCalls, readTranscriptEntries, parseSessionEntries, newestPlusPinned, type HistoryMessage } from "./session-parser";
 import { transcriptModel, resumeModel } from "./models";
 import { repairSession } from "./session-repair";
 import { callOnlySessions } from "./voice/voice-call";
@@ -361,7 +361,8 @@ function listSessions(cwd: string) {
     });
   }
   rows.sort((a, b) => b.date - a.date);
-  return rows.slice(0, 150);
+  // The newest window plus every pinned conversation, however old.
+  return newestPlusPinned(rows, (r) => !!r.pinned);
 }
 
 // Full-text search for the phone's history screen. Same rules as desktop's

@@ -245,15 +245,7 @@ export function listPinned(cwd: string): { id: string; title: string; order: str
   const out: { id: string; title: string; order: string }[] = [];
   for (const [id, m] of Object.entries(metadata)) {
     if (!m?.pinned) continue;
-    const file = getCandidateProjectDirs(cwd)
-      .map((d) => path.join(d, `${id}.jsonl`))
-      .find((f) => {
-        try {
-          return fs.existsSync(f);
-        } catch {
-          return false;
-        }
-      });
+    const file = transcriptFile(cwd, id);
     // A conversation that's only a voice call so far counts; one whose
     // transcript has gone doesn't.
     if (!file && !(m.voiceCalls && m.voiceCalls.length)) continue;
@@ -261,6 +253,79 @@ export function listPinned(cwd: string): { id: string; title: string; order: str
     out.push({ id, title, order: m.pinnedAt || m.lastActive || "" });
   }
   return out;
+}
+
+function transcriptFile(cwd: string, id: string): string | undefined {
+  return getCandidateProjectDirs(cwd)
+    .map((d) => path.join(d, `${id}.jsonl`))
+    .find((f) => {
+      try {
+        return fs.existsSync(f);
+      } catch {
+        return false;
+      }
+    });
+}
+
+/** A pin this recent may be a conversation whose first line Claude hasn't written yet. */
+const LOST_PIN_GRACE_MS = 60 * 60 * 1000;
+
+/**
+ * Pinned conversations whose transcript has gone: Claude Code deletes a
+ * conversation it hasn't used in `cleanupPeriodDays` (30 by default), and the
+ * pin would otherwise just vanish from the Open list. Each one found is
+ * unpinned here, so it's reported once. A conversation that's only a voice
+ * call so far has no transcript by design and isn't lost. Desktop only: the
+ * Mac owns session-metadata.json.
+ */
+export function takeLostPins(cwd: string, now: number = Date.now()): { id: string; title: string | null }[] {
+  const metadata = loadMetadata(cwd);
+  const lost: { id: string; title: string | null }[] = [];
+  for (const [id, m] of Object.entries(metadata)) {
+    if (!m?.pinned) continue;
+    if (m.voiceCalls && m.voiceCalls.length) continue;
+    const pinnedAt = Date.parse(m.pinnedAt || "");
+    if (!Number.isNaN(pinnedAt) && now - pinnedAt < LOST_PIN_GRACE_MS) continue;
+    if (transcriptFile(cwd, id)) continue;
+    lost.push({ id, title: m.customTitle?.trim() || null });
+    m.pinned = false;
+    delete m.pinnedAt;
+  }
+  if (lost.length) saveMetadata(cwd, metadata);
+  return lost;
+}
+
+/** The notice for pinned conversations Claude Code has deleted. */
+export function lostPinsNotice(lost: { title: string | null }[]): string {
+  const named = lost.map((l) => l.title).filter((t): t is string => !!t);
+  const unnamed = lost.length - named.length;
+  const why = lost.length === 1
+    ? "Claude Code deleted it because it hadn't been used for a while."
+    : "Claude Code deleted them because they hadn't been used for a while.";
+  if (!named.length) {
+    return lost.length === 1
+      ? `One of your pinned conversations can't be found. ${why}`
+      : `${lost.length} of your pinned conversations can't be found. ${why}`;
+  }
+  const names = named.map((t) => `\u201c${t}\u201d`);
+  if (unnamed) names.push(unnamed === 1 ? "one other" : `${unnamed} others`);
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return lost.length === 1
+    ? `Your pinned conversation ${list} can't be found. ${why}`
+    : `Your pinned conversations ${list} can't be found. ${why}`;
+}
+
+/** How many conversations the list loads; the task list pages through them with "Load more". */
+export const SESSION_WINDOW = 150;
+
+/**
+ * The newest `limit` conversations plus every pinned one, however old. Pins
+ * don't use up the window. `rows` comes newest first, and so does the result.
+ * The desktop list and the phone's (gateway-host.ts) both cut with this.
+ */
+export function newestPlusPinned<T>(rows: T[], isPinned: (row: T) => boolean, limit: number = SESSION_WINDOW): T[] {
+  let unpinned = 0;
+  return rows.filter((r) => isPinned(r) || unpinned++ < limit);
 }
 
 export function listPastSessions(cwd: string): PastSession[] {
@@ -308,10 +373,10 @@ export function listPastSessions(cwd: string): PastSession[] {
   }
 
   allEntries.sort((a, b) => b.stat.mtime.getTime() - a.stat.mtime.getTime());
-  // Fetch a healthy window; the task list paginates this with "Load more".
-  const entries = allEntries.slice(0, 150);
-
   const metadata = loadMetadata(cwd);
+  // Fetch a healthy window, plus every pinned conversation however old.
+  const entries = newestPlusPinned(allEntries, (f) => !!metadata[f.name.replace(".jsonl", "")]?.pinned);
+
   // Conversations that are only a voice call so far (no transcript yet).
   const hasTranscript = (id: string) =>
     candidates.some((d) => {
@@ -351,7 +416,10 @@ export function listPastSessions(cwd: string): PastSession[] {
       lastActiveMeta: meta.lastActive,
     };
   });
-  return [...fromFiles, ...callOnly].sort((a, b) => b.date.getTime() - a.date.getTime()).slice(0, 150);
+  return newestPlusPinned(
+    [...fromFiles, ...callOnly].sort((a, b) => b.date.getTime() - a.date.getTime()),
+    (s) => !!s.pinned
+  );
 }
 
 // Read the last real message from a session file — its role and a short text
