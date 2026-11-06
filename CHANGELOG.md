@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.2
+
+**The one where your conversations get real titles, and your pins stay put**
+
+- **Conversations get proper titles, even when you open with a hello.** Start with "Hi Norm" or "Hey" and Hyo now names the conversation after what you went on to talk about, on your Mac and your phone. A title you've typed yourself is never changed.
+- **Fixed: automatic titles work on Windows.** Every conversation was missing its title on Windows.
+- **Pinned conversations always show, however old they are.** Before, an older pin could drop off your list once you had plenty of newer conversations.
+- **Hyo tells you when pinned conversations have been deleted.** Claude Code deletes conversations you haven't used for a while. If a pinned one is deleted, Hyo now tells you which one, so it doesn't just disappear.
+
 ## 0.8.1
 
 **The one where you can steer your agent mid-reply**
