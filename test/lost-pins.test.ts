@@ -1,6 +1,5 @@
 // A pinned conversation Claude Code has deleted (it clears out conversations
-// it hasn't used in `cleanupPeriodDays`, 30 by default) is said once, by
-// name, and unpinned, instead of silently vanishing from the Open list.
+// it hasn't used in `cleanupPeriodDays`, 30 by default) is unpinned quietly.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
@@ -11,7 +10,7 @@ const home = mkdtempSync(join(tmpdir(), "hyo-lostpins-home-"));
 process.env.HOME = home;
 process.env.USERPROFILE = home;
 
-import { getProjectDir, listPinned, takeLostPins, lostPinsNotice } from "../src/session-parser";
+import { getProjectDir, listPinned, takeLostPins } from "../src/session-parser";
 import { OpenConversationsStore } from "../src/open-conversations";
 
 function session(dir: string, id: string, text: string) {
@@ -58,34 +57,15 @@ test("a deleted pinned conversation is found, unpinned, and only once", () => {
   assert.deepEqual(listPinned(cwd).map((p) => p.id).sort(), ["call-only", "still-here"]);
 });
 
-test("the notice names it, in plain words", () => {
-  assert.equal(
-    lostPinsNotice([{ title: "Momentum Club funnel" }]),
-    "Your pinned conversation “Momentum Club funnel” can't be found. Claude Code deleted it because it hadn't been used for a while."
-  );
-  assert.equal(
-    lostPinsNotice([{ title: "A" }, { title: "B" }, { title: null }]),
-    "Your pinned conversations “A”, “B” and one other can't be found. Claude Code deleted them because they hadn't been used for a while."
-  );
-  assert.equal(
-    lostPinsNotice([{ title: null }]),
-    "One of your pinned conversations can't be found. Claude Code deleted it because it hadn't been used for a while."
-  );
-});
-
-test("wired the way main.ts wires it: the Open list drops the lost pin, the notice fires once", () => {
+test("wired the way main.ts wires it: the Open list drops the lost pin", () => {
   const cwd = vault();
-  const notices: string[] = [];
   const pins = () => {
-    const lost = takeLostPins(cwd);
-    if (lost.length) notices.push(lostPinsNotice(lost));
+    takeLostPins(cwd);
     return listPinned(cwd);
   };
   const store = new OpenConversationsStore({ load: () => [], save: () => {}, seed: () => [], pins });
   assert.deepEqual(store.list().map((e) => e.id).sort(), ["call-only", "still-here"]);
   store.pinsChanged();
-  const store2 = new OpenConversationsStore({ load: () => [], save: () => {}, seed: () => [], pins });
-  assert.ok(store2);
-  assert.equal(notices.length, 1, "said once, however often the pins are read");
-  assert.match(notices[0], /Momentum Club funnel/);
+  assert.deepEqual(store.list().map((e) => e.id).sort(), ["call-only", "still-here"]);
+  assert.equal(meta(cwd).gone.pinned, false);
 });

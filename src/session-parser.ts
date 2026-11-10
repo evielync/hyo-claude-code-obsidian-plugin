@@ -273,11 +273,10 @@ const LOST_PIN_GRACE_MS = 60 * 60 * 1000;
 
 /**
  * Pinned conversations whose transcript has gone: Claude Code deletes a
- * conversation it hasn't used in `cleanupPeriodDays` (30 by default), and the
- * pin would otherwise just vanish from the Open list. Each one found is
- * unpinned here, so it's reported once. A conversation that's only a voice
- * call so far has no transcript by design and isn't lost. Desktop only: the
- * Mac owns session-metadata.json.
+ * conversation it hasn't used in `cleanupPeriodDays` (30 by default). Each one
+ * found is unpinned here, quietly. A conversation that's only a voice call so
+ * far has no transcript by design and isn't lost. Desktop only: the Mac owns
+ * session-metadata.json.
  */
 export function takeLostPins(cwd: string, now: number = Date.now()): { id: string; title: string | null }[] {
   const metadata = loadMetadata(cwd);
@@ -294,26 +293,6 @@ export function takeLostPins(cwd: string, now: number = Date.now()): { id: strin
   }
   if (lost.length) saveMetadata(cwd, metadata);
   return lost;
-}
-
-/** The notice for pinned conversations Claude Code has deleted. */
-export function lostPinsNotice(lost: { title: string | null }[]): string {
-  const named = lost.map((l) => l.title).filter((t): t is string => !!t);
-  const unnamed = lost.length - named.length;
-  const why = lost.length === 1
-    ? "Claude Code deleted it because it hadn't been used for a while."
-    : "Claude Code deleted them because they hadn't been used for a while.";
-  if (!named.length) {
-    return lost.length === 1
-      ? `One of your pinned conversations can't be found. ${why}`
-      : `${lost.length} of your pinned conversations can't be found. ${why}`;
-  }
-  const names = named.map((t) => `\u201c${t}\u201d`);
-  if (unnamed) names.push(unnamed === 1 ? "one other" : `${unnamed} others`);
-  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-  return lost.length === 1
-    ? `Your pinned conversation ${list} can't be found. ${why}`
-    : `Your pinned conversations ${list} can't be found. ${why}`;
 }
 
 /** How many conversations the list loads; the task list pages through them with "Load more". */

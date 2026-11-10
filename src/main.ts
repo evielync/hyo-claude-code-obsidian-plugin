@@ -18,7 +18,7 @@ import { setSessionOwnerFactory, shutdownSessionOwners, fileLock, onTurnEnded } 
 import { ReadState, setReadStateFactory, readState, UNREAD_FILE } from "./read-state";
 import { ClaudeTransport } from "./claude-transport";
 import { OpenConversationsStore, setOpenConversationsFactory, legacyDesk, OPEN_LIST_FILE } from "./open-conversations";
-import { getProjectDir, listPinned, takeLostPins, lostPinsNotice, hasTranscript, transcriptLineCount } from "./session-parser";
+import { getProjectDir, listPinned, takeLostPins, hasTranscript, transcriptLineCount } from "./session-parser";
 import { CommandsManager } from "./commands";
 import { updateClaude, detectClaude } from "./cli-probe";
 import { compareVersions } from "./models";
@@ -107,12 +107,10 @@ export default class HyoPlugin extends Plugin {
           },
           // First run: the tabs this computer had open before the list was shared.
           seed: () => legacyDesk(window.localStorage.getItem(`hyo-open-tabs:${cwd}`)),
-          // A pin whose conversation Claude Code has since deleted is said
-          // once, by name, and unpinned, instead of silently vanishing.
+          // A pin whose conversation Claude Code has since deleted is unpinned.
           pins: () => {
             try {
-              const lost = takeLostPins(cwd);
-              if (lost.length) new Notice(lostPinsNotice(lost), 0);
+              takeLostPins(cwd);
             } catch (e) {
               console.error("[hyo] Couldn't check the pinned conversations:", e);
             }
