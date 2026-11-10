@@ -91,7 +91,7 @@ function model(id: string, name: string): ModelOption {
 }
 
 export const MODEL_OPTIONS: ModelOption[] = [
-  model("claude-fable-5-1", "Fable 5.1"),
+  model("claude-fable-5-2", "Fable 5.2"),
   model("claude-opus-5-5", "Opus 5.5"),
   model("claude-opus-4-8", "Opus 4.8"),
   model("claude-sonnet-5-5", "Sonnet 5.5"),
@@ -137,6 +137,10 @@ const MIN_CLAUDE_VERSION: Record<string, string> = {
   // 2.1.292 prints "unrecognized_model" for it; 2.1.293 is the first release
   // that knows it (tested 2026-10-14).
   "claude-haiku-5-5": "2.1.293",
+  // 2.1.280 refuses it (400, "version 2.1.290 or newer is required"); 2.1.290
+  // to 2.1.319 run it as "unrecognized_model"; 2.1.321 is the first that knows
+  // it (there is no 2.1.320). Tested 2026-11-10.
+  "claude-fable-5-2": "2.1.321",
 };
 
 /** Minimum Claude Code version for a model, or null when it has none. */
