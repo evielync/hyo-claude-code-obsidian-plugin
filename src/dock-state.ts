@@ -58,10 +58,10 @@ export function dockItems(
     });
 }
 
-/** "New reply", plus how many background agents are still running. */
+/** "New reply", plus how many subagents are still running. */
 export function newReplyLine(agents: number): string {
   if (agents === 0) return "New reply";
-  return `New reply · ${agents === 1 ? "1 agent" : `${agents} agents`} still working`;
+  return `New reply · ${agents === 1 ? "1 subagent" : `${agents} subagents`} still working`;
 }
 
 /** The worst state across the dock, for the tucked-away handle's dot. */

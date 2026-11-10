@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.1
+
+**The one where you can see a new reply while subagents are still working**
+
+- **You can see a new reply while subagents are still working.** Before, the conversation stayed green until every subagent finished, so you couldn't tell your agent had replied.
+- **Deleted pinned conversations are removed from your pins.** When Claude Code deletes a pinned conversation you haven't used for a while, Hyo now removes it from your pins without showing you a message about it.
+
 ## 0.9.0
 
 **The one where Hyo gets a dock, and Fable 5.2**

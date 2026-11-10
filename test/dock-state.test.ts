@@ -40,7 +40,7 @@ test("a reply that's landed shows as new while background agents still run", () 
   const t = tab({ cliSessionId: "s1", jobs: { j: { id: "j", title: "Westpac in Gmail", activity: "Searching Gmail", agentType: "", startedAt: 1 } } });
   const [item] = dockItems([t], null, new Set(["s1"]));
   assert.equal(item.unread, true);
-  assert.equal(item.status, "New reply · 1 agent still working");
+  assert.equal(item.status, "New reply · 1 subagent still working");
   assert.equal(overallState([item]), "unread");
   const [writing] = dockItems([{ ...t, generating: true }], null, new Set(["s1"]));
   assert.equal(writing.unread, false, "a reply still being written isn't new yet");
