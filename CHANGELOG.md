@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.0
+
+**The one where Hyo gets a dock, and Fable 5.2**
+
+[Watch Ev walk through the dock](https://www.tella.tv/video/heyo-obsidian-dock-update-c7qhh4ow)
+
+- **NEW 🚀 Hyo now has a persistent dock for chats.** Switch on the dock in settings and all your chats live in a dock on the left or right side of your screen. This means you don't have to be in the Hyo panel to know what is happening in your conversations.
+- **See unread chats.** When a reply lands in a conversation you weren't looking at, you can now see that it has an unread reply waiting for you. Making it easier to see what conversations need you.
+- **Fable 5.2 is in the model picker,** replacing Fable 5.1. It needs Claude Code 2.1.321 or newer, so if yours is older, Hyo offers to update it for you before your first message.
+
 ## 0.8.2
 
 **The one where your conversations get real titles, and your pins stay put**
