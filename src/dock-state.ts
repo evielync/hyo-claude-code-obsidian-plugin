@@ -41,7 +41,10 @@ export function dockItems(
         hasPending: hasPendingAttention(t),
         closed: false,
       });
-      const isUnread = state === "idle" && !!t.cliSessionId && unread.has(t.cliSessionId);
+      // A reply that's landed shows as new even while background agents are
+      // still running: those agents are the "working", the reply is waiting.
+      const isUnread =
+        state !== "needs-attention" && !t.generating && !!t.cliSessionId && unread.has(t.cliSessionId);
       return {
         tabId: t.id,
         sessionId: t.cliSessionId,
@@ -49,10 +52,16 @@ export function dockItems(
         letter: letterFor(title),
         tone: toneFor(t.cliSessionId || t.id),
         state,
-        status: isUnread ? "New reply" : statusLine(t, state),
+        status: isUnread ? newReplyLine(jobs.length) : statusLine(t, state),
         unread: isUnread,
       };
     });
+}
+
+/** "New reply", plus how many background agents are still running. */
+export function newReplyLine(agents: number): string {
+  if (agents === 0) return "New reply";
+  return `New reply · ${agents === 1 ? "1 agent" : `${agents} agents`} still working`;
 }
 
 /** The worst state across the dock, for the tucked-away handle's dot. */

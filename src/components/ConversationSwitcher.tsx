@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { hasRunningJobs, type JobMap } from "../background-jobs";
+import { hasRunningJobs, jobList, type JobMap } from "../background-jobs";
+import { newReplyLine } from "../dock-state";
 import { HistoryList, relativeTime, type HistoryTask } from "./HistoryList";
 import { ChevronIcon, CloseIcon, PencilIcon, PinIcon, PlusIcon } from "./switcher-icons";
 
@@ -27,14 +28,15 @@ export interface SwitcherTask extends HistoryTask {
 type Dot = "working" | "waiting" | "unread" | "idle";
 
 // Waiting on you wins over working: the process is still technically running
-// while it holds a question for you. Background jobs still running count as
-// working, after the reply is in too.
+// while it holds a question for you. A reply that's landed wins over
+// background agents still running: the reply is what's waiting to be read.
 function dotFor(task: SwitcherTask | undefined): Dot {
   if (!task) return "idle";
   if (task.state === "needs-attention") return "waiting";
-  if (task.live && (task.live.generating || hasRunningJobs(task.live.jobs))) return "working";
-  if (task.state === "working") return "working";
+  if (task.live?.generating) return "working";
   if (task.unread) return "unread";
+  if (task.live && hasRunningJobs(task.live.jobs)) return "working";
+  if (task.state === "working") return "working";
   return "idle";
 }
 
@@ -389,7 +391,7 @@ function OpenRow({
       </>
     ) : dot === "unread" ? (
       <>
-        <b className="hyo-cs-meta-unread">New reply</b> · {relativeTime(task.lastActive)}
+        <b className="hyo-cs-meta-unread">{newReplyLine(jobList(task.live?.jobs).length)}</b> · {relativeTime(task.lastActive)}
       </>
     ) : (
       relativeTime(task.lastActive)

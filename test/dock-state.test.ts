@@ -36,6 +36,16 @@ test("background jobs count as working after the reply ends", () => {
   assert.equal(item.status, "Background job: Searching Gmail");
 });
 
+test("a reply that's landed shows as new while background agents still run", () => {
+  const t = tab({ cliSessionId: "s1", jobs: { j: { id: "j", title: "Westpac in Gmail", activity: "Searching Gmail", agentType: "", startedAt: 1 } } });
+  const [item] = dockItems([t], null, new Set(["s1"]));
+  assert.equal(item.unread, true);
+  assert.equal(item.status, "New reply · 1 agent still working");
+  assert.equal(overallState([item]), "unread");
+  const [writing] = dockItems([{ ...t, generating: true }], null, new Set(["s1"]));
+  assert.equal(writing.unread, false, "a reply still being written isn't new yet");
+});
+
 test("the handle shows the most urgent state", () => {
   const items: any[] = [{ state: "idle" }, { state: "working" }, { state: "needs-attention" }];
   assert.equal(overallState(items), "needs-attention");

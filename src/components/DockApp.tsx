@@ -145,10 +145,10 @@ export function DockApp({ app, plugin }: DockAppProps) {
             onClick={() => choose(item)}
           >
             {item.letter}
-            {item.state !== "idle" ? (
-              <span className={`hyo-dock-dot hyo-dock-dot-${item.state}`} />
-            ) : item.unread ? (
+            {item.unread ? (
               <span className="hyo-dock-dot hyo-dock-dot-unread" />
+            ) : item.state !== "idle" ? (
+              <span className={`hyo-dock-dot hyo-dock-dot-${item.state}`} />
             ) : null}
             <span className="hyo-dock-tip">
               <span className="hyo-dock-tip-title">{item.title}</span>
