@@ -24,6 +24,7 @@ import { compareVersions } from "./models";
 import { setShowAllToolCalls } from "./components/ToolCallRun";
 import { resolveWorkingDirectory } from "./working-directory";
 import { parseHyoLink, type HyoLinkRequest } from "./hyo-link";
+import { Dock } from "./dock";
 
 // Per-device key for "This computer is the gateway" (see isGatewayHost).
 const GATEWAY_HOST_KEY = "hyo-gateway-host";
@@ -43,6 +44,9 @@ export default class HyoPlugin extends Plugin {
   // obsidian://hyo links (see hyo-link.ts): parked until the chat panel takes them.
   pendingLink: HyoLinkRequest | null = null;
   openLink: ((req: HyoLinkRequest) => void) | null = null;
+
+  // The dock on the edge of the window (dock.ts). Desktop only.
+  dock: Dock | null = null;
 
   // Status bar indicator for mobile access (desktop only) — always shows
   // whether the gateway is actually up, so a silent failure is visible.
@@ -179,6 +183,16 @@ export default class HyoPlugin extends Plugin {
 
     this.addSettingTab(new HyoSettingTab(this.app, this));
 
+    // The dock: shown once the workspace is ready, and whenever Settings
+    // switch it on or off.
+    if (!Platform.isMobile) {
+      const dock = (this.dock = new Dock(this));
+      this.app.workspace.onLayoutReady(() => dock.sync());
+      const onSettings = () => dock.sync();
+      window.addEventListener("hyo-settings-changed", onSettings);
+      this.register(() => window.removeEventListener("hyo-settings-changed", onSettings));
+    }
+
     // Sweep old attachment files (> 1 day). Safe because active sessions
     // write far more recently, so only stale files get removed. Desktop only —
     // mobile writes no attachment files (the gateway host handles them).
@@ -214,6 +228,15 @@ export default class HyoPlugin extends Plugin {
       this.pendingCommand = null;
       this.runCommand(cmd.prompt, cmd.notePath);
     }
+  }
+
+  // Opens a conversation in the side panel, the way an obsidian://hyo link
+  // with session= does. The dock's pop-up uses it to move a chat over.
+  async openInPanel(sessionId: string) {
+    const req: HyoLinkRequest = { session: sessionId };
+    await this.activateView();
+    if (this.openLink) this.openLink(req);
+    else this.pendingLink = req;
   }
 
   // "This computer is the gateway" — kept per device in this vault's local
@@ -370,6 +393,9 @@ export default class HyoPlugin extends Plugin {
   }
 
   onunload() {
+    // The dock lets go of its conversations before their processes end.
+    this.dock?.unmount();
+    this.dock = null;
     if (!Platform.isMobile) {
       try { stopGatewayHost(); } catch { /* ignore */ }
       // Obsidian is closing: every conversation's process (and any

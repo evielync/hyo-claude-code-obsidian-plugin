@@ -6,7 +6,7 @@ import { ChatMessages } from "./ChatMessages";
 import { ConversationSwitcher } from "./ConversationSwitcher";
 import { searchSessionText, transcriptLastWrite } from "../session-parser";
 import { buildTaskList, type BoardTask, type OpenHint } from "../task-state";
-import { useHyoLink } from "../hyo-link";
+import { useHyoLink, type HyoLinkHost } from "../hyo-link";
 import type { TaskMeta } from "../settings";
 import { HyoStatusBar } from "./HyoStatusBar";
 import { ReleaseCard } from "./ReleaseCard";
@@ -74,6 +74,12 @@ interface ChatPanelProps {
     onPhase: (m: string) => void,
     onCodeNeeded: CodeNeeded
   ) => Promise<{ ok: boolean; error?: string }>;
+  /**
+   * "panel" is Hyo's side panel. "popup" is the dock's pop-up (dock.ts): just
+   * the conversation and its message box, with no conversation switcher or
+   * status bar, and it leaves commands and obsidian://hyo links to the panel.
+   */
+  variant?: "panel" | "popup";
 }
 
 // A short two-note chime so a permission ask is noticeable when she's not
@@ -106,7 +112,10 @@ function playPermissionChime() {
   }
 }
 
-export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdateClaude, onSignInClaude }: ChatPanelProps) {
+export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdateClaude, onSignInClaude, variant = "panel" }: ChatPanelProps) {
+  const isPopup = variant === "popup";
+  // The pop-up never takes obsidian://hyo links: they open in the panel.
+  const noLinkHost = useRef<HyoLinkHost>({ pendingLink: null, openLink: null }).current;
   // Release card: shown when the installed version is newer than the last one
   // acknowledged. A blank lastSeenVersion means a fresh install, which gets no
   // card — nobody needs release notes for a version they never ran.
@@ -266,7 +275,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   const inputValue = inputValues[activeTabId] ?? "";
   // obsidian://hyo links: open a conversation, or put text in a new one's box.
   useHyoLink({
-    host: plugin,
+    host: isPopup ? noLinkHost : plugin,
     tabs,
     activeTabId,
     pastSessions,
@@ -550,6 +559,8 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   // empty.
   const pendingCommandFromTabRef = useRef<string | null>(null);
   useEffect(() => {
+    // Commands open in the side panel, never in the dock's pop-up.
+    if (isPopup) return;
     const run = (prompt: string, notePath?: string) => {
       let text = prompt;
       if (notePath) {
@@ -568,7 +579,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     return () => {
       if (plugin.runCommand === run) plugin.runCommand = null;
     };
-  }, [newTab, plugin]);
+  }, [newTab, plugin, isPopup]);
 
   useEffect(() => {
     if (pendingCommandPromptRef.current && activeTabId !== pendingCommandFromTabRef.current) {
@@ -1236,7 +1247,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
           onSettings={openVoiceSettings}
           onOrbClick={!voiceMode.isLive && voiceMode.voiceState === "speaking" ? voiceMode.stopAudio : undefined}
         />
-      ) : (
+      ) : isPopup ? null : (
         <ConversationSwitcher
           tasks={boardTasks}
           tabIds={tabIds}
@@ -1254,7 +1265,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
         />
       )}
 
-      {showReleaseCard && (
+      {showReleaseCard && !isPopup && (
         <ReleaseCard
           sinceVersion={plugin.settings.lastSeenVersion}
           version={currentVersion}
@@ -1442,7 +1453,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
         )}
       </div>
 
-      <HyoStatusBar
+      {!isPopup && <HyoStatusBar
         model={activeModel}
         effort={activeEffort}
         permissionMode={activePermissionMode}
@@ -1456,7 +1467,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
         onPermissionModeChange={handlePermissionModeChange}
         onAgentChange={switchAgent}
         onCompact={compact}
-      />
+      />}
 
       {openCall && <VoiceCallSheet call={openCall} agentName={agentName} onClose={() => setOpenCall(null)} />}
     </div>

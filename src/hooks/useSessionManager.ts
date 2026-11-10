@@ -94,6 +94,9 @@ interface SessionManagerOptions {
   mainChat?: boolean;
   mainChatSessionId?: string;
   onMainChatSession?: (sessionId: string) => void;
+  // Where this view keeps which conversation it was last on. The dock passes
+  // its own, so it never changes what the side panel reopens to.
+  deskKey?: string;
 }
 
 // ------- utilities -------
@@ -1537,7 +1540,7 @@ export function useSessionManager(options: SessionManagerOptions) {
   // Which one you were looking at is this computer's own, kept in
   // localStorage, keyed by vault. With no store (it isn't set up), the open
   // tabs come from localStorage as they always did.
-  const restoreKey = `hyo-open-tabs:${options.cwd}`;
+  const restoreKey = options.deskKey || `hyo-open-tabs:${options.cwd}`;
   const restoredRef = useRef(false);
 
   /** A tab for a conversation the list has that this panel doesn't yet. */

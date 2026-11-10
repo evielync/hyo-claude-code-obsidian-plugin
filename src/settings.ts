@@ -92,6 +92,12 @@ export interface HyoSettings {
   // the same one.
   mainChat: boolean;
   mainChatSessionId: string;
+  // The dock (dock.ts): a strip on the edge of the Obsidian window showing
+  // the open conversations; click one to carry it on in a pop-up. Desktop
+  // only, off by default.
+  dock: boolean;
+  dockSide: "right" | "left";
+  dockCollapsed: boolean;
   // Commands — note `type` frontmatter -> the header-button commands for that
   // type. Ported from the standalone AI Commands plugin (see commandsMigrated).
   commands: Record<string, HyoCommand[]>;
@@ -142,6 +148,9 @@ export const DEFAULT_SETTINGS: HyoSettings = {
   voiceDebugLog: false,
   mainChat: false,
   mainChatSessionId: "",
+  dock: false,
+  dockSide: "right",
+  dockCollapsed: false,
   tasks: {},
   commands: {},
   commandsMigrated: false,
@@ -374,6 +383,41 @@ export class HyoSettingTab extends PluginSettingTab {
             this.showSaved();
           })
       );
+
+    // The dock: desktop only (the phone has no room for it).
+    if (!Platform.isMobile) {
+      new Setting(containerEl)
+        .setName("Dock")
+        .setDesc(
+          "A strip on the edge of the Obsidian window showing your open conversations, whatever you have open in the sidebar. A green dot means it's working, a peach dot means it needs you. Click one to carry on the conversation in a pop-up over your note."
+        )
+        .addToggle((toggle) =>
+          toggle
+            .setValue(!!this.plugin.settings.dock)
+            .onChange(async (value) => {
+              this.plugin.settings.dock = value;
+              await this.plugin.saveSettings();
+              this.showSaved();
+              this.display();
+            })
+        );
+      if (this.plugin.settings.dock) {
+        new Setting(containerEl)
+          .setName("Dock side")
+          .setDesc("Which edge of the window the dock sits on.")
+          .addDropdown((dd) =>
+            dd
+              .addOption("right", "Right")
+              .addOption("left", "Left")
+              .setValue(this.plugin.settings.dockSide || "right")
+              .onChange(async (value) => {
+                this.plugin.settings.dockSide = value === "left" ? "left" : "right";
+                await this.plugin.saveSettings();
+                this.showSaved();
+              })
+          );
+      }
+    }
 
     new Setting(containerEl)
       .setName("Show every tool call")

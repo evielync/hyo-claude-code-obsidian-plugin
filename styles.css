@@ -4911,3 +4911,193 @@ button.hyo-callline:hover { background: var(--background-secondary); }
 @media (prefers-reduced-motion: reduce) {
   .hyo-convo-spinner { animation-duration: 2.4s; }
 }
+
+/* ===== Dock (dock.ts, DockApp.tsx) =====================================
+   A strip on the edge of the window listing the open conversations, and a
+   pop-up to carry one on over the current note. Lives on document.body, so
+   it sits above the workspace but below Obsidian's menus and modals. */
+.hyo-dock-host button.hyo-dock-item,
+.hyo-dock-host button.hyo-dock-icon,
+.hyo-dock-host button.hyo-dock-handle {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  outline: none;
+  font: inherit;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.hyo-dock {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  /* Above the pop-up, so its hover cards are never hidden behind it. */
+  z-index: calc(var(--layer-popover, 30) + 1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 7px;
+  max-height: calc(100vh - 140px);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+.hyo-dock-right { right: 0; border-right: none; border-radius: 16px 0 0 16px; }
+/* Beside the ribbon, so it never covers the ribbon's icons. */
+.hyo-dock-left { left: var(--ribbon-width, 44px); border-left: none; border-radius: 0 16px 16px 0; }
+
+.hyo-dock-host .hyo-dock-item {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 650;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.hyo-dock-host button.hyo-dock-item:hover { transform: scale(1.06); }
+.hyo-dock-host .hyo-dock-item.is-active {
+  box-shadow: 0 0 0 2px var(--background-secondary), 0 0 0 4px var(--interactive-accent);
+}
+.hyo-dock-host .hyo-dock-item.hyo-dock-tone-0 { background: rgba(217, 119, 87, 0.18); color: #c15f3c; }
+.hyo-dock-host .hyo-dock-item.hyo-dock-tone-1 { background: rgba(75, 179, 119, 0.18); color: #3e8a5b; }
+.hyo-dock-host .hyo-dock-item.hyo-dock-tone-2 { background: rgba(214, 160, 48, 0.2); color: #a57718; }
+.hyo-dock-host .hyo-dock-item.hyo-dock-tone-3 { background: rgba(98, 115, 196, 0.18); color: #5161a3; }
+.hyo-dock-host .hyo-dock-item.hyo-dock-tone-4 { background: rgba(170, 98, 170, 0.17); color: #8f4f8f; }
+.theme-dark .hyo-dock-host .hyo-dock-item.hyo-dock-tone-0 { color: #e49e86; }
+.theme-dark .hyo-dock-host .hyo-dock-item.hyo-dock-tone-1 { color: #6cc794; }
+.theme-dark .hyo-dock-host .hyo-dock-item.hyo-dock-tone-2 { color: #e0b65c; }
+.theme-dark .hyo-dock-host .hyo-dock-item.hyo-dock-tone-3 { color: #93a2e6; }
+.theme-dark .hyo-dock-host .hyo-dock-item.hyo-dock-tone-4 { color: #cf93cf; }
+
+.hyo-dock-dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid var(--background-secondary);
+}
+.hyo-dock-dot-working { background: #4bb377; }
+.hyo-dock-dot-needs-attention {
+  background: #f0a875;
+  box-shadow: 0 0 0 3px rgba(240, 168, 117, 0.3);
+  animation: hyo-dock-pulse 1.6s ease-in-out infinite;
+}
+@keyframes hyo-dock-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(240, 168, 117, 0.35); }
+  50% { box-shadow: 0 0 0 5px rgba(240, 168, 117, 0.12); }
+}
+
+.hyo-dock-sep { width: 20px; height: 1px; background: var(--background-modifier-border); flex: 0 0 auto; }
+.hyo-dock-host .hyo-dock-icon {
+  position: relative;
+  width: 30px;
+  height: 28px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+.hyo-dock-host .hyo-dock-icon:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+.hyo-dock-host .hyo-dock-tuck { height: 22px; color: var(--text-faint); }
+
+/* Hover card: the conversation's name and what it's doing or needs. */
+.hyo-dock-tip {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 140px;
+  max-width: 280px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+  text-align: left;
+  font-weight: 400;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+  white-space: normal;
+}
+.hyo-dock-right .hyo-dock-tip { right: calc(100% + 14px); }
+.hyo-dock-left .hyo-dock-tip { left: calc(100% + 14px); }
+.hyo-dock-host button:hover > .hyo-dock-tip { opacity: 1; }
+.hyo-dock-tip-title { font-size: 12.5px; font-weight: 600; color: var(--text-normal); line-height: 1.35; }
+.hyo-dock-tip-status { font-size: 11.5px; color: var(--text-muted); line-height: 1.35; }
+.hyo-dock-tip-working { color: #3e8a5b; }
+.theme-dark .hyo-dock-tip-working { color: #6cc794; }
+.hyo-dock-tip-needs-attention { color: var(--interactive-accent); font-weight: 550; }
+
+/* Tucked away: a small handle on the edge. */
+.hyo-dock-collapsed { padding: 0; gap: 0; }
+.hyo-dock-host .hyo-dock-handle {
+  position: relative;
+  width: 18px;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+.hyo-dock-host .hyo-dock-handle:hover { color: var(--text-normal); }
+.hyo-dock-handle .hyo-dock-dot { top: 3px; width: 9px; height: 9px; border-width: 1.5px; }
+.hyo-dock-right .hyo-dock-handle .hyo-dock-dot { right: auto; left: -4px; }
+.hyo-dock-left .hyo-dock-handle .hyo-dock-dot { right: -4px; }
+
+/* The pop-up. */
+.hyo-dock-pop {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: var(--layer-popover, 30);
+  width: 420px;
+  max-width: calc(100vw - 120px);
+  height: min(640px, calc(100vh - 110px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--background-primary-alt);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 16px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.08);
+  transition: opacity 0.14s ease;
+}
+.hyo-dock-pop.is-hidden { opacity: 0; pointer-events: none; visibility: hidden; }
+.hyo-dock-pop-right { right: 64px; }
+.hyo-dock-pop-left { left: calc(var(--ribbon-width, 44px) + 64px); }
+.hyo-dock-pop-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 8px 10px 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex: 0 0 auto;
+}
+.hyo-dock-host .hyo-dock-pop-icon { width: 30px; height: 30px; border-radius: 10px; font-size: 13px; }
+.hyo-dock-pop-who { flex: 1; min-width: 0; line-height: 1.3; }
+.hyo-dock-pop-title {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text-normal);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hyo-dock-pop-status { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hyo-dock-pop-body { flex: 1; min-height: 0; }
+.hyo-dock-pop-body .hyo-app { padding-bottom: 0; }
