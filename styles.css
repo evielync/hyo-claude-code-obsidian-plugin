@@ -1168,6 +1168,9 @@ button.hyo-ask-send:disabled {
   animation: hyo-cs-pulse 1.6s ease-in-out infinite;
 }
 .hyo-cs-dot-waiting { background: #D64B3F; }
+/* A reply you haven't read (read-state.ts): solid and still, in the accent colour. */
+.hyo-cs-dot-unread { background: var(--interactive-accent); }
+.hyo-cs-meta-unread { color: var(--text-normal); }
 .hyo-cs-dot-idle {
   background: transparent;
   border: 1.5px solid var(--background-modifier-border-hover, var(--text-faint));
@@ -4987,6 +4990,8 @@ button.hyo-callline:hover { background: var(--background-secondary); }
   border: 2px solid var(--background-secondary);
 }
 .hyo-dock-dot-working { background: #4bb377; }
+/* A reply you haven't read: solid, still, in the accent colour. */
+.hyo-dock-dot-unread { background: var(--interactive-accent); }
 .hyo-dock-dot-needs-attention {
   background: #f0a875;
   box-shadow: 0 0 0 3px rgba(240, 168, 117, 0.3);
@@ -5042,6 +5047,7 @@ button.hyo-callline:hover { background: var(--background-secondary); }
 .hyo-dock-tip-working { color: #3e8a5b; }
 .theme-dark .hyo-dock-tip-working { color: #6cc794; }
 .hyo-dock-tip-needs-attention { color: var(--interactive-accent); font-weight: 550; }
+.hyo-dock-tip-unread { color: var(--text-normal); font-weight: 550; }
 
 /* Tucked away: a small handle on the edge. */
 .hyo-dock-collapsed { padding: 0; gap: 0; }

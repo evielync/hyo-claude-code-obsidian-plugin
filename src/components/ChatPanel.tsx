@@ -7,6 +7,7 @@ import { ConversationSwitcher } from "./ConversationSwitcher";
 import { searchSessionText, transcriptLastWrite } from "../session-parser";
 import { buildTaskList, type BoardTask, type OpenHint } from "../task-state";
 import { useHyoLink, type HyoLinkHost } from "../hyo-link";
+import { useUnread } from "../hooks/useUnread";
 import type { TaskMeta } from "../settings";
 import { HyoStatusBar } from "./HyoStatusBar";
 import { ReleaseCard } from "./ReleaseCard";
@@ -241,9 +242,14 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     return hints;
   }, [tabs, pastSessions, plugin.settings.workingDirectory, app]);
 
+  // Replies finished while nobody was looking (read-state.ts).
+  const unread = useUnread(resolveWorkingDirectory(plugin.settings.workingDirectory, (app.vault.adapter as any).basePath as string));
   const boardTasks = useMemo(
-    () => buildTaskList(tabs, pastSessions, taskMeta, Date.now(), openHints),
-    [tabs, pastSessions, taskMeta, openHints]
+    () =>
+      buildTaskList(tabs, pastSessions, taskMeta, Date.now(), openHints).map((t) =>
+        t.cliSessionId && unread.has(t.cliSessionId) ? { ...t, unread: true } : t
+      ),
+    [tabs, pastSessions, taskMeta, openHints, unread]
   );
   const tabIds = useMemo(() => tabs.map((t) => t.id), [tabs]);
 

@@ -20,9 +20,11 @@ import { ChevronIcon, CloseIcon, PencilIcon, PinIcon, PlusIcon } from "./switche
 export interface SwitcherTask extends HistoryTask {
   tabId: string | null;
   live: { isMain?: boolean; generating: boolean; jobs?: JobMap } | null;
+  /** A reply finished that you haven't had on screen yet (read-state.ts). */
+  unread?: boolean;
 }
 
-type Dot = "working" | "waiting" | "idle";
+type Dot = "working" | "waiting" | "unread" | "idle";
 
 // Waiting on you wins over working: the process is still technically running
 // while it holds a question for you. Background jobs still running count as
@@ -32,6 +34,7 @@ function dotFor(task: SwitcherTask | undefined): Dot {
   if (task.state === "needs-attention") return "waiting";
   if (task.live && (task.live.generating || hasRunningJobs(task.live.jobs))) return "working";
   if (task.state === "working") return "working";
+  if (task.unread) return "unread";
   return "idle";
 }
 
@@ -92,6 +95,7 @@ export function ConversationSwitcher<T extends SwitcherTask>({
   const openTasks = tabIds.map((id) => byTab.get(id)).filter((t): t is T => !!t);
   const current = byTab.get(activeTabId);
   const waitingElsewhere = tasks.some((t) => t.tabId !== activeTabId && t.state === "needs-attention");
+  const unreadElsewhere = !waitingElsewhere && tasks.some((t) => t.tabId && t.tabId !== activeTabId && dotFor(t) === "unread");
   const historyWaiting = tasks.filter((t) => !t.isOpen && t.state === "needs-attention").length;
 
   const openPanel = () => {
@@ -153,10 +157,13 @@ export function ConversationSwitcher<T extends SwitcherTask>({
             title={
               waitingElsewhere
                 ? `${openCount} open · another conversation is waiting on you`
+                : unreadElsewhere
+                ? `${openCount} open · another conversation has a new reply`
                 : `${openCount} open`
             }
           >
             {waitingElsewhere && <span className="hyo-cs-dot hyo-cs-dot-waiting" />}
+            {unreadElsewhere && <span className="hyo-cs-dot hyo-cs-dot-unread" />}
             {openCount}
           </span>
           <span className="hyo-cs-chevron">
@@ -379,6 +386,10 @@ function OpenRow({
     ) : dot === "working" ? (
       <>
         <span className="hyo-cs-meta-working">Working</span> · {relativeTime(task.lastActive)}
+      </>
+    ) : dot === "unread" ? (
+      <>
+        <b className="hyo-cs-meta-unread">New reply</b> · {relativeTime(task.lastActive)}
       </>
     ) : (
       relativeTime(task.lastActive)

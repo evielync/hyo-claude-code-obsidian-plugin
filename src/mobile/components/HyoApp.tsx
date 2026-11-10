@@ -8,9 +8,11 @@ import { useSessionManager } from "../hooks/useSessionManager";
 interface HyoAppProps {
   app: App;
   plugin: HyoPlugin;
+  /** Whether the panel can be seen right now (HyoView), for unread replies. */
+  isShown?: () => boolean;
 }
 
-export function HyoApp({ app, plugin }: HyoAppProps) {
+export function HyoApp({ app, plugin, isShown }: HyoAppProps) {
   const [settingsVersion, setSettingsVersion] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -122,7 +124,7 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
 
   return (
     <div className="hyo-app" ref={rootRef}>
-      <ChatPanel sessionManager={sessionManager} plugin={plugin} app={app} />
+      <ChatPanel sessionManager={sessionManager} plugin={plugin} app={app} isShown={isShown} />
     </div>
   );
 }

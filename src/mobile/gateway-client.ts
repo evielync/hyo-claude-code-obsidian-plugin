@@ -187,6 +187,10 @@ export class GatewayClient {
         debug("[hyo-gateway] Reattaching tabs:", tabIds.length);
         this.ws.send(JSON.stringify({ type: "reattach", tabIds }));
       }
+      // The Mac forgets what a phone was reading when it disconnects: say it again.
+      if (this.viewingId !== undefined && this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: "viewing", id: this.viewingId }));
+      }
       const queued = this.outbox;
       this.outbox = [];
       for (const msg of queued) {
@@ -537,6 +541,16 @@ export class GatewayClient {
   /** "Send now" on a message waiting in this conversation: the Mac sends it into the reply under way. */
   sendNow(tabId: string, qid: string): void {
     this.send({ type: "send_now", tabId, qid });
+  }
+
+  // What this phone has on screen, for unread replies (read-state.ts on the Mac).
+  private viewingId: string | null | undefined = undefined;
+
+  /** Tell the Mac which conversation this phone has on screen (null: none). It's read. */
+  setViewing(id: string | null): void {
+    if (this.viewingId === id) return;
+    this.viewingId = id;
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: "viewing", id }));
   }
 
   /** Start hearing a conversation live in this tab, caught up on any turn under way. */

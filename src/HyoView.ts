@@ -47,8 +47,17 @@ export class HyoView extends ItemView {
       createElement(AppComponent, {
         app: this.app,
         plugin: this.plugin,
-      })
+        isShown: () => this.isOnScreen(),
+      } as any)
     );
+  }
+
+  /** The panel can be seen: its tab is the one showing, and its sidebar is open. */
+  isOnScreen(): boolean {
+    if (document.visibilityState === "hidden") return false;
+    const root = this.leaf.getRoot() as any;
+    if (root && root.collapsed) return false;
+    return !!(this.containerEl as any).isShown?.();
   }
 
   async onClose() {

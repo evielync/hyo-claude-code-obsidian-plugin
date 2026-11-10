@@ -7,6 +7,9 @@ import { resolveWorkingDirectory } from "../working-directory";
 import { DEFAULT_EFFORT } from "../models";
 import { mainChatOn } from "../main-chat";
 import { dockItems, overallState, type DockItem } from "../dock-state";
+import { useUnread, useReportViewing, usePanelShown } from "../hooks/useUnread";
+
+const windowVisible = () => document.visibilityState !== "hidden";
 
 interface DockAppProps {
   app: App;
@@ -57,8 +60,12 @@ export function DockApp({ app, plugin }: DockAppProps) {
   });
 
   const [open, setOpen] = useState(false);
-  const items = useMemo(() => dockItems(sm.tabs, open ? sm.activeTabId : null), [sm.tabs, sm.activeTabId, open]);
+  const unread = useUnread(cwd);
+  const items = useMemo(() => dockItems(sm.tabs, open ? sm.activeTabId : null, unread), [sm.tabs, sm.activeTabId, open, unread]);
   const active = items.find((i) => i.tabId === sm.activeTabId) || null;
+  // The pop-up's conversation is read while the pop-up is open and the window showing.
+  const windowShown = usePanelShown(app, windowVisible);
+  useReportViewing(cwd, open && windowShown ? active?.sessionId || null : null);
   const side = s.dockSide === "left" ? "left" : "right";
   const collapsed = !!s.dockCollapsed;
 
@@ -138,10 +145,14 @@ export function DockApp({ app, plugin }: DockAppProps) {
             onClick={() => choose(item)}
           >
             {item.letter}
-            {item.state !== "idle" && <span className={`hyo-dock-dot hyo-dock-dot-${item.state}`} />}
+            {item.state !== "idle" ? (
+              <span className={`hyo-dock-dot hyo-dock-dot-${item.state}`} />
+            ) : item.unread ? (
+              <span className="hyo-dock-dot hyo-dock-dot-unread" />
+            ) : null}
             <span className="hyo-dock-tip">
               <span className="hyo-dock-tip-title">{item.title}</span>
-              {item.status && <span className={`hyo-dock-tip-status hyo-dock-tip-${item.state}`}>{item.status}</span>}
+              {item.status && <span className={`hyo-dock-tip-status hyo-dock-tip-${item.unread ? "unread" : item.state}`}>{item.status}</span>}
             </span>
           </button>
         ))}

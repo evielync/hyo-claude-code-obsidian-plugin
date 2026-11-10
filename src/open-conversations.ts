@@ -35,6 +35,8 @@ export interface OpenEntry {
   peek?: string;
   /** Sent to the phone only: when it was last active (epoch ms). Never saved. */
   lastActive?: number;
+  /** Sent to the phone only: a reply finished that nobody has read yet (read-state.ts). Never saved. */
+  unread?: boolean;
 }
 
 /** A pinned conversation, read from the shared session metadata. */
@@ -69,6 +71,7 @@ export function parseEntries(raw: unknown): OpenEntry[] {
       ...e,
       ...(typeof r?.peek === "string" && r.peek ? { peek: r.peek } : {}),
       ...(typeof r?.lastActive === "number" && isFinite(r.lastActive) ? { lastActive: r.lastActive } : {}),
+      ...(r?.unread === true ? { unread: true } : {}),
     };
   });
 }

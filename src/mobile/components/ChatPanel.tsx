@@ -39,6 +39,7 @@ import type HyoPlugin from "../../main";
 import { estimateTokens, formatTokens } from "../attachments";
 import { MODEL_OPTIONS, PERMISSION_MODES as PHONE_PERMISSION_MODES, EFFORT_OPTIONS, DEFAULT_EFFORT, getContextLimit } from "../../models";
 import { useAgents } from "../hooks/useAgents";
+import { usePanelShown } from "../../hooks/useUnread";
 import { ReleaseCard } from "../../components/ReleaseCard";
 import { ReleaseNotes } from "../../components/ReleaseNotes";
 
@@ -55,6 +56,8 @@ interface ChatPanelProps {
   sessionManager: ReturnType<typeof useSessionManager>;
   plugin: HyoPlugin;
   app: App;
+  /** Whether the panel can be seen right now (HyoView), for unread replies. */
+  isShown?: () => boolean;
 }
 
 // A short two-note chime so a permission ask is noticeable when she's not
@@ -90,7 +93,16 @@ function playPermissionChime() {
   }
 }
 
-export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
+export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelProps) {
+  // What this phone has on screen is read, on every device (read-state.ts on
+  // the Mac): the conversation it's on, while Hyo is showing.
+  const panelShown = usePanelShown(app, isShown);
+  const viewingSid =
+    (panelShown && sessionManager.tabs.find((t) => t.id === sessionManager.activeTabId)?.cliSessionId) || null;
+  const { reportViewing } = sessionManager;
+  useEffect(() => {
+    reportViewing(viewingSid);
+  }, [viewingSid, reportViewing]);
   // Release card, as on the desktop: shown when the installed version is
   // newer than the last one acknowledged (the setting syncs, so seeing it on
   // one device counts for both). A fresh install gets no card.
@@ -248,7 +260,10 @@ export function ChatPanel({ sessionManager, plugin, app }: ChatPanelProps) {
   );
 
   const boardTasks = useMemo(
-    () => buildTaskList(tabs, pastSessions, taskMeta, Date.now(), openHints),
+    () =>
+      buildTaskList(tabs, pastSessions, taskMeta, Date.now(), openHints).map((t) =>
+        t.cliSessionId && openHints[t.cliSessionId]?.unread ? { ...t, unread: true } : t
+      ),
     [tabs, pastSessions, taskMeta, openHints]
   );
   const tabIds = useMemo(() => tabs.map((t) => t.id), [tabs]);

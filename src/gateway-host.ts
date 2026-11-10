@@ -32,9 +32,10 @@
 //   { type:'open_remove', id, opId }
 //   { type:'open_rename', id, title, opId }
 //   { type:'open_replace', oldId, id, title, opId }
+//   { type:'viewing',     id }                      (what the phone has on screen; null: nothing)
 //   { type:'ping' }
 // Server -> client:
-//   { type:'open_list', entries:[{ id, title, pinned?, peek?, lastActive? }], sync?, ack? }
+//   { type:'open_list', entries:[{ id, title, pinned?, peek?, lastActive?, unread? }], sync?, ack? }
 //   { type:'stream', tabId, event }
 //   { type:'sessions', sessions:[...] }
 //   { type:'history', sessionId, requestId, paged:true, messages, offset, total, model, voiceCalls }
@@ -47,6 +48,7 @@
 
 import { Platform, Notice } from "obsidian";
 import { debug } from "./debug";
+import { readState, type ReadState } from "./read-state";
 import { getProjectDir, saveCustomTitle, setTaskMeta, saveVoiceCall, getVoiceCalls, readTranscriptEntries, parseSessionEntries, newestPlusPinned, type HistoryMessage } from "./session-parser";
 import { transcriptModel, resumeModel } from "./models";
 import { isTrivialOpener } from "./conversation-title";
@@ -539,7 +541,20 @@ function peekOf(cwd: string, sessionId: string): { peek?: string; lastActive?: n
 }
 
 function withPeeks(cwd: string, entries: OpenEntry[]): OpenEntry[] {
-  return entries.map((e) => ({ ...e, ...peekOf(cwd, e.id) }));
+  const rs = readState(cwd);
+  return entries.map((e) => ({ ...e, ...peekOf(cwd, e.id), ...(rs?.isUnread(e.id) ? { unread: true } : {}) }));
+}
+
+// A reply read or finishing unread changes the phone's Open rows: send the
+// list again. One watcher per vault, for as long as the gateway runs.
+const unreadWatch = new Map<string, () => void>();
+function watchUnread(cwd: string, rs: ReadState): void {
+  if (unreadWatch.has(cwd)) return;
+  unreadWatch.set(cwd, rs.subscribe(() => gatewayOpenListRefresh()));
+}
+function unwatchUnread(): void {
+  for (const off of unreadWatch.values()) off();
+  unreadWatch.clear();
 }
 
 // ---- Agent listing (list_agents RPC) ---------------------------------------
@@ -1109,6 +1124,8 @@ export interface GatewaySocketContext {
 
 export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): void {
   const cid = Math.random().toString(36).slice(2, 8);
+  // The vault this phone last said it was reading in, so disconnecting forgets it.
+  let viewedCwd: string | null = null;
   debug(`[hyo][gateway] [${cid}] connected`);
   ctx.onClients?.(1);
   const send = (obj: unknown) => sendTo(ws, obj);
@@ -1155,10 +1172,24 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
         },
       };
       if (gatewaySession(m, ws, sink, sessionCtx)) return;
+      // What the phone has on screen is read, everywhere (read-state.ts).
+      if (m.type === "viewing") {
+        const rs = readState(cwd);
+        if (rs) {
+          watchUnread(cwd, rs);
+          viewedCwd = cwd;
+          rs.setViewing(`phone:${cid}`, typeof m.id === "string" && m.id ? m.id : null);
+        }
+        return;
+      }
       // Which conversations are open, shared with the Mac's panels
       // (open-conversations.ts). Pushed to the phone whenever it changes,
       // with each row's last line and when it was last active.
       const openList = openConversations(cwd);
+      if (openList) {
+        const rs = readState(cwd);
+        if (rs) watchUnread(cwd, rs);
+      }
       if (openList && gatewayOpenList(openList, m, ws, sink, (entries) => withPeeks(cwd, entries))) return;
       switch (m.type) {
         case "list_sessions":
@@ -1343,6 +1374,7 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
     // a while for it to come back (session-owner.ts).
     gatewaySessionGone(ws);
     gatewayOpenListGone(ws);
+    if (viewedCwd) readState(viewedCwd)?.forget(`phone:${cid}`);
     debug(`[hyo][gateway] [${cid}] disconnected`);
   });
 }
@@ -1595,6 +1627,7 @@ export function stopGatewayHost(): void {
   gatewaySessionReset();
   offTurnEnded?.();
   offTurnEnded = null;
+  unwatchUnread();
   gatewayOpenListReset();
   if (wss) {
     try {

@@ -4,6 +4,7 @@ import type { App } from "obsidian";
 import type HyoPlugin from "../main";
 import { ChatPanel } from "./ChatPanel";
 import { useSessionManager } from "../hooks/useSessionManager";
+import { useReportViewing, usePanelShown } from "../hooks/useUnread";
 import { resolveWorkingDirectory } from "../working-directory";
 import { DEFAULT_EFFORT, compareVersions } from "../models";
 import {
@@ -18,9 +19,11 @@ import {
 interface HyoAppProps {
   app: App;
   plugin: HyoPlugin;
+  /** Whether the panel can be seen right now (HyoView), for unread replies. */
+  isShown?: () => boolean;
 }
 
-export function HyoApp({ app, plugin }: HyoAppProps) {
+export function HyoApp({ app, plugin, isShown }: HyoAppProps) {
   // null = still checking. We run Claude to find out, rather than trusting a
   // file to exist, so this reflects whether Claude actually works.
   const [detection, setDetection] = useState<ClaudeDetection | null>(null);
@@ -180,6 +183,12 @@ export function HyoApp({ app, plugin }: HyoAppProps) {
     mainChatSessionId: plugin.settings.mainChatSessionId || "",
     onMainChatSession: onMainChatSession,
   });
+
+  // What this panel has on screen counts as read (read-state.ts): the
+  // conversation it's on, while the panel itself can be seen.
+  const shown = usePanelShown(app, isShown);
+  const activeSid = sessionManager.tabs.find((t) => t.id === sessionManager.activeTabId)?.cliSessionId || null;
+  useReportViewing(workingDirectory, shown && detection?.state === "ready" ? activeSid : null);
 
   if (detection === null) {
     return (

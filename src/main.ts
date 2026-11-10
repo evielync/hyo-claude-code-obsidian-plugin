@@ -14,7 +14,8 @@ import { cleanupOldAttachments } from "./attachments";
 import { setDebug } from "./debug";
 import { probeCliCapabilities } from "./cli-capabilities";
 import { startGatewayHost, stopGatewayHost, GatewayStatus } from "./gateway-host";
-import { setSessionOwnerFactory, shutdownSessionOwners, fileLock } from "./session-owner";
+import { setSessionOwnerFactory, shutdownSessionOwners, fileLock, onTurnEnded } from "./session-owner";
+import { ReadState, setReadStateFactory, readState, UNREAD_FILE } from "./read-state";
 import { ClaudeTransport } from "./claude-transport";
 import { OpenConversationsStore, setOpenConversationsFactory, legacyDesk, OPEN_LIST_FILE } from "./open-conversations";
 import { getProjectDir, listPinned, takeLostPins, lostPinsNotice, hasTranscript, transcriptLineCount } from "./session-parser";
@@ -127,6 +128,24 @@ export default class HyoPlugin extends Plugin {
           },
         });
       });
+      // Unread replies, shared by every view and the phone (read-state.ts).
+      // Saved next to the open list. Every reply that finishes, in any
+      // conversation, is unread unless someone has it on screen.
+      setReadStateFactory((cwd) => {
+        const file = () => path.join(getProjectDir(cwd), UNREAD_FILE);
+        return new ReadState({
+          load: () => {
+            if (!fs.existsSync(file())) return null;
+            const ids = JSON.parse(fs.readFileSync(file(), "utf8"))?.unread;
+            return Array.isArray(ids) ? ids : null;
+          },
+          save: (ids) => {
+            fs.mkdirSync(path.dirname(file()), { recursive: true });
+            fs.writeFileSync(file(), JSON.stringify({ version: 1, unread: ids }, null, 2), "utf8");
+          },
+        });
+      });
+      this.register(onTurnEnded((cwd, owner) => readState(cwd)?.replyFinished(owner.sessionId)));
     }
     setShowAllToolCalls(!!this.settings.showAllToolCalls);
 
@@ -403,6 +422,7 @@ export default class HyoPlugin extends Plugin {
       try { shutdownSessionOwners(); } catch { /* ignore */ }
       setSessionOwnerFactory(null);
       setOpenConversationsFactory(null);
+      setReadStateFactory(null);
     }
     // Unmount React and clean up child processes for all Hyo leaves
     this.app.workspace.getLeavesOfType(VIEW_TYPE_HYO).forEach((leaf) => {

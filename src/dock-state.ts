@@ -21,10 +21,16 @@ export interface DockItem {
   state: TaskState;
   /** One line for the hover card: what it's doing now, or what it needs. */
   status: string;
+  /** A reply finished that you haven't had on screen yet (read-state.ts). */
+  unread: boolean;
 }
 
 /** The conversations the dock shows: every open one, plus `extraTabId` (a new chat being written in the pop-up before it has a session). */
-export function dockItems(tabs: TabSession[], extraTabId?: string | null): DockItem[] {
+export function dockItems(
+  tabs: TabSession[],
+  extraTabId?: string | null,
+  unread: ReadonlySet<string> = new Set()
+): DockItem[] {
   return tabs
     .filter((t) => t.isMain || !!t.cliSessionId || t.id === extraTabId)
     .map((t) => {
@@ -35,6 +41,7 @@ export function dockItems(tabs: TabSession[], extraTabId?: string | null): DockI
         hasPending: hasPendingAttention(t),
         closed: false,
       });
+      const isUnread = state === "idle" && !!t.cliSessionId && unread.has(t.cliSessionId);
       return {
         tabId: t.id,
         sessionId: t.cliSessionId,
@@ -42,14 +49,16 @@ export function dockItems(tabs: TabSession[], extraTabId?: string | null): DockI
         letter: letterFor(title),
         tone: toneFor(t.cliSessionId || t.id),
         state,
-        status: statusLine(t, state),
+        status: isUnread ? "New reply" : statusLine(t, state),
+        unread: isUnread,
       };
     });
 }
 
 /** The worst state across the dock, for the tucked-away handle's dot. */
-export function overallState(items: DockItem[]): TaskState {
+export function overallState(items: DockItem[]): TaskState | "unread" {
   if (items.some((i) => i.state === "needs-attention")) return "needs-attention";
+  if (items.some((i) => i.unread)) return "unread";
   if (items.some((i) => i.state === "working")) return "working";
   return "idle";
 }

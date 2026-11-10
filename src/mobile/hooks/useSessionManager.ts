@@ -1915,8 +1915,9 @@ export function useSessionManager(options: SessionManagerOptions) {
   // What each open conversation's row shows when this phone hasn't loaded it
   // yet: its last line and when it was last active, from the Mac.
   const openHints = useMemo(() => {
-    const m: Record<string, { peek?: string; lastActive?: number }> = {};
-    for (const e of openList || []) if (e.peek || e.lastActive) m[e.id] = { peek: e.peek, lastActive: e.lastActive };
+    const m: Record<string, { peek?: string; lastActive?: number; unread?: boolean }> = {};
+    for (const e of openList || [])
+      if (e.peek || e.lastActive || e.unread) m[e.id] = { peek: e.peek, lastActive: e.lastActive, unread: e.unread };
     return m;
   }, [openList]);
 
@@ -1930,7 +1931,14 @@ export function useSessionManager(options: SessionManagerOptions) {
     [openList]
   );
 
+  /** Tell the Mac which conversation this phone has on screen (read-state.ts). */
+  const reportViewing = useCallback((sessionId: string | null) => {
+    gateway()?.setViewing(sessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return {
+    reportViewing,
     setDraft,
     activeClosedElsewhere,
     openHints,
