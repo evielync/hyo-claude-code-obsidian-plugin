@@ -6,11 +6,22 @@ import { STT_TIMEOUT_ERROR, STT_TIMEOUT_MS } from "./elevenlabs-api";
  * the voice engine is GPT-Live, so one OpenAI key covers both the live call
  * and dictation on the phone.
  *
- * Model verified against Ev's key on 11 Sep 2026: `gpt-4o-transcribe`.
+ * `gpt-transcribe` writes down every word as spoken. Tested against Ev's own
+ * recorded voice on 10 Nov 2026, three runs per clip:
+ *
+ *   clip   gpt-4o-transcribe   gpt-transcribe   (ElevenLabs Scribe, for reference)
+ *   8s     23 / 15 / 17 words  32 / 32 / 32     31
+ *   20s    23 / 56 / 23        60 / 60 / 60     61
+ *   30s    15 / 15 / 15        76 / 76 / 76     77
+ *   90s    302                 304              299
+ *
+ * `gpt-4o-transcribe` keeps long notes whole but reduces a short dictation
+ * to roughly one sentence, so it must not be used here.
+ *
  * Obsidian's `requestUrl` doesn't take FormData, so the multipart body is
  * built by hand, the same way the ElevenLabs path does it.
  */
-const STT_MODEL = "gpt-4o-transcribe";
+const STT_MODEL = "gpt-transcribe";
 
 export async function openAiSpeechToText(
   apiKey: string,

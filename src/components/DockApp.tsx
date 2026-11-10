@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { App } from "obsidian";
+import { Menu, type App } from "obsidian";
 import type HyoPlugin from "../main";
 import { ChatPanel } from "./ChatPanel";
 import { useSessionManager } from "../hooks/useSessionManager";
 import { resolveWorkingDirectory } from "../working-directory";
 import { DEFAULT_EFFORT } from "../models";
-import { mainChatOn } from "../main-chat";
+import { mainChatOn, canCloseTab } from "../main-chat";
 import { dockItems, overallState, type DockItem } from "../dock-state";
 import { useUnread, useReportViewing, usePanelShown } from "../hooks/useUnread";
 
@@ -97,6 +97,51 @@ export function DockApp({ app, plugin }: DockAppProps) {
     setOpen(true);
   };
 
+  // Right-click a conversation to pin, unpin or close it without opening the
+  // pop-up. Unpinning closes it, as it does everywhere, unless it's showing
+  // in the pop-up right now. The dock's active conversation stays set after
+  // the pop-up is tucked away, so "in view" is judged here, not left to
+  // setTaskMeta.
+  const showItemMenu = (e: React.MouseEvent, item: DockItem) => {
+    const tab = sm.tabs.find((t) => t.id === item.tabId);
+    if (!canCloseTab(tab)) return;
+    e.preventDefault();
+    const sid = tab?.cliSessionId || null;
+    const pinned = !!sid && !!sm.pinnedSessionIds?.has(sid);
+    const showing = open && sm.activeTabId === item.tabId;
+    const menu = new Menu();
+    if (pinned && sid) {
+      menu.addItem((mi) =>
+        mi
+          .setTitle("Unpin conversation")
+          .setIcon("pin-off")
+          .onClick(() => {
+            sm.setTaskMeta(sid, { pinned: false });
+            if (!showing) window.setTimeout(() => sm.closeTab(item.tabId), 50);
+          })
+      );
+    } else {
+      if (sid) {
+        menu.addItem((mi) =>
+          mi
+            .setTitle("Pin conversation")
+            .setIcon("pin")
+            .onClick(() => sm.setTaskMeta(sid, { pinned: true }))
+        );
+      }
+      menu.addItem((mi) =>
+        mi
+          .setTitle("Close conversation")
+          .setIcon("x")
+          .onClick(() => {
+            if (showing) setOpen(false);
+            sm.closeTab(item.tabId);
+          })
+      );
+    }
+    menu.showAtMouseEvent(e.nativeEvent);
+  };
+
   const startNew = () => {
     // Reuse a blank chat already waiting here rather than piling them up.
     const blank = sm.tabs.find((t) => !t.isMain && !t.cliSessionId && t.messages.length === 0);
@@ -143,6 +188,7 @@ export function DockApp({ app, plugin }: DockAppProps) {
             key={item.tabId}
             className={`hyo-dock-item hyo-dock-tone-${item.tone}${open && item.tabId === sm.activeTabId ? " is-active" : ""}`}
             onClick={() => choose(item)}
+            onContextMenu={(e) => showItemMenu(e, item)}
           >
             {item.letter}
             {item.unread ? (

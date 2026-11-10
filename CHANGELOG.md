@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.2
+
+**The one where dictation catches every word, and the dock gets a right-click menu**
+
+- **Dictation on GPT-Live now catches every word.** Hyo's dictation now uses OpenAI's newer gpt-transcribe model. The old one shortened short voice messages to about one sentence, so a few sentences of dictation could arrive as five words. Same OpenAI key, nothing to set up.
+- **Right-click a conversation in the dock to pin, unpin or close it.** You no longer have to open it, close it, then close the pop-up.
+
 ## 0.9.1
 
 **The one where you can see a new reply while subagents are still working**
