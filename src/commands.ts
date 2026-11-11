@@ -33,6 +33,10 @@ export class CommandsManager {
   ) {}
 
   onload(): void {
+    // Buttons left by the previous instance still call into it, and versions
+    // before 0.9.3 never removed theirs on unload. Clear them so refresh adds
+    // buttons bound to this instance.
+    this.removeButtons();
     const refresh = () => this.refreshButtons();
     this.plugin.registerEvent(this.app.workspace.on("active-leaf-change", refresh));
     this.plugin.registerEvent(this.app.workspace.on("file-open", refresh));
@@ -53,6 +57,10 @@ export class CommandsManager {
   // notice shows and no conversation opens. Remove them all on unload so the
   // new instance adds its own.
   onunload(): void {
+    this.removeButtons();
+  }
+
+  private removeButtons(): void {
     this.app.workspace.getLeavesOfType("markdown").forEach((leaf) => {
       const v = leaf.view as any;
       if (v.__hyoCommandsEl) {

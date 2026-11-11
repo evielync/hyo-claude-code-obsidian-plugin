@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.4
+
+**The one where the commands button works straight after this update, too**
+
+- **Commands work the moment you update.** 0.9.3 fixed the commands button for future updates, but the update to 0.9.3 itself could still leave a dead button behind until you restarted Obsidian. Hyo now clears any old buttons as soon as it starts, so commands work straight away.
+
 ## 0.9.3
 
 **The one where the commands button works after an update**
