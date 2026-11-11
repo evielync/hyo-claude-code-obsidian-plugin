@@ -1419,13 +1419,22 @@ export class HyoSettingTab extends PluginSettingTab {
       });
       row.addDropdown((dropdown) => {
         for (const sk of skills) dropdown.addOption(sk.name, sk.name);
+        const missing = this.plugin.commands.skillMissing(cmd.skill, skills);
         if (cmd.skill && !skills.find((sk) => sk.name === cmd.skill)) {
-          dropdown.addOption(cmd.skill, `${cmd.skill} (not found)`);
+          dropdown.addOption(cmd.skill, `${cmd.skill} (not installed)`);
         }
         dropdown.setValue(cmd.skill || skills[0]?.name || "");
+        // A command pointing at a skill that isn't installed does nothing when
+        // clicked, so it has to stand out here, not just in the option text.
+        if (missing) {
+          dropdown.selectEl.style.borderColor = "var(--text-error)";
+          dropdown.selectEl.style.color = "var(--text-error)";
+          dropdown.selectEl.title = `"${cmd.skill}" isn't installed. Pick the skill this command should run.`;
+        }
         dropdown.onChange(async (v) => {
           cmd.skill = v;
           await this.plugin.saveSettings();
+          this.display();
         });
         // (Legacy `extra` instructions from the standalone plugin still fire
         // with the command — there's just no editing UI for them anymore.)

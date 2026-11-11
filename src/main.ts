@@ -410,6 +410,7 @@ export default class HyoPlugin extends Plugin {
   }
 
   onunload() {
+    this.commands?.onunload();
     // The dock lets go of its conversations before their processes end.
     this.dock?.unmount();
     this.dock = null;

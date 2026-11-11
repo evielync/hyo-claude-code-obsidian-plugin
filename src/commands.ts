@@ -47,6 +47,21 @@ export class CommandsManager {
     void this.migrateFromStandalone();
   }
 
+  // The header button's click handler belongs to this plugin instance. A
+  // reload (an update, or toggling Hyo) keeps the note views open, so a
+  // button left behind would keep firing into the unloaded instance: the
+  // notice shows and no conversation opens. Remove them all on unload so the
+  // new instance adds its own.
+  onunload(): void {
+    this.app.workspace.getLeavesOfType("markdown").forEach((leaf) => {
+      const v = leaf.view as any;
+      if (v.__hyoCommandsEl) {
+        v.__hyoCommandsEl.remove();
+        delete v.__hyoCommandsEl;
+      }
+    });
+  }
+
   // ---- defer to the standalone plugin ------------------------------------
 
   // While the standalone "AI Commands" plugin is enabled, it owns the header
@@ -119,6 +134,13 @@ export class CommandsManager {
       new Notice("This command has no skill set");
       return;
     }
+    if (this.skillMissing(cmd.skill)) {
+      new Notice(
+        `Hyo: "${cmd.label || cmd.skill}" runs the skill "${cmd.skill}", which isn't installed. Pick a skill for it in Settings → Hyo → Commands.`,
+        10000
+      );
+      return;
+    }
     let prompt = "/" + cmd.skill;
     if (cmd.extra && cmd.extra.trim()) prompt += " " + cmd.extra.trim();
 
@@ -152,6 +174,14 @@ export class CommandsManager {
   }
 
   // ---- skill discovery ----------------------------------------------------
+
+  // True only when the skill is definitely absent. Mobile can't read the
+  // skill folders (getSkills() is empty there), and plugin skills
+  // ("plugin:skill") live outside the folders scanned, so neither is judged.
+  skillMissing(skill: string, skills: Skill[] = this.getSkills()): boolean {
+    if (!skill || skill.includes(":") || skills.length === 0) return false;
+    return !skills.some((s) => s.name === skill);
+  }
 
   // Synchronous equivalent of the useSkills() hook (same three folders, same
   // frontmatter parse) for use outside React — the settings panel's command

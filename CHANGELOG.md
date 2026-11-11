@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.3
+
+**The one where the commands button works after an update**
+
+- **Commands work again after Hyo updates.** When Hyo updated while your notes were open, the ✨ commands button kept running the old copy of Hyo. It said "Sent to Hyo" and nothing opened until you restarted Obsidian. Now the button always runs the Hyo you have.
+- **Hyo tells you when a command's skill is missing.** If a command points at a skill that isn't installed (renamed or deleted), clicking it now tells you which skill it can't find, instead of doing nothing. In Settings → Commands, that skill shows in red so you can pick the right one.
+
 ## 0.9.2
 
 **The one where dictation catches every word, and the dock gets a right-click menu**
