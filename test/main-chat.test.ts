@@ -265,5 +265,5 @@ test("Main chat is off for everyone in this build, and its switch is hidden", ()
     assert.match(src, /mainChat: mainChatOn\(plugin\.settings\)/, f);
     assert.doesNotMatch(src, /mainChat: !!plugin\.settings\.mainChat/, f);
   }
-  assert.match(readFileSync(join(process.cwd(), "src/settings.ts"), "utf8"), /if \(MAIN_CHAT_AVAILABLE\) new Setting\(containerEl\)\s*\.setName\("Main chat"\)/);
+  assert.match(readFileSync(join(process.cwd(), "src/settings.ts"), "utf8"), /if \(MAIN_CHAT_AVAILABLE\) \{\s*rows\.push\(\{\s*kind: "control",\s*key: "mainChat",/);
 });

@@ -10,6 +10,7 @@ export class Component {
 export const MarkdownRenderer = { render: async () => {}, renderMarkdown: async () => {} };
 export function setIcon() {}
 export class Modal {}
+export class Setting {}
 
 // Network calls aren't made in tests; anything that reaches one fails loudly.
 export async function requestUrl(): Promise<never> {

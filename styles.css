@@ -5114,18 +5114,14 @@ button.hyo-callline:hover { background: var(--background-secondary); }
 .view-header.hyo-hidden-view-header { display: none; }
 .view-content.hyo-view-content { padding: 0; }
 
-.hyo-settings-saved { font-size: 0.8em; color: var(--color-green); opacity: 0; transition: opacity 0.3s; }
-.hyo-settings-saved.is-visible { opacity: 1; }
 .hyo-setting-saved { margin-left: 8px; font-size: 0.8em; color: var(--color-green); opacity: 1; transition: opacity 0.5s; }
 .hyo-setting-saved.is-fading { opacity: 0; }
 
 .setting-item-control input.hyo-input-key { width: 240px; }
 textarea.hyo-textarea-full, .setting-item-control textarea.hyo-textarea-full { width: 100%; font-family: inherit; }
-.setting-item.hyo-setting-no-border-bottom { border-bottom: none; }
-.setting-item.hyo-setting-attached { border-top: none; padding-top: 0; }
-.setting-item.hyo-setting-attached .setting-item-control { width: 100%; }
 .setting-item.hyo-setting-stacked { flex-direction: column; align-items: stretch; }
 .setting-item.hyo-setting-stacked .setting-item-control { margin-top: 8px; }
+.setting-item.hyo-setting-stacked > textarea { margin-top: 8px; }
 
 .setting-item.hyo-commands-type-row { cursor: pointer; }
 .setting-item.hyo-commands-type-row .setting-item-name { font-weight: 600; }
@@ -5160,15 +5156,11 @@ textarea.hyo-textarea-full, .setting-item-control textarea.hyo-textarea-full { w
 .hyo-status-popup.hyo-status-popup-agent { right: 120px; }
 
 /* Settings tab: layout that used to be inline styles. */
-.hyo-settings-header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
 .hyo-settings-tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--background-modifier-border); }
 .hyo-settings-tab { padding: 8px 14px; cursor: pointer; font-size: 0.95em; border-bottom: 2px solid transparent; color: var(--text-muted); font-weight: 400; }
 .hyo-settings-tab.is-active { border-bottom-color: var(--interactive-accent); color: var(--text-normal); font-weight: 600; }
 .hyo-settings-intro { margin: 0 0 16px; color: var(--text-muted); font-size: 0.9em; }
-.hyo-settings-intro-tight { margin: 0 0 12px; color: var(--text-muted); font-size: 0.9em; }
 .hyo-settings-steps { margin: 0 0 16px; padding-left: 20px; color: var(--text-muted); font-size: 0.9em; }
-.hyo-settings-note { margin: 0; color: var(--text-muted); }
-.hyo-settings-footnote { margin: 16px 0 0; color: var(--text-muted); font-size: 0.85em; }
 .hyo-setup-status { margin-top: 4px; font-size: 0.95em; }
 /* Status lines (Setup → Claude Code, Mobile → Status). Two classes so the
    colour wins over the setting description's own muted colour. */
