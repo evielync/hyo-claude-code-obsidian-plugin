@@ -39,22 +39,17 @@ No separate app, no extra billing — Hyo runs on your existing Claude login, no
 
 ## Installation
 
-Hyo is a beta plugin, so it installs via **BRAT** (Beta Reviewers Auto-update Tool).
+Hyo is in Obsidian's community plugin directory.
 
-**Step 1: Install BRAT**
-In Obsidian, go to Settings → Community Plugins → Browse, search for "BRAT", install and enable it.
+**Step 1: Install Hyo**
+In Obsidian, go to Settings → Community plugins → Browse, search for **Hyo Claude Code Agent**, and click **Install**. Or click **Add to Obsidian** on Hyo's page at community.obsidian.md.
 
-**Step 2: Add Hyo**
-Go to Settings → BRAT → Add Beta Plugin, paste in:
-```
-https://github.com/evielync/hyo-claude-code-obsidian-plugin
-```
-Click **Add Plugin**.
+**Step 2: Enable it**
+In Settings → Community plugins, turn on **Hyo Claude Code Agent**.
 
-**Step 3: Enable it**
-Go to Settings → Community Plugins, find **Hyo Claude Code Agent**, and enable it.
+**Already installed through BRAT?** Remove Hyo from BRAT's list of beta plugins. Your settings stay, and Obsidian keeps Hyo up to date from now on.
 
-**Step 4: Open Hyo**
+**Step 3: Open Hyo**
 Click the chat icon in the ribbon, or run **Hyo Claude Code Agent: Open chat panel** from the command palette. To open it with a shortcut, assign one in Settings → Hotkeys. If Claude Code isn't installed yet, the plugin will show you exactly how to set it up.
 
 ---
