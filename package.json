@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production",
-    "release": "node esbuild.config.mjs production && echo '✓ Built. Now run: gh release create VERSION main.js manifest.json styles.css --title TITLE --notes NOTES'",
+    "release": "node esbuild.config.mjs production && echo '\u2713 Built. Now run: gh release create VERSION main.js manifest.json styles.css --title TITLE --notes NOTES'",
     "test": "node scripts/run-tests.mjs",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p .",
+    "check": "npm run lint && npm run typecheck && npm test"
   },
   "dependencies": {
     "fflate": "^0.8.3",

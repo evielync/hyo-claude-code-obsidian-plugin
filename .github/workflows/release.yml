@@ -31,6 +31,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The same checks as every branch push (checks.yml): lint with the
+      # store's rules, type check, tests. Any failure stops the release here,
+      # before anything is built or published.
+      - name: Check
+        run: npm run check
+
       - name: Build
         run: npm run build
 
