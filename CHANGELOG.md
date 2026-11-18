@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0
+
+**The one where Hyo comes out of beta**
+
+- **Hyo 1.0 is here.** It's been through a full clean-up for the Obsidian community store, and it's a quarter of the size, so it loads faster.
+- **Cmd+Shift+H no longer opens Hyo.** Obsidian's store doesn't let plugins set shortcuts. Open Hyo from the ribbon, or set your own in Settings → Hotkeys.
+- **Voice calls are GPT-Live only.** ElevenLabs voice mode is gone, but ElevenLabs is still there for dictation on your phone.
+- **Simpler settings.** Setup and General are up front, and adding commands takes a couple of clicks.
+- **Fixes:** Excel formulas and big Word files now read properly, and settings changes take effect without restarting Obsidian.
+
 ## 0.9.4
 
 **The one where the commands button works straight after this update, too**
