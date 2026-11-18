@@ -1,8 +1,5 @@
 import { debug } from "./debug";
-import { Platform } from "obsidian";
-// Node built-ins are desktop-only; deferred so this module loads on mobile.
-const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
-const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
+import { nodeFs, nodePath } from "./platform/node";
 
 // Rough heuristic: 1 token ≈ 4 characters (English/code).
 // Good enough for chip display and inline/reference routing.
@@ -31,6 +28,8 @@ export function writeAttachmentToDisk(
   filename: string,
   content: string
 ): string {
+  const fs = nodeFs();
+  const path = nodePath();
   fs.mkdirSync(attachmentsDir, { recursive: true });
   const timestamp = Date.now();
   const safeName = filename.replace(/[^a-zA-Z0-9.\-_]/g, "_");
@@ -42,6 +41,8 @@ export function writeAttachmentToDisk(
 // Delete attachment files older than maxAgeDays. Safe because active sessions
 // touch files far more recently than this; only stale files get removed.
 export function cleanupOldAttachments(attachmentsDir: string, maxAgeDays = 1): void {
+  const fs = nodeFs();
+  const path = nodePath();
   if (!fs.existsSync(attachmentsDir)) return;
   const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
   let removed = 0;
