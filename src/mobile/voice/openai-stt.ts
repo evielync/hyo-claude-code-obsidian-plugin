@@ -1,5 +1,5 @@
 import { requestUrl } from "obsidian";
-import { STT_TIMEOUT_ERROR, STT_TIMEOUT_MS } from "./elevenlabs-api";
+import { STT_TIMEOUT_ERROR, STT_TIMEOUT_MS, transcriptText } from "./elevenlabs-api";
 
 /**
  * Transcribe a dictation with OpenAI (`/v1/audio/transcriptions`). Used when
@@ -80,17 +80,18 @@ export async function openAiSpeechToText(
     },
     body: body.buffer,
   });
-  reqPromise.catch(() => {});
+  // Swallow a late rejection if the timeout has already won (see the ElevenLabs path).
+  reqPromise.catch(() => undefined);
 
-  let timer: ReturnType<typeof setTimeout>;
+  let timer = 0;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(STT_TIMEOUT_ERROR)), timeoutMs);
+    timer = window.setTimeout(() => reject(new Error(STT_TIMEOUT_ERROR)), timeoutMs);
   });
 
   try {
     const res = await Promise.race([reqPromise, timeout]);
-    return res.json?.text || "";
+    return transcriptText(res.json);
   } finally {
-    clearTimeout(timer!);
+    window.clearTimeout(timer);
   }
 }

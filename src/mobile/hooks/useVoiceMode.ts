@@ -178,7 +178,7 @@ export function useVoiceMode({
   // and getWaveform falls back to a flat line if the analyser never came up.
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const freqRef = useRef<Uint8Array | null>(null);
+  const freqRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
 
   const teardownAnalyser = useCallback(() => {
     analyserRef.current = null;
@@ -195,7 +195,7 @@ export function useVoiceMode({
   const getWaveform = useCallback((bars: number): number[] => {
     const analyser = analyserRef.current;
     const freq = freqRef.current;
-    if (!analyser || !freq) return new Array(bars).fill(0);
+    if (!analyser || !freq) return new Array<number>(bars).fill(0);
     analyser.getByteFrequencyData(freq);
     const out: number[] = [];
     const n = freq.length;
@@ -291,7 +291,7 @@ export function useVoiceMode({
     const backoff = [0, 2000, 5000];
     let lastErr: unknown;
     for (const wait of backoff) {
-      if (wait) await new Promise((r) => setTimeout(r, wait));
+      if (wait) await new Promise((r) => window.setTimeout(r, wait));
       try {
         return provider === "openai"
           ? await openAiSpeechToText(sttKey, audio, meta.mimeType, timeoutMs)
@@ -495,10 +495,11 @@ export function useVoiceMode({
       // isn't available the recording still works, just without bars, and
       // long notes are cut on time alone.
       try {
+        // Older iOS WebViews only have the prefixed constructor.
         const Ctx =
           window.AudioContext ||
-          (window as unknown as { webkitAudioContext: typeof AudioContext })
-            .webkitAudioContext;
+          (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!Ctx) throw new Error("No Web Audio here");
         const ctx = new Ctx();
         const src = ctx.createMediaStreamSource(stream);
         const analyser = ctx.createAnalyser();
@@ -646,7 +647,8 @@ export function useVoiceMode({
       return;
     }
     if (voiceState === "idle") {
-      startRecording();
+      // startRecording reports its own failures (a Notice), so nothing to wait for here.
+      void startRecording();
     }
   }, [voiceState, stopRecording, startRecording, pump]);
 
@@ -711,7 +713,10 @@ export function useVoiceMode({
   const togglePause = useCallback(() => {
     if (!audioRef.current) return;
     if (audioRef.current.paused) {
-      audioRef.current.play();
+      audioRef.current.play().catch((err) => {
+        console.error("[hyo-voice] couldn't resume playback:", err);
+        setIsPaused(true);
+      });
       setIsPaused(false);
     } else {
       audioRef.current.pause();
@@ -732,7 +737,12 @@ export function useVoiceMode({
       setIsPaused(false);
     };
     setVoiceState("speaking");
-    audio.play();
+    audio.play().catch((err) => {
+      // It never started, so onended won't come: settle back the same way.
+      console.error("[hyo-voice] couldn't replay the last reply:", err);
+      setVoiceState("idle");
+      setIsPaused(false);
+    });
   }, [currentSpeed]);
 
   const cycleSpeed = useCallback(() => {
@@ -748,7 +758,8 @@ export function useVoiceMode({
   const autoSpeak = useCallback(
     (text: string) => {
       if (isVoiceMode && autoSpeakEnabled && text) {
-        speakResponse(text);
+        // speakResponse catches its own errors and settles the state.
+        void speakResponse(text);
       }
     },
     [isVoiceMode, autoSpeakEnabled, speakResponse]

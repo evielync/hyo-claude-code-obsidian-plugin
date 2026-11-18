@@ -1,9 +1,6 @@
 import { debug } from "./debug";
-import { Platform } from "obsidian";
-// Node built-ins are desktop-only; deferred so this module loads on mobile.
-const spawn: typeof import("child_process").spawn = Platform.isMobile ? (undefined as any) : require("child_process").spawn;
-const os: typeof import("os") = Platform.isMobile ? (undefined as any) : require("os");
-const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
+// Node built-ins are desktop-only; they load when a title is generated, so this module loads on mobile.
+import { nodeChildProcess, nodeOs, nodePath } from "./platform/node";
 
 interface TitleGenOptions {
   cliPath: string;
@@ -64,10 +61,11 @@ function cleanTitle(raw: string): string | null {
 export function titleSpawnOptions(
   platform: NodeJS.Platform = process.platform,
   baseEnv: NodeJS.ProcessEnv = process.env,
-  home: string = os.homedir(),
+  home: string = nodeOs().homedir(),
 ): { cwd: string; env: NodeJS.ProcessEnv } {
   const env = { ...baseEnv };
   if (platform !== "win32") {
+    const path = nodePath();
     env.PATH = [
       "/usr/local/bin",
       "/opt/homebrew/bin",
@@ -82,8 +80,10 @@ export function titleSpawnOptions(
       baseEnv.PATH || "",
     ].join(path.delimiter);
   }
-  return { cwd: os.tmpdir(), env };
+  return { cwd: nodeOs().tmpdir(), env };
 }
+
+const TITLE_TIMEOUT_MS = 30_000;
 
 /**
  * Generate a conversation title using Claude Haiku in --print mode.
@@ -106,19 +106,17 @@ export async function generateConversationTitle(
 
     debug("[hyo][title] Spawning CLI for title generation...");
 
-    const proc = spawn(cliPath, args, {
+    // Node stops the call itself (SIGTERM) if it runs past 30 seconds; the
+    // close handler below then reports the timeout and resolves null.
+    const proc = nodeChildProcess().spawn(cliPath, args, {
       ...titleSpawnOptions(),
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: TITLE_TIMEOUT_MS,
+      killSignal: "SIGTERM",
     });
 
     let stdout = "";
     let stderr = "";
-
-    const timeout = setTimeout(() => {
-      console.warn("[hyo][title] Timed out after 30s");
-      proc.kill("SIGTERM");
-      resolve(null);
-    }, 30_000);
 
     proc.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -129,14 +127,16 @@ export async function generateConversationTitle(
     });
 
     proc.on("error", (err) => {
-      clearTimeout(timeout);
       console.error("[hyo][title] Spawn error:", err.message);
       resolve(null);
     });
 
-    proc.on("close", (code) => {
-      clearTimeout(timeout);
-
+    proc.on("close", (code, signal) => {
+      if (code === null && signal === "SIGTERM") {
+        console.warn("[hyo][title] Timed out after 30s");
+        resolve(null);
+        return;
+      }
       if (code !== 0) {
         console.error(
           "[hyo][title] CLI exited with code",

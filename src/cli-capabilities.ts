@@ -14,18 +14,8 @@
 // Detection reads `--help` rather than comparing version numbers, so it stays
 // correct without anyone maintaining a table of which version added what.
 
-import { Platform } from "obsidian";
 import { debug } from "./debug";
-
-// Desktop-only. Deferred so importing this module never runs `require` on a
-// phone; the probe below is guarded and never called on mobile anyway.
-const execFile: typeof import("child_process").execFile = Platform.isMobile
-  ? (undefined as any)
-  : require("child_process").execFile;
-const spawnChild: typeof import("child_process").spawn = Platform.isMobile ? (undefined as any) : require("child_process").spawn;
-const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
-const os: typeof import("os") = Platform.isMobile ? (undefined as any) : require("os");
-const nodePath: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
+import { nodeChildProcess, nodeFs, nodeOs, nodePath } from "./platform/node";
 
 // The help always ends with its list of commands. Claude Code 2.1.280 exits
 // before a pipe has taken all of its `--help` (seen cut off at 8190 of 16380
@@ -36,10 +26,13 @@ const HELP_END = /\nCommands:/;
  * The CLI's `--help`, whole. Read through a pipe first; if that came back cut
  * short, read again through a file, which the CLI writes in full before it
  * exits. Resolves with whatever it got ("" on failure), never hangs.
+ * Desktop only: the Node modules load here, when a probe runs.
  */
 function readHelp(cliPath: string): Promise<{ text: string; failed: boolean }> {
   return new Promise((resolve) => {
-    execFile(cliPath, ["--help"], { timeout: 10_000 }, (err, stdout) => {
+    const cp = nodeChildProcess();
+    const fs = nodeFs();
+    cp.execFile(cliPath, ["--help"], { timeout: 10_000 }, (err, stdout) => {
       const text = stdout || "";
       if (err || HELP_END.test(text)) return resolve({ text, failed: !!err });
       let file = "";
@@ -56,10 +49,10 @@ function readHelp(cliPath: string): Promise<{ text: string; failed: boolean }> {
         resolve({ text: full.length > text.length ? full : text, failed: false });
       };
       try {
-        file = nodePath.join(os.tmpdir(), `hyo-cli-help-${process.pid}-${Date.now()}.txt`);
+        file = nodePath().join(nodeOs().tmpdir(), `hyo-cli-help-${process.pid}-${Date.now()}.txt`);
         fd = fs.openSync(file, "w");
-        const child = spawnChild(cliPath, ["--help"], { stdio: ["ignore", fd, "ignore"] });
-        const timer = setTimeout(() => {
+        const child = cp.spawn(cliPath, ["--help"], { stdio: ["ignore", fd, "ignore"] });
+        const timer = window.setTimeout(() => {
           try {
             child.kill();
           } catch {
@@ -68,11 +61,11 @@ function readHelp(cliPath: string): Promise<{ text: string; failed: boolean }> {
           done("");
         }, 10_000);
         child.on("error", () => {
-          clearTimeout(timer);
+          window.clearTimeout(timer);
           done("");
         });
         child.on("close", () => {
-          clearTimeout(timer);
+          window.clearTimeout(timer);
           let full = "";
           try {
             full = fs.readFileSync(file, "utf8");

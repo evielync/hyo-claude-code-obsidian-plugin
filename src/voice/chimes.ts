@@ -60,11 +60,14 @@ export function scheduleChime(ctx: BaseAudioContext, c: Chime, start = ctx.curre
 /** Play a chime now. Silent if audio isn't available. */
 export function playChime(c: Chime): void {
   try {
-    const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+    // Older iOS WebViews only have the prefixed constructor.
+    const Ctx = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return;
     const ctx: AudioContext = new Ctx();
     void ctx.resume?.(); // iOS starts a fresh context suspended
     scheduleChime(ctx, c);
-    setTimeout(() => void ctx.close().catch(() => {}), (chimeLength(c) + 0.3) * 1000);
+    // Closing a context that's already closed rejects; nothing is left to release then.
+    window.setTimeout(() => void ctx.close().catch(() => undefined), (chimeLength(c) + 0.3) * 1000);
   } catch {
     /* no audio — nothing to play */
   }

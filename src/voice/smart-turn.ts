@@ -1,3 +1,4 @@
+import type { InferenceSession, Tensor } from "onnxruntime-web";
 import { debug } from "../debug";
 import { computeMelFeatures, MEL_DIMS } from "./whisper-mel";
 
@@ -16,7 +17,7 @@ import { computeMelFeatures, MEL_DIMS } from "./whisper-mel";
 const MODEL_ID = "onnx-community/smart-turn-v3-ONNX";
 const WINDOW_SAMPLES = 16000 * 8; // the model only sees the last 8 seconds
 
-let session: any = null;
+let session: InferenceSession | null = null;
 let loadPromise: Promise<void> | null = null;
 let failed = false;
 
@@ -24,17 +25,17 @@ let failed = false;
 export function loadSmartTurn(assetBase: string): Promise<void> {
   if (session) return Promise.resolve();
   if (loadPromise) return loadPromise;
-  console.log("[hyo-voice] Smart Turn loading…");
+  debug("[hyo-voice] Smart Turn loading…");
   loadPromise = (async () => {
     const ort = await import("onnxruntime-web");
     ort.env.wasm.numThreads = 1;
-    (ort.env.wasm as any).proxy = false;
+    ort.env.wasm.proxy = false;
     ort.env.wasm.wasmPaths = assetBase;
     session = await ort.InferenceSession.create(
       `${assetBase}models/${MODEL_ID}/onnx/model_quantized.onnx`,
       { executionProviders: ["wasm"] }
     );
-    console.log("[hyo-voice] Smart Turn loaded ✓");
+    debug("[hyo-voice] Smart Turn loaded ✓");
   })().catch((err) => {
     failed = true;
     console.error("[hyo-voice] Smart Turn failed to load:", err);
@@ -48,9 +49,7 @@ export function loadSmartTurn(assetBase: string): Promise<void> {
  */
 export async function turnEndProbability(audio: Float32Array): Promise<number> {
   if (failed || !session) {
-    console.log(
-      "[hyo-voice] Smart Turn not ready → treating pause as finished"
-    );
+    debug("[hyo-voice] Smart Turn not ready → treating pause as finished");
     return 1;
   }
   try {
@@ -62,9 +61,10 @@ export async function turnEndProbability(audio: Float32Array): Promise<number> {
         ? audio.subarray(audio.length - WINDOW_SAMPLES)
         : audio;
     const features = computeMelFeatures(clip); // [1,80,800]
-    const feeds: Record<string, any> = {};
+    const feeds: Record<string, Tensor> = {};
     feeds[session.inputNames[0]] = new ort.Tensor("float32", features, MEL_DIMS);
     const res = await session.run(feeds);
+    // The model's one output is a float32 logit.
     const logit = (res[session.outputNames[0]].data as Float32Array)[0];
     return 1 / (1 + Math.exp(-logit));
   } catch (err) {

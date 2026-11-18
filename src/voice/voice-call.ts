@@ -374,7 +374,9 @@ export function takeUnseenTurns<M extends CallCarrier>(
 
 /** A fresh session id for Claude (`--session-id` takes a UUID). */
 export function newSessionId(): string {
-  const c: any = (globalThis as any).crypto;
+  // Older WebViews (iOS before 15.4) have getRandomValues but no randomUUID.
+  const c: Partial<Pick<Crypto, "randomUUID" | "getRandomValues">> | undefined =
+    typeof crypto === "undefined" ? undefined : crypto;
   if (c?.randomUUID) return c.randomUUID();
   const b = new Uint8Array(16);
   if (c?.getRandomValues) c.getRandomValues(b);

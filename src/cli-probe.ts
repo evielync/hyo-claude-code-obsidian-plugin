@@ -1,5 +1,6 @@
-import { Platform } from "obsidian";
+import type { ChildProcess } from "child_process";
 import { compareVersions } from "./models";
+import { electron, hasNode, nodeChildProcess, nodeFs, nodeOs } from "./platform/node";
 
 /**
  * Finding Claude and getting it working, done honestly and invisibly. Two rules
@@ -12,13 +13,24 @@ import { compareVersions } from "./models";
  *      background; the only thing that surfaces is a browser tab for approving
  *      sign-in, which is expected and fine.
  *
- * Desktop only. A phone has no shell and no child_process, so these modules are
- * left undefined and every function returns a safe empty answer — the phone
- * relies on a connected desktop for all of this.
+ * Desktop only. A phone has no shell and no child_process, so every function
+ * returns a safe empty answer there — the phone relies on a connected desktop
+ * for all of this.
  */
-const cp: typeof import("child_process") | null = Platform.isMobile ? null : require("child_process");
-const fs: typeof import("fs") | null = Platform.isMobile ? null : require("fs");
-const os: typeof import("os") | null = Platform.isMobile ? null : require("os");
+
+/** The child_process module, or null on the phone. */
+function childProcess(): typeof import("child_process") | null {
+  return hasNode() ? nodeChildProcess() : null;
+}
+
+/** Why a command failed, from the error execSync / spawn threw: its stderr, else its message. */
+function failureText(e: unknown): string {
+  if (typeof e !== "object" || e === null) return "";
+  const { stderr, message } = e as { stderr?: unknown; message?: unknown };
+  const err = typeof stderr === "string" ? stderr : stderr instanceof Uint8Array ? stderr.toString() : "";
+  if (err) return err;
+  return typeof message === "string" ? message : "";
+}
 
 export interface ClaudeCandidate {
   /** Absolute path to a claude binary the machine can see. */
@@ -72,8 +84,10 @@ const knownPaths = (home: string): string[] => [
  * Known install locations are added on top as a safety net.
  */
 function gatherCandidatePaths(): string[] {
-  if (!cp || !fs || !os) return [];
-  const home = os.homedir();
+  const cp = childProcess();
+  if (!cp) return [];
+  const fs = nodeFs();
+  const home = nodeOs().homedir();
   const isWindows = process.platform === "win32";
   const found = new Set<string>();
 
@@ -94,16 +108,22 @@ function gatherCandidatePaths(): string[] {
         if (looksLikePath) {
           try {
             if (fs.existsSync(line)) found.add(line);
-          } catch {}
+          } catch {
+            // An unreadable path is not a candidate.
+          }
         }
       }
-    } catch {}
+    } catch {
+      // That shell isn't installed, or has no claude on its PATH: try the next.
+    }
   }
 
   for (const p of knownPaths(home)) {
     try {
       if (fs.existsSync(p)) found.add(p);
-    } catch {}
+    } catch {
+      // An unreadable path is not a candidate.
+    }
   }
 
   return [...found];
@@ -111,26 +131,30 @@ function gatherCandidatePaths(): string[] {
 
 /** Run one Claude and see if it reports a version. A file existing is not this. */
 export function probeClaude(path: string): ClaudeCandidate {
+  const cp = childProcess();
   if (!cp) return { path, works: false, error: "not available on mobile" };
   try {
     const out = cp.execSync(`"${path}" --version`, { encoding: "utf8", timeout: 8000 }).trim();
     return { path, works: true, version: out || "unknown version" };
-  } catch (e: any) {
-    const msg = (e?.stderr || e?.message || "").toString().split(/\r?\n/)[0] || "could not run";
+  } catch (e) {
+    const msg = failureText(e).split(/\r?\n/)[0] || "could not run";
     return { path, works: false, error: msg };
   }
 }
 
 /** Ask Claude whether it's signed in. Returns loggedIn: undefined if we can't tell. */
 export function checkAuth(cliPath: string): AuthStatus {
+  const cp = childProcess();
   if (!cp || !cliPath) return {};
   try {
     const out = cp.execSync(`"${cliPath}" auth status`, { encoding: "utf8", timeout: 8000 });
-    const json = JSON.parse(out);
+    const json: unknown = JSON.parse(out);
+    if (typeof json !== "object" || json === null) return {};
+    const { loggedIn, email, subscriptionType } = json as Record<string, unknown>;
     return {
-      loggedIn: typeof json.loggedIn === "boolean" ? json.loggedIn : undefined,
-      email: json.email,
-      subscriptionType: json.subscriptionType,
+      loggedIn: typeof loggedIn === "boolean" ? loggedIn : undefined,
+      email: typeof email === "string" ? email : undefined,
+      subscriptionType: typeof subscriptionType === "string" ? subscriptionType : undefined,
     };
   } catch {
     return {};
@@ -150,12 +174,17 @@ export function detectClaude(): ClaudeDetection {
 
 /** Open a URL in the person's real browser (for sign-in approval). */
 function openExternal(url: string): void {
-  try {
-    require("electron").shell.openExternal(url);
-  } catch {
+  const fallback = () => {
     try {
       window.open(url, "_blank");
-    } catch {}
+    } catch {
+      // No way to open a browser from here; the link is still on the sign-in card.
+    }
+  };
+  try {
+    electron().shell.openExternal(url).catch(fallback);
+  } catch {
+    fallback();
   }
 }
 
@@ -168,21 +197,22 @@ type Phase = (message: string) => void;
  */
 export function installClaude(onPhase: Phase): Promise<{ ok: boolean; error?: string }> {
   return new Promise((resolve) => {
+    const cp = childProcess();
     if (!cp) return resolve({ ok: false, error: "This only works on the desktop app." });
     const isWindows = process.platform === "win32";
     onPhase("Installing Claude…");
-    let child;
+    let child: ChildProcess;
     try {
       child = isWindows
         ? cp.spawn("powershell.exe", ["-NoProfile", "-Command", "irm https://claude.ai/install.ps1 | iex"], {
             windowsHide: true,
           })
         : cp.spawn("/bin/bash", ["-lc", "curl -fsSL https://claude.ai/install.sh | bash"], {});
-    } catch (e: any) {
-      return resolve({ ok: false, error: (e?.message || "Couldn't start the installer.").toString() });
+    } catch (e) {
+      return resolve({ ok: false, error: failureText(e) || "Couldn't start the installer." });
     }
-    child.on("error", (e: any) => resolve({ ok: false, error: (e?.message || "Install failed.").toString() }));
-    child.on("close", (code: number) =>
+    child.on("error", (e) => resolve({ ok: false, error: e.message || "Install failed." }));
+    child.on("close", (code: number | null) =>
       resolve(code === 0 ? { ok: true } : { ok: false, error: `Installer stopped (code ${code}).` })
     );
   });
@@ -205,32 +235,36 @@ export async function updateClaude(
   required: string,
   onPhase: Phase
 ): Promise<{ ok: boolean; error?: string }> {
+  const cp = childProcess();
   if (!cp) return { ok: false, error: "This only works on the desktop app." };
   const newEnough = (v?: string) => !!v && compareVersions(v, required) >= 0;
 
   if (cliPath) {
     onPhase("Updating Claude…");
     await new Promise<void>((resolve) => {
-      let child: any;
+      let child: ChildProcess;
       try {
-        child = cp!.spawn(cliPath, ["update"], { windowsHide: true });
+        child = cp.spawn(cliPath, ["update"], { windowsHide: true });
       } catch {
+        // Couldn't start the updater: the installer below is the fallback.
         return resolve();
       }
       // The updater can hang on a prompt it expects a person to answer. Give
       // it a fair run, then move on to the installer rather than wait forever.
-      const timer = setTimeout(() => {
+      const timer = window.setTimeout(() => {
         try {
           child.kill();
-        } catch {}
+        } catch {
+          // Already exited.
+        }
         resolve();
       }, 180000);
       child.on("error", () => {
-        clearTimeout(timer);
+        window.clearTimeout(timer);
         resolve();
       });
       child.on("close", () => {
-        clearTimeout(timer);
+        window.clearTimeout(timer);
         resolve();
       });
     });
@@ -276,17 +310,18 @@ export async function signIn(
   onPhase: Phase,
   onCodeNeeded?: CodeNeeded
 ): Promise<{ ok: boolean; error?: string }> {
+  const cp = childProcess();
   if (!cp) return { ok: false, error: "This only works on the desktop app." };
   onPhase("Starting sign-in…");
   const wasSignedOut = checkAuth(cliPath).loggedIn === false;
-  let child: any;
+  let child: ChildProcess;
   try {
     child = cp.spawn(cliPath, ["auth", "login", "--claudeai"], {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
-  } catch (e: any) {
-    return { ok: false, error: (e?.message || "Couldn't start sign-in.").toString() };
+  } catch (e) {
+    return { ok: false, error: failureText(e) || "Couldn't start sign-in." };
   }
 
   return new Promise((resolve) => {
@@ -297,11 +332,13 @@ export async function signIn(
     const finish = (r: { ok: boolean; error?: string }) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
-      clearInterval(poll);
+      window.clearTimeout(timer);
+      window.clearInterval(poll);
       try {
         child.kill();
-      } catch {}
+      } catch {
+        // Already exited.
+      }
       if (r.ok) onPhase("Signed in.");
       resolve(r);
     };
@@ -311,7 +348,7 @@ export async function signIn(
       onPhase("Checking the code…");
       try {
         child.stdin?.write(clean + "\n");
-      } catch (e: any) {
+      } catch (e) {
         console.error("[hyo] couldn't pass the sign-in code to Claude:", e);
         finish({ ok: false, error: "Couldn't pass the code to Claude. Click Sign in to try again." });
       }
@@ -346,9 +383,9 @@ export async function signIn(
     };
     child.stdout?.on("data", handle);
     child.stderr?.on("data", handle);
-    child.on("error", (e: any) => {
+    child.on("error", (e) => {
       console.error("[hyo] sign-in process error:", e);
-      finish({ ok: false, error: (e?.message || "Sign-in couldn't start.").toString() });
+      finish({ ok: false, error: e.message || "Sign-in couldn't start." });
     });
     child.on("close", (code: number | null) => {
       if (settled) return;
@@ -365,10 +402,10 @@ export async function signIn(
 
     // Signed out at the start and signed in now: done, even if the login
     // process lingers. Never used when old credentials were already present.
-    const poll = setInterval(() => {
+    const poll = window.setInterval(() => {
       if (wasSignedOut && checkAuth(cliPath).loggedIn) finish({ ok: true });
     }, 2000);
-    const timer = setTimeout(
+    const timer = window.setTimeout(
       () => finish({ ok: false, error: "Sign-in timed out after five minutes. Click Sign in to try again." }),
       300000
     );
