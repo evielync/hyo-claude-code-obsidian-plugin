@@ -1,9 +1,15 @@
 /* Hyo Plugin — Obsidian theme-aware styles */
 
-/* Hide Obsidian's native view header — the plugin has its own tab bar */
-.workspace-leaf-content[data-type="hyo-plugin-view"] .view-header {
-  display: none !important;
+/* Hide Obsidian's native view header — the plugin has its own tab bar.
+   Specific enough to beat every core .view-header rule (.is-phone.is-hidden-nav
+   is the strongest) on specificity alone. */
+body .workspace-leaf-content[data-type="hyo-plugin-view"] > .view-header.view-header {
+  display: none;
 }
+
+/* Where Hyo has to beat Obsidian's own button styles (button:not(.clickable-icon),
+   .mobile-tap, .is-tablet …), its rules repeat their class (.hyo-x.hyo-x) to
+   win on specificity alone. */
 
 .hyo-plugin {
   height: 100%;
@@ -541,23 +547,23 @@
   background: var(--background-modifier-hover);
 }
 
-.hyo-permission-deny {
-  color: var(--text-error) !important;
+.hyo-permission-deny.hyo-permission-deny {
+  color: var(--text-error);
 }
 
-.hyo-permission-allow {
-  background: var(--interactive-accent) !important;
-  color: var(--text-on-accent) !important;
-  border-color: var(--interactive-accent) !important;
+.hyo-permission-allow.hyo-permission-allow {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
 }
 
-.hyo-permission-allow:hover {
-  background: var(--interactive-accent-hover) !important;
+.hyo-permission-allow.hyo-permission-allow:hover {
+  background: var(--interactive-accent-hover);
 }
 
-.hyo-permission-allow-always {
-  color: var(--text-muted) !important;
-  font-size: 11px !important;
+.hyo-permission-allow-always.hyo-permission-allow-always {
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 /* Ask question */
@@ -846,14 +852,14 @@ button.hyo-ask-send:disabled {
   background: var(--background-modifier-hover);
 }
 
-.hyo-plan-review-approve {
-  background: var(--interactive-accent) !important;
-  color: var(--text-on-accent) !important;
-  border-color: var(--interactive-accent) !important;
+.hyo-plan-review-approve.hyo-plan-review-approve {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
 }
 
-.hyo-plan-review-approve:hover {
-  background: var(--interactive-accent-hover) !important;
+.hyo-plan-review-approve.hyo-plan-review-approve:hover {
+  background: var(--interactive-accent-hover);
 }
 
 /* Streaming state */
@@ -974,11 +980,11 @@ button.hyo-ask-send:disabled {
   color: var(--text-accent);
 }
 
-.hyo-attachment-remove {
+.hyo-attachment-remove.hyo-attachment-remove {
   font-size: 14px;
   line-height: 1;
   color: var(--text-faint);
-  padding: 0 2px !important;
+  padding: 0 2px;
   cursor: pointer;
 }
 
@@ -1019,13 +1025,13 @@ button.hyo-ask-send:disabled {
   z-index: 100;
 }
 
-.hyo-attach-popup-item {
-  display: flex !important;
-  align-items: center !important;
-  justify-content: flex-start !important;
+.hyo-attach-popup-item.hyo-attach-popup-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
   gap: 8px;
   width: 100%;
-  padding: 7px 10px !important;
+  padding: 7px 10px;
   border-radius: var(--radius-s);
   font-size: 13px;
   color: var(--text-normal);
@@ -1067,13 +1073,13 @@ button.hyo-ask-send:disabled {
   color: var(--text-faint);
 }
 
-.hyo-send-btn {
+.hyo-send-btn.hyo-send-btn {
   width: 36px;
   height: 36px;
-  border-radius: 50% !important;
-  background: var(--interactive-accent) !important;
-  color: var(--text-on-accent) !important;
-  padding: 0 !important;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1081,8 +1087,8 @@ button.hyo-ask-send:disabled {
   transition: background 0.15s, transform 0.1s;
 }
 
-.hyo-send-btn:hover {
-  background: var(--interactive-accent-hover) !important;
+.hyo-send-btn.hyo-send-btn:hover {
+  background: var(--interactive-accent-hover);
 }
 
 .hyo-send-btn:active {
@@ -1090,12 +1096,12 @@ button.hyo-ask-send:disabled {
 }
 
 /* Stop button — red */
-.hyo-send-btn.hyo-stop {
-  background: var(--text-error) !important;
+.hyo-send-btn.hyo-stop.hyo-stop {
+  background: var(--text-error);
 }
 
-.hyo-send-btn.hyo-stop:hover {
-  background: #b55555 !important;
+.hyo-send-btn.hyo-stop.hyo-stop:hover {
+  background: #b55555;
 }
 
 /* ── Conversation bar + panel ─────────────────────────────────────────────
@@ -1116,14 +1122,14 @@ button.hyo-ask-send:disabled {
   background: var(--background-secondary);
   border-bottom: 1px solid var(--background-modifier-border);
 }
-.hyo-plugin .hyo-chat-panel button.hyo-cs-current {
+.hyo-plugin .hyo-chat-panel button.hyo-cs-current.hyo-cs-current {
   flex: 1;
   min-width: 0;
   height: 34px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 10px 0 12px !important;
+  padding: 0 10px 0 12px;
   border-radius: 10px;
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
@@ -1177,26 +1183,26 @@ button.hyo-ask-send:disabled {
 }
 @keyframes hyo-cs-pulse { 50% { transform: scale(.6); opacity: .6; } }
 
-.hyo-plugin .hyo-chat-panel button.hyo-cs-iconbtn {
+.hyo-plugin .hyo-chat-panel button.hyo-cs-iconbtn.hyo-cs-iconbtn {
   flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
   width: 34px;
   height: 34px;
-  padding: 0 !important;
+  padding: 0;
   border-radius: 10px;
   background: transparent;
   color: var(--text-muted);
 }
 /* On an iPad Obsidian pads bare buttons until a flex-shrunk icon collapses to
    0px wide (measured svg:0x15). A floor the icon can't shrink past holds it. */
-.hyo-cs-bar button svg,
-.hyo-cs-sheet button svg,
-.hyo-cs-sheet .hyo-ts-search-field svg {
-  flex: 0 0 auto !important;
-  min-width: 14px !important;
-  min-height: 14px !important;
+.hyo-cs-bar.hyo-cs-bar button svg,
+.hyo-cs-sheet.hyo-cs-sheet button svg,
+.hyo-cs-sheet .hyo-ts-search-field.hyo-ts-search-field svg {
+  flex: 0 0 auto;
+  min-width: 14px;
+  min-height: 14px;
 }
 
 /* The panel: a scrim over the whole view and a sheet from the bar's edge. */
@@ -1276,14 +1282,14 @@ button.hyo-ask-send:disabled {
   border-radius: 11px;
   background: var(--background-secondary);
 }
-.hyo-plugin .hyo-chat-panel button.hyo-cs-seg-btn {
+.hyo-plugin .hyo-chat-panel button.hyo-cs-seg-btn.hyo-cs-seg-btn {
   flex: 1;
   height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 0 !important;
+  padding: 0;
   border-radius: 9px;
   color: var(--text-muted);
   font-size: 13px;
@@ -1304,10 +1310,10 @@ button.hyo-ask-send:disabled {
   font-weight: 700;
 }
 .hyo-cs-n-red { background: #D64B3F; color: #fff; }
-.hyo-plugin .hyo-chat-panel button.hyo-cs-done {
+.hyo-plugin .hyo-chat-panel button.hyo-cs-done.hyo-cs-done {
   flex: none;
   height: 36px;
-  padding: 0 4px !important;
+  padding: 0 4px;
   color: var(--interactive-accent);
   font-size: 13px;
   font-weight: 600;
@@ -1387,10 +1393,10 @@ button.hyo-ask-send:disabled {
   padding: 10px 12px 12px;
   border-top: 1px solid var(--background-modifier-border);
 }
-.hyo-plugin .hyo-chat-panel button.hyo-cs-newbtn {
+.hyo-plugin .hyo-chat-panel button.hyo-cs-newbtn.hyo-cs-newbtn {
   width: 100%;
   height: 40px;
-  padding: 0 !important;
+  padding: 0;
   border-radius: 10px;
   background: var(--interactive-accent);
   color: var(--text-on-accent, #fff);
@@ -1482,13 +1488,13 @@ button.hyo-ask-send:disabled {
   padding-top: 0;
 }
 
-.hyo-session-dropdown-item {
+.hyo-session-dropdown-item.hyo-session-dropdown-item {
   display: block;
   width: 100%;
-  padding: 6px 14px !important;
-  color: var(--text-normal) !important;
+  padding: 6px 14px;
+  color: var(--text-normal);
   font-size: 13px;
-  text-align: left !important;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2507,9 +2513,9 @@ button.hyo-ask-send:disabled {
   font-size: 12.5px; color: var(--text-normal);
 }
 .hyo-ts-search .hyo-ts-search-input::placeholder { color: var(--text-faint); }
-.hyo-plugin .hyo-ts-search button.hyo-ts-search-clear {
+.hyo-plugin .hyo-ts-search button.hyo-ts-search-clear.hyo-ts-search-clear {
   flex: none; display: flex; align-items: center; justify-content: center;
-  width: 22px; height: 22px; padding: 0 !important; border: none; border-radius: 50%;
+  width: 22px; height: 22px; padding: 0; border: none; border-radius: 50%;
   background: transparent; color: var(--text-faint); cursor: pointer; box-shadow: none;
 }
 /* Full text is Obsidian's own switch (.checkbox-container), label beside it. */
@@ -2520,9 +2526,9 @@ button.hyo-ask-send:disabled {
 }
 .hyo-ts-search .hyo-ts-search-mode-on { color: var(--text-normal); }
 .hyo-ts-search .hyo-ts-search-mode .checkbox-container { margin: 0; }
-.hyo-plugin .hyo-ts-search button.hyo-ts-refresh {
+.hyo-plugin .hyo-ts-search button.hyo-ts-refresh.hyo-ts-refresh {
   flex: none; display: flex; align-items: center; justify-content: center;
-  width: 32px; height: 32px; padding: 0 !important; border-radius: 8px; cursor: pointer;
+  width: 32px; height: 32px; padding: 0; border-radius: 8px; cursor: pointer;
   background: transparent; border: 1px solid var(--background-modifier-border);
   color: var(--text-muted); box-shadow: none;
 }
@@ -2564,16 +2570,16 @@ button.hyo-ask-send:disabled {
 .hyo-ts-time { font-size: 10.5px; color: var(--text-faint); display: inline-flex; align-items: center; gap: 6px; }
 .hyo-ts-openmark { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--interactive-accent); }
 
-.hyo-plugin .hyo-chat-panel button.hyo-ts-act {
+.hyo-plugin .hyo-chat-panel button.hyo-ts-act.hyo-ts-act {
   flex: none; display: inline-flex; align-items: center; justify-content: center;
-  width: 32px; height: 32px; padding: 0 !important; color: var(--text-muted);
+  width: 32px; height: 32px; padding: 0; color: var(--text-muted);
   background: var(--background-primary-alt);
   border: 1px solid var(--background-modifier-border); border-radius: 8px; cursor: pointer;
 }
 .hyo-plugin .hyo-chat-panel button.hyo-ts-act-on { color: var(--interactive-accent); border-color: var(--interactive-accent); }
 
-.hyo-plugin .hyo-chat-panel button.hyo-ts-loadmore {
-  display: block; margin: 8px auto 6px; padding: 0 18px !important; height: 36px;
+.hyo-plugin .hyo-chat-panel button.hyo-ts-loadmore.hyo-ts-loadmore {
+  display: block; margin: 8px auto 6px; padding: 0 18px; height: 36px;
   font-size: 12px; font-weight: 500; color: var(--text-muted);
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border); border-radius: 8px; cursor: pointer;
@@ -3076,20 +3082,20 @@ button.hyo-ask-send:disabled {
 .is-mobile .hyo-permission-buttons button:hover {
   background: var(--background-modifier-hover);
 }
-.is-mobile .hyo-permission-deny {
-  color: var(--text-error) !important;
+.is-mobile .hyo-permission-deny.hyo-permission-deny {
+  color: var(--text-error);
 }
-.is-mobile .hyo-permission-allow {
-  background: var(--interactive-accent) !important;
-  color: var(--text-on-accent) !important;
-  border-color: var(--interactive-accent) !important;
+.is-mobile .hyo-permission-allow.hyo-permission-allow {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
 }
-.is-mobile .hyo-permission-allow:hover {
-  background: var(--interactive-accent-hover) !important;
+.is-mobile .hyo-permission-allow.hyo-permission-allow:hover {
+  background: var(--interactive-accent-hover);
 }
-.is-mobile .hyo-permission-allow-always {
-  color: var(--text-muted) !important;
-  font-size: 11px !important;
+.is-mobile .hyo-permission-allow-always.hyo-permission-allow-always {
+  color: var(--text-muted);
+  font-size: 11px;
 }
 .is-mobile /* Ask question */
 /* ── AskQuestion ── */
@@ -3329,13 +3335,13 @@ button.hyo-ask-send:disabled {
 .is-mobile .hyo-plan-review-reject:hover {
   background: var(--background-modifier-hover);
 }
-.is-mobile .hyo-plan-review-approve {
-  background: var(--interactive-accent) !important;
-  color: var(--text-on-accent) !important;
-  border-color: var(--interactive-accent) !important;
+.is-mobile .hyo-plan-review-approve.hyo-plan-review-approve {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
 }
-.is-mobile .hyo-plan-review-approve:hover {
-  background: var(--interactive-accent-hover) !important;
+.is-mobile .hyo-plan-review-approve.hyo-plan-review-approve:hover {
+  background: var(--interactive-accent-hover);
 }
 .is-mobile /* Streaming state */
 .hyo-streaming-cursor {
@@ -3457,11 +3463,11 @@ button.hyo-ask-send:disabled {
 .is-mobile .hyo-attachment-chip-ref .hyo-attachment-tokens {
   color: var(--text-accent);
 }
-.is-mobile .hyo-attachment-remove {
+.is-mobile .hyo-attachment-remove.hyo-attachment-remove {
   font-size: 14px;
   line-height: 1;
   color: var(--text-faint);
-  padding: 0 2px !important;
+  padding: 0 2px;
   cursor: pointer;
 }
 .is-mobile .hyo-attachment-remove:hover {
@@ -3500,13 +3506,13 @@ button.hyo-ask-send:disabled {
   min-width: 180px;
   z-index: 100;
 }
-.is-mobile .hyo-attach-popup-item {
-  display: flex !important;
-  align-items: center !important;
-  justify-content: flex-start !important;
+.is-mobile .hyo-attach-popup-item.hyo-attach-popup-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
   gap: 8px;
   width: 100%;
-  padding: 7px 10px !important;
+  padding: 7px 10px;
   border-radius: var(--radius-s);
   font-size: 13px;
   color: var(--text-normal);
@@ -3698,31 +3704,31 @@ button.hyo-ask-send:disabled {
   color: var(--text-normal);
   background: var(--background-modifier-hover);
 }
-.is-mobile .hyo-send-btn {
+.is-mobile .hyo-send-btn.hyo-send-btn {
   width: 38px;
   height: 38px;
-  border-radius: 50% !important;
-  background: var(--interactive-accent) !important;
-  color: var(--text-on-accent) !important;
-  padding: 0 !important;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   transition: background 0.15s, transform 0.1s;
 }
-.is-mobile .hyo-send-btn:hover {
-  background: var(--interactive-accent-hover) !important;
+.is-mobile .hyo-send-btn.hyo-send-btn:hover {
+  background: var(--interactive-accent-hover);
 }
 .is-mobile .hyo-send-btn:active {
   transform: scale(0.93);
 }
 .is-mobile /* Stop button — red */
-.hyo-send-btn.hyo-stop {
-  background: var(--text-error) !important;
+.hyo-send-btn.hyo-stop.hyo-stop {
+  background: var(--text-error);
 }
-.is-mobile .hyo-send-btn.hyo-stop:hover {
-  background: #b55555 !important;
+.is-mobile .hyo-send-btn.hyo-stop.hyo-stop:hover {
+  background: #b55555;
 }
 .is-mobile /* Session dropdown */
 .hyo-session-dropdown {
@@ -3793,13 +3799,13 @@ button.hyo-ask-send:disabled {
 .is-mobile .hyo-session-dropdown-date:first-child {
   padding-top: 0;
 }
-.is-mobile .hyo-session-dropdown-item {
+.is-mobile .hyo-session-dropdown-item.hyo-session-dropdown-item {
   display: block;
   width: 100%;
-  padding: 6px 14px !important;
-  color: var(--text-normal) !important;
+  padding: 6px 14px;
+  color: var(--text-normal);
   font-size: 13px;
-  text-align: left !important;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4405,45 +4411,41 @@ button.hyo-ask-send:disabled {
 .is-mobile /* iPad/tablet fix (2026-07-18): on `is-tablet`, .is-mobile Obsidian collapses button-icon
    SVG width to 0 (diagnostic showed svg:0x15) so the icons vanish while the
    buttons stay. Force explicit icon dimensions so nothing can flatten them. */
-.hyo-input-controls button svg {
-  width: 16px !important;
-  height: 16px !important;
-  flex-shrink: 0 !important;
+.hyo-input-controls.hyo-input-controls button svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
 }
 .is-mobile /* Remove the white seam at the top: Obsidian's pane header for our view
    renders white while the chat panel is cream. Paint the whole leaf (header
    included) to match --background-primary-alt. Scoped to our view type only. */
-.workspace-leaf-content[data-type="hyo-plugin-view"] {
-  background: var(--background-primary-alt) !important;
+.workspace-leaf-content.workspace-leaf-content[data-type="hyo-plugin-view"] {
+  background: var(--background-primary-alt);
 }
-.is-mobile .workspace-leaf-content[data-type="hyo-plugin-view"] .view-header {
-  background: transparent !important;
-  border-bottom: none !important;
+.is-mobile .workspace-leaf-content[data-type="hyo-plugin-view"] .view-header.view-header {
+  background: transparent;
+  border-bottom: none;
 }
-.is-mobile /* White-seam fix (mobile): our panel lives in Obsidian's mobile drawer. In
-   light mode the drawer tab header/container is white while our chat is cream, .is-mobile creating a seam above the panel. Paint the whole drawer tab (header + body)
-   to match --background-primary-alt. Scoped via :has() to our view only. */
-.workspace-drawer-active-tab-container:has([data-type="hyo-plugin-view"]), .is-mobile .workspace-drawer-active-tab-container:has([data-type="hyo-plugin-view"]) .workspace-drawer-active-tab-header, .is-mobile .workspace-leaf-content[data-type="hyo-plugin-view"], .is-mobile .workspace-leaf-content[data-type="hyo-plugin-view"] .view-header {
-  background-color: var(--background-primary-alt) !important;
-  border-bottom: none !important;
+/* White-seam fix (mobile): Hyo lives in Obsidian's mobile drawer. In light
+   mode the drawer chrome is white while the chat is cream, leaving seams above
+   and below the panel. HyoView marks the drawer that hosts it with
+   .hyo-drawer-host (and removes it on close), and every drawer surface inside
+   it is painted --background-primary-alt. */
+.is-mobile .workspace-drawer.hyo-drawer-host,
+.is-mobile .workspace-drawer.hyo-drawer-host [class*="workspace-drawer"],
+.is-mobile .workspace-drawer.hyo-drawer-host .workspace-leaf,
+.is-mobile .workspace-drawer.hyo-drawer-host .workspace-leaf-content,
+.is-mobile .workspace-drawer.hyo-drawer-host .view-header,
+.is-mobile .workspace-drawer.hyo-drawer-host .view-content,
+.is-mobile .workspace-drawer.hyo-drawer-host .metadata-content,
+.is-mobile .workspace-drawer.hyo-drawer-host .metadata-container,
+.is-mobile .workspace-drawer.hyo-drawer-host .view-content > * {
+  background-color: var(--background-primary-alt);
+  border-color: transparent;
 }
-.is-mobile /* Wider net for the drawer chrome (the white strip above the tab + the footer
-   band below the input). Paint every drawer structural container that wraps our
-   view. Scoped via :has() so only the Hyo drawer is affected. */
-.workspace-drawer:has([data-type="hyo-plugin-view"]), .is-mobile .workspace-drawer:has([data-type="hyo-plugin-view"]) [class*="workspace-drawer-active-tab"], .is-mobile .workspace-drawer:has([data-type="hyo-plugin-view"]) [class*="workspace-drawer-header"], .is-mobile .workspace-drawer:has([data-type="hyo-plugin-view"]) [class*="workspace-drawer-footer"], .is-mobile .workspace-drawer-active-tab-header:has([data-type="hyo-plugin-view"]) {
-  background-color: var(--background-primary-alt) !important;
-}
-.is-mobile /* Definitive white-seam fix (probe-confirmed, .is-mobile :has supported). Paint every
-   drawer structural element the probe flagged white — scoped to the right
-   drawer when it hosts our Hyo view, .is-mobile so nothing else is affected. */
-.workspace-drawer.mod-right:has([data-type="hyo-plugin-view"]), .is-mobile .workspace-drawer.mod-right:has([data-type="hyo-plugin-view"]) [class*="workspace-drawer"], .is-mobile .workspace-drawer.mod-right:has([data-type="hyo-plugin-view"]) .workspace-leaf, .is-mobile .workspace-drawer.mod-right:has([data-type="hyo-plugin-view"]) .workspace-leaf-content, .is-mobile .workspace-drawer.mod-right:has([data-type="hyo-plugin-view"]) .view-header, .is-mobile .workspace-drawer.mod-right:has([data-type="hyo-plugin-view"]) .view-content {
-  background-color: var(--background-primary-alt) !important;
-  border-color: transparent !important;
-}
-.is-mobile /* The one remaining white band: `metadata-content` in the drawer footer
-   (probe-flagged, .is-mobile missed by the drawer-class net). Paint it too. */
-.workspace-drawer.mod-right:has([data-type="hyo-plugin-view"]) .metadata-content, .is-mobile .workspace-drawer.mod-right:has([data-type="hyo-plugin-view"]) .metadata-container, .is-mobile .workspace-drawer.mod-right:has([data-type="hyo-plugin-view"]) .view-content > * {
-  background-color: var(--background-primary-alt) !important;
+.is-mobile .workspace-drawer.hyo-drawer-host .workspace-drawer-active-tab-container,
+.is-mobile .workspace-drawer.hyo-drawer-host .workspace-drawer-active-tab-header {
+  border-bottom: none;
 }
 
 /* Left-align session panel options (beats Obsidian mobile's centred button default) */
@@ -4835,10 +4837,10 @@ button.hyo-callline:hover { background: var(--background-secondary); }
 .is-mobile .hyo-conn-dot-connected { background: var(--color-green); }
 .is-mobile .hyo-conn-dot-connecting, .is-mobile .hyo-conn-dot-reconnecting { background: var(--color-yellow); }
 .is-mobile .hyo-conn-dot-disconnected { background: var(--color-red); }
-.is-mobile .hyo-plugin .hyo-chat-panel button.hyo-cs-current {
+.is-mobile .hyo-plugin .hyo-chat-panel button.hyo-cs-current.hyo-cs-current {
   height: 42px;
   gap: 9px;
-  padding: 0 12px 0 14px !important;
+  padding: 0 12px 0 14px;
   border-radius: 13px;
   border-color: var(--background-modifier-border-hover, var(--background-modifier-border));
   font-size: 14.5px;
@@ -4848,7 +4850,7 @@ button.hyo-callline:hover { background: var(--background-secondary); }
 .is-mobile .hyo-plugin .hyo-chat-panel button.hyo-cs-iconbtn { width: 40px; height: 40px; border-radius: 12px; }
 .is-mobile .hyo-cs-seg-row { padding: 0 16px 10px; }
 .is-mobile .hyo-plugin .hyo-chat-panel button.hyo-cs-seg-btn { height: 36px; font-size: 14px; }
-.is-mobile .hyo-plugin .hyo-chat-panel button.hyo-cs-done { height: 40px; padding: 0 6px !important; font-size: 14px; }
+.is-mobile .hyo-plugin .hyo-chat-panel button.hyo-cs-done.hyo-cs-done { height: 40px; padding: 0 6px; font-size: 14px; }
 .is-mobile .hyo-cs-row {
   gap: 12px;
   padding: 12px 6px 12px 18px;
@@ -4892,9 +4894,9 @@ button.hyo-callline:hover { background: var(--background-secondary); }
 .hyo-convo-loading p,
 .hyo-convo-load-error p { margin: 0; max-width: 300px; line-height: 1.45; }
 .hyo-convo-load-error { color: var(--text-muted); }
-.hyo-plugin .hyo-chat-panel button.hyo-convo-retry {
+.hyo-plugin .hyo-chat-panel button.hyo-convo-retry.hyo-convo-retry {
   height: 36px;
-  padding: 0 16px !important;
+  padding: 0 16px;
   border: 1px solid var(--background-modifier-border);
   border-radius: 10px;
   background: var(--background-primary);

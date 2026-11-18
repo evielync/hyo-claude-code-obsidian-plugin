@@ -4,6 +4,8 @@
 // their level, list items get a bullet, and tables come through as rows of
 // cells separated by " | ". Runs on desktop and mobile (no Node APIs).
 
+import { unzipSync, strFromU8 } from "fflate";
+
 const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
 function childrenByName(el: Element, local: string): Element[] {
@@ -83,12 +85,16 @@ function blockText(container: Element, lines: string[]): void {
   }
 }
 
-export async function docxToText(buf: ArrayBuffer): Promise<string> {
-  const JSZip = (await import("jszip")).default;
-  const zip = await JSZip.loadAsync(buf);
-  const entry = zip.file("word/document.xml");
+export function docxToText(buf: ArrayBuffer): Promise<string> {
+  return Promise.resolve().then(() => docxToTextSync(buf));
+}
+
+function docxToTextSync(buf: ArrayBuffer): string {
+  const entry = unzipSync(new Uint8Array(buf), {
+    filter: (file) => file.name === "word/document.xml",
+  })["word/document.xml"];
   if (!entry) throw new Error("Not a Word document (word/document.xml missing)");
-  const xml = await entry.async("string");
+  const xml = strFromU8(entry);
   const doc = new DOMParser().parseFromString(xml, "application/xml");
   if (doc.getElementsByTagName("parsererror").length) {
     throw new Error("Could not parse word/document.xml");

@@ -5,3 +5,4 @@ main.js
 data.json
 *.zip
 vad-assets/
+.claude/worktrees/
