@@ -1,6 +1,7 @@
 import React, { useState, useSyncExternalStore } from "react";
 import type { ToolCallData, OrderedBlock } from "../hooks/useChatEngine";
 import { ToolCall } from "./ToolCall";
+import { inputString } from "./tool-input";
 
 // ── The "Show every tool call" setting ─────────────────────────────────────
 // Off (the default): each run of tool calls between pieces of text folds into
@@ -134,7 +135,7 @@ function summariseRun(tools: ToolCallData[]): string {
         bump("agent");
         break;
       case "Skill": {
-        const name = t.input?.skill || t.input?.name;
+        const name = inputString(t.input, "skill") || inputString(t.input, "name");
         if (name) skills.push(name);
         else bump("other");
         break;

@@ -61,11 +61,11 @@ export function ClaudeSignInCard({ onSignIn, signedIn }: ClaudeSignInCardProps) 
         setPhase(null);
         setError(r.error || "Sign-in didn't finish. Try again.");
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error("[hyo] sign-in failed:", e);
       setSubmitCode(null);
       setPhase(null);
-      setError((e?.message || "Sign-in didn't finish. Try again.").toString());
+      setError(e instanceof Error && e.message ? e.message : "Sign-in didn't finish. Try again.");
     }
     setBusy(false);
   }, [onSignIn, busy]);
@@ -90,7 +90,7 @@ export function ClaudeSignInCard({ onSignIn, signedIn }: ClaudeSignInCardProps) 
       </div>
       {!done && <div className="hyo-claude-update-text">{body}</div>}
       {canRun && !done && (
-        <button className="mod-cta hyo-claude-update-button" onClick={run} disabled={busy}>
+        <button className="mod-cta hyo-claude-update-button" onClick={() => void run()} disabled={busy}>
           {busy ? "Signing in…" : error ? "Try again" : "Sign in to Claude"}
         </button>
       )}

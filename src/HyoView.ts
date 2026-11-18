@@ -41,23 +41,18 @@ export class HyoView extends ItemView {
     container.empty();
     container.addClass("hyo-plugin");
 
-    const AppComponent = Platform.isMobile ? MobileHyoApp : HyoApp;
+    const props = { app: this.app, plugin: this.plugin, isShown: () => this.isOnScreen() };
     this.root = createRoot(container);
-    this.root.render(
-      createElement(AppComponent, {
-        app: this.app,
-        plugin: this.plugin,
-        isShown: () => this.isOnScreen(),
-      } as any)
-    );
+    this.root.render(Platform.isMobile ? createElement(MobileHyoApp, props) : createElement(HyoApp, props));
   }
 
   /** The panel can be seen: its tab is the one showing, and its sidebar is open. */
   isOnScreen(): boolean {
-    if (document.visibilityState === "hidden") return false;
-    const root = this.leaf.getRoot() as any;
-    if (root && root.collapsed) return false;
-    return !!(this.containerEl as any).isShown?.();
+    if (this.containerEl.doc.visibilityState === "hidden") return false;
+    // A sidebar (or the mobile drawer) has `collapsed`; the main area doesn't.
+    const root = this.leaf.getRoot();
+    if ("collapsed" in root && root.collapsed) return false;
+    return this.containerEl.isShown();
   }
 
   async onClose() {

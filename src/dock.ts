@@ -25,7 +25,8 @@ export class Dock {
 
   private mount(): void {
     try {
-      this.host = document.body.createDiv({ cls: "hyo-dock-host" });
+      // The main window's body, wherever focus is when the dock mounts.
+      this.host = this.plugin.app.workspace.containerEl.doc.body.createDiv({ cls: "hyo-dock-host" });
       this.root = createRoot(this.host);
       this.root.render(createElement(DockApp, { app: this.plugin.app, plugin: this.plugin }));
     } catch (e) {

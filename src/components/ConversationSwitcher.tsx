@@ -133,8 +133,9 @@ export function ConversationSwitcher<T extends SwitcherTask>({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") closePanel();
     };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    const doc = activeDocument;
+    doc.addEventListener("keydown", onKey);
+    return () => doc.removeEventListener("keydown", onKey);
   }, [panelOpen, closePanel]);
 
   const currentDot = dotFor(current);
@@ -222,7 +223,7 @@ export function ConversationSwitcher<T extends SwitcherTask>({
                 <div className="hyo-cs-list">
                   {openTasks.map((task) => (
                     <OpenRow
-                      key={task.tabId!}
+                      key={task.tabId}
                       task={task}
                       active={task.tabId === activeTabId}
                       swipeToClose={swipeToClose}

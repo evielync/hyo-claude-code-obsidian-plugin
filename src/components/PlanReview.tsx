@@ -1,13 +1,15 @@
 import React from "react";
+import type { App } from "obsidian";
 import { MarkdownBlock } from "./MarkdownBlock";
 import type { PlanReviewData } from "../hooks/useChatEngine";
 
 interface PlanReviewProps {
+  app: App;
   review: PlanReviewData;
   onRespond: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
 }
 
-export function PlanReview({ review, onRespond }: PlanReviewProps) {
+export function PlanReview({ app, review, onRespond }: PlanReviewProps) {
   const { requestId, planContent, allowedPrompts, resolved } = review;
 
   if (resolved) {
@@ -26,7 +28,7 @@ export function PlanReview({ review, onRespond }: PlanReviewProps) {
 
       {planContent ? (
         <div className="hyo-plan-review-content">
-          <MarkdownBlock content={planContent} />
+          <MarkdownBlock app={app} content={planContent} />
         </div>
       ) : (
         <div className="hyo-plan-review-fallback">

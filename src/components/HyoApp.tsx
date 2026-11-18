@@ -6,6 +6,7 @@ import { ChatPanel } from "./ChatPanel";
 import { useSessionManager } from "../hooks/useSessionManager";
 import { useReportViewing, usePanelShown } from "../hooks/useUnread";
 import { resolveWorkingDirectory } from "../working-directory";
+import { vaultBasePath } from "./platform-internals";
 import { DEFAULT_EFFORT, compareVersions } from "../models";
 import {
   detectClaude,
@@ -31,7 +32,7 @@ export function HyoApp({ app, plugin, isShown }: HyoAppProps) {
   // Setup progress shown in the first-run screen while install / sign-in run.
   const [setupMsg, setSetupMsg] = useState<string | null>(null);
   const [setupBusy, setSetupBusy] = useState(false);
-  const vaultPath = (app.vault.adapter as any).basePath as string;
+  const vaultPath = vaultBasePath(app);
 
   // Detection only depends on which Claude binary we run (cliPath). Re-running
   // it blanks the screen (detection → null) and tears the ChatPanel down, so it
@@ -44,16 +45,21 @@ export function HyoApp({ app, plugin, isShown }: HyoAppProps) {
   const runDetection = React.useCallback(() => {
     setDetection(null);
     // Defer so the "Checking…" state paints before the probe blocks the thread.
-    setTimeout(async () => {
+    window.setTimeout(() => {
       const result = detectClaude();
+      const show = () => setDetection(result);
       // If a working Claude turned up at a path we're not using, adopt it — so
       // the chat (and sign-in) run the one we just proved works.
       if (result.path && result.path !== plugin.settings.cliPath) {
         plugin.settings.cliPath = result.path;
         lastCliPathRef.current = result.path;
-        await plugin.saveSettings();
+        plugin.saveSettings().then(show, (err: unknown) => {
+          console.error("[hyo] Couldn't save the Claude path", err);
+          show();
+        });
+      } else {
+        show();
       }
-      setDetection(result);
     }, 0);
   }, [plugin]);
 
@@ -232,7 +238,13 @@ export function HyoApp({ app, plugin, isShown }: HyoAppProps) {
               {!signedOut && (
                 <button
                   className="hyo-copy-prompt-button"
-                  onClick={doInstall}
+                  onClick={() => {
+                    doInstall().catch((err: unknown) => {
+                      console.error("[hyo] Claude install failed:", err);
+                      setSetupBusy(false);
+                      setSetupMsg("Install didn't finish. Try again.");
+                    });
+                  }}
                   disabled={setupBusy}
                 >
                   Install Claude
@@ -240,7 +252,13 @@ export function HyoApp({ app, plugin, isShown }: HyoAppProps) {
               )}
               <button
                 className="hyo-copy-prompt-button"
-                onClick={doSignIn}
+                onClick={() => {
+                  doSignIn().catch((err: unknown) => {
+                    console.error("[hyo] Claude sign-in failed:", err);
+                    setSetupBusy(false);
+                    setSetupMsg("Sign-in didn't finish. Try again.");
+                  });
+                }}
                 disabled={setupBusy}
               >
                 Sign in to Claude
@@ -284,9 +302,13 @@ export function HyoApp({ app, plugin, isShown }: HyoAppProps) {
               <code
                 className="hyo-install-command"
                 onClick={(e) => {
-                  navigator.clipboard.writeText(installCommand);
-                  e.currentTarget.classList.add("copied");
-                  setTimeout(() => e.currentTarget.classList.remove("copied"), 2000);
+                  // React clears currentTarget once the handler returns, so hold on to it.
+                  const el = e.currentTarget;
+                  navigator.clipboard.writeText(installCommand).catch((err: unknown) => {
+                    console.error("[hyo] Couldn't copy the install command", err);
+                  });
+                  el.classList.add("copied");
+                  window.setTimeout(() => el.classList.remove("copied"), 2000);
                 }}
                 title="Click to copy"
               >

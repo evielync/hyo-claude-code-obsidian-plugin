@@ -88,12 +88,11 @@ export const MAIN_CHAT_REMINDER =
   "</system-reminder>";
 
 /** The person's message with the reminder after it. Slash commands go as they are. */
-export function withMainChatReminder(content: string | any[]): string | any[] {
+export function withMainChatReminder<Block>(content: string | Block[]): string | Array<Block | { type: "text"; text: string }> {
   if (typeof content === "string") {
     if (content.trimStart().startsWith("/")) return content;
     return `${content}\n\n${MAIN_CHAT_REMINDER}`;
   }
-  if (!Array.isArray(content)) return content;
   return [...content, { type: "text", text: MAIN_CHAT_REMINDER }];
 }
 
@@ -174,7 +173,7 @@ export function startupActive(tabs: TabLike[], restoredActiveId: string | null |
   const main = tabs.find((t) => t.isMain);
   if (main && others.length === 0) return main.id;
   if (restoredActiveId) {
-    const hit = tabs.find((t) => (t as any).cliSessionId === restoredActiveId);
+    const hit = tabs.find((t) => t.cliSessionId === restoredActiveId);
     if (hit) return hit.id;
   }
   return (others[others.length - 1] || main || tabs[0])?.id;

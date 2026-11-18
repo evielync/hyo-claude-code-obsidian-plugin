@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import type { ToolCallData } from "../hooks/useChatEngine";
+import { inputField, inputString } from "../../components/tool-input";
 
 interface ToolCallProps {
   tool: ToolCallData;
@@ -32,24 +33,25 @@ export function ToolCall({ tool }: ToolCallProps) {
 }
 
 function getToolSummary(tool: ToolCallData): string {
-  const { name, input } = tool;
+  const name = tool.name;
+  const input: unknown = tool.input;
   if (!input) return "";
 
   switch (name) {
     case "Skill":
-      return input.name || input.skill || "";
+      return inputString(input, "name") || inputString(input, "skill") || "";
     case "Read":
     case "Write":
     case "Edit":
-      return getFilename(input.file_path);
+      return getFilename(inputString(input, "file_path"));
     case "Grep":
-      return `"${input.pattern}"`;
+      return `"${String(inputField(input, "pattern"))}"`;
     case "Glob":
-      return input.pattern || "";
+      return inputString(input, "pattern") || "";
     case "Bash":
-      return (input.command || "").slice(0, 60);
+      return (inputString(input, "command") || "").slice(0, 60);
     case "Task":
-      return input.description || "";
+      return inputString(input, "description") || "";
     default:
       return "";
   }

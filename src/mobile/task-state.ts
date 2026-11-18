@@ -43,9 +43,9 @@ export function deriveTaskState(input: TaskStateInput): TaskState {
 // These are the same conditions the chat surface uses to render its blocked
 // prompts, so the "waiting on you" dot stays in lockstep with what's on screen.
 export function hasPendingAttention(tab: TabSession): boolean {
-  for (const m of tab.messages as any[]) {
-    if (!m || m.role !== "assistant") continue;
-    if (m.permissionRequests?.some((r: any) => !r.resolved)) return true;
+  for (const m of tab.messages) {
+    if (m.role !== "assistant") continue;
+    if (m.permissionRequests?.some((r) => !r.resolved)) return true;
     if (m.askQuestion) return true;
     if (m.planReview && !m.planReview.resolved) return true;
   }
@@ -70,20 +70,20 @@ export interface BoardTask {
 // A one-line peek for a live conversation: a held question, "Working…", or the
 // last thing the agent said.
 export function derivePeek(tab: TabSession): string {
-  for (const m of tab.messages as any[]) {
-    if (m?.role === "assistant" && m.askQuestion) {
-      const q = m.askQuestion.questions?.[0]?.question || m.askQuestion.question;
+  for (const m of tab.messages) {
+    if (m.role === "assistant" && m.askQuestion) {
+      const q = m.askQuestion.questions[0]?.question;
       if (q) return oneLine(q);
     }
-    if (m?.role === "assistant" && m.planReview && !m.planReview.resolved) {
+    if (m.role === "assistant" && m.planReview && !m.planReview.resolved) {
       return "Plan ready for your review";
     }
   }
   if (tab.generating || Object.keys(tab.jobs || {}).length > 0) return "Working…";
   for (let i = tab.messages.length - 1; i >= 0; i--) {
-    const m: any = tab.messages[i];
-    if (m?.role === "assistant" && m.content) return oneLine(m.content);
-    if (m?.role === "user" && m.content) return oneLine(m.content);
+    const m = tab.messages[i];
+    if (m.role === "assistant" && m.content) return oneLine(m.content);
+    if (m.role === "user" && m.content) return oneLine(m.content);
   }
   return "";
 }
@@ -142,7 +142,7 @@ export function buildTaskList(
     const hint = tab.cliSessionId ? hints[tab.cliSessionId] : undefined;
     // The most recent of everything known about it: a turn here, the
     // metadata, the Mac's word for it, the transcript's last write.
-    const times = [timeOf((tab as any).lastActivity), timeOf(meta.lastActive), timeOf(hint?.lastActive), timeOf(past?.date)].filter(
+    const times = [timeOf(tab.lastActivity), timeOf(meta.lastActive), timeOf(hint?.lastActive), timeOf(past?.date)].filter(
       (t): t is number => t !== null
     );
     byKey.set(key, {

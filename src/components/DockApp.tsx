@@ -8,8 +8,7 @@ import { DEFAULT_EFFORT } from "../models";
 import { mainChatOn, canCloseTab } from "../main-chat";
 import { dockItems, overallState, type DockItem } from "../dock-state";
 import { useUnread, useReportViewing, usePanelShown } from "../hooks/useUnread";
-
-const windowVisible = () => document.visibilityState !== "hidden";
+import { vaultBasePath } from "./platform-internals";
 
 interface DockAppProps {
   app: App;
@@ -30,7 +29,7 @@ export function DockApp({ app, plugin }: DockAppProps) {
   }, []);
 
   const s = plugin.settings;
-  const vaultPath = (app.vault.adapter as any).basePath as string;
+  const vaultPath = vaultBasePath(app);
   const cwd = resolveWorkingDirectory(s.workingDirectory, vaultPath);
 
   const onMainChatSession = useCallback(
@@ -64,6 +63,8 @@ export function DockApp({ app, plugin }: DockAppProps) {
   const items = useMemo(() => dockItems(sm.tabs, open ? sm.activeTabId : null, unread), [sm.tabs, sm.activeTabId, open, unread]);
   const active = items.find((i) => i.tabId === sm.activeTabId) || null;
   // The pop-up's conversation is read while the pop-up is open and the window showing.
+  // The dock lives in the main window (dock.ts), so it's that window's visibility.
+  const windowVisible = useCallback(() => app.workspace.containerEl.doc.visibilityState !== "hidden", [app]);
   const windowShown = usePanelShown(app, windowVisible);
   useReportViewing(cwd, open && windowShown ? active?.sessionId || null : null);
   const side = s.dockSide === "left" ? "left" : "right";
@@ -79,9 +80,10 @@ export function DockApp({ app, plugin }: DockAppProps) {
         setOpen(false);
       }
     };
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, [open]);
+    const doc = app.workspace.containerEl.doc;
+    doc.addEventListener("keydown", onKey, true);
+    return () => doc.removeEventListener("keydown", onKey, true);
+  }, [open, app]);
 
   // The open conversation went away (closed in the panel or on the phone).
   useEffect(() => {

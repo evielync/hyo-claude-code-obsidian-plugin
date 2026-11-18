@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from "react";
+import type { App } from "obsidian";
 import { ChatMessage } from "./ChatMessage";
 import { PermissionRequest } from "./PermissionRequest";
 import { waitingAsks } from "../background-jobs";
@@ -10,6 +11,7 @@ import type { ClaudeUpdateRunner } from "./ClaudeUpdateCard";
 import type { ClaudeSignInRunner } from "./ClaudeSignInCard";
 
 interface ChatMessagesProps {
+  app: App;
   messages: Message[];
   scrollRef: React.MutableRefObject<{ nearBottom: boolean }>;
   onPermissionResponse: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
@@ -24,6 +26,7 @@ interface ChatMessagesProps {
 }
 
 export function ChatMessages({
+  app,
   messages,
   scrollRef,
   onPermissionResponse,
@@ -63,6 +66,7 @@ export function ChatMessages({
         if (msg.streaming) {
           return (
             <StreamingMessage
+              app={app}
               key={`stream-${i}`}
               message={msg}
               onPermissionResponse={onPermissionResponse}
@@ -87,6 +91,7 @@ export function ChatMessages({
 
         return (
           <ChatMessage
+            app={app}
             key={`msg-${i}`}
             message={msg}
             onRecover={onRecover}

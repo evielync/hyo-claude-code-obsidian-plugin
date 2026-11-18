@@ -5140,3 +5140,46 @@ textarea.hyo-textarea-full, .setting-item-control textarea.hyo-textarea-full { w
 .setting-item-control input.hyo-command-label { width: 170px; flex-shrink: 0; }
 .setting-item-control select.hyo-command-skill { flex: 1; text-align: left; text-align-last: left; }
 .setting-item-control select.hyo-command-skill.is-missing { border-color: var(--text-error); color: var(--text-error); }
+
+/* Phone: lift the panel above the on-screen keyboard. The height is measured
+   at runtime and set as --hyo-keyboard-lift on .hyo-app. */
+.hyo-app.hyo-keyboard-lifted { padding-bottom: var(--hyo-keyboard-lift); }
+
+/* Desktop chat: fixed presentation that used to be inline styles. */
+.hyo-tool-call-header.hyo-tool-call-header-static { cursor: default; }
+.hyo-file-input-hidden { display: none; }
+.hyo-status-spacer { flex: 1; }
+.hyo-context-ring-svg { display: block; }
+/* Status bar pop-ups sit above the bar; their height off the bottom is
+   measured at runtime and set inline. */
+.hyo-status-popup { position: fixed; }
+.hyo-status-popup.hyo-status-popup-left { left: 12px; }
+.hyo-status-popup.hyo-status-popup-right { right: 12px; }
+.hyo-status-popup.hyo-status-popup-perm { right: 60px; }
+.hyo-status-popup.hyo-status-popup-agent { right: 120px; }
+
+/* Settings tab: layout that used to be inline styles. */
+.hyo-settings-header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+.hyo-settings-tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--background-modifier-border); }
+.hyo-settings-tab { padding: 8px 14px; cursor: pointer; font-size: 0.95em; border-bottom: 2px solid transparent; color: var(--text-muted); font-weight: 400; }
+.hyo-settings-tab.is-active { border-bottom-color: var(--interactive-accent); color: var(--text-normal); font-weight: 600; }
+.hyo-settings-intro { margin: 0 0 16px; color: var(--text-muted); font-size: 0.9em; }
+.hyo-settings-intro-tight { margin: 0 0 12px; color: var(--text-muted); font-size: 0.9em; }
+.hyo-settings-steps { margin: 0 0 16px; padding-left: 20px; color: var(--text-muted); font-size: 0.9em; }
+.hyo-settings-note { margin: 0; color: var(--text-muted); }
+.hyo-settings-footnote { margin: 16px 0 0; color: var(--text-muted); font-size: 0.85em; }
+.hyo-setup-status { margin-top: 4px; font-size: 0.95em; }
+/* Status lines (Setup → Claude Code, Mobile → Status). Two classes so the
+   colour wins over the setting description's own muted colour. */
+.hyo-status-text.is-ok { color: var(--color-green); }
+.hyo-status-text.is-warn { color: var(--color-orange); }
+.hyo-status-text.is-bad { color: var(--color-red); }
+.hyo-status-text.is-muted { color: var(--text-muted); }
+.hyo-commands-back { cursor: pointer; color: var(--text-accent); margin: 0 0 14px; font-size: 0.95em; }
+.hyo-commands-empty { color: var(--text-muted); font-size: 0.9em; margin: 8px 0 16px; }
+.hyo-commands-columns { display: flex; gap: 8px; padding: 10px 0 4px; font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+.hyo-commands-col-grip { width: 18px; flex-shrink: 0; }
+.hyo-commands-col-name { width: 170px; flex-shrink: 0; }
+.hyo-commands-col-skill { flex: 1; }
+.hyo-commands-col-action { width: 28px; flex-shrink: 0; }
+.hyo-confirm-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }

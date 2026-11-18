@@ -12,7 +12,6 @@ import type { useSessionManager } from "../hooks/useSessionManager";
 import { useVoiceMode } from "../hooks/useVoiceMode";
 import { RecordingStore } from "../voice/recording-store";
 import { parseVoiceResponse } from "../voice/voice-persona";
-import { HANDOFF_NOTE } from "../../voice/voice-persona";
 import { buildLiveHistory } from "../../voice/gpt-live";
 import { describeStep, attentionLine } from "../../voice/voice-words";
 import {
@@ -27,14 +26,13 @@ import {
   callHasContent,
   type VoiceCallRecord,
 } from "../../voice/voice-call";
-import { debug } from "../debug";
 import { CallBar } from "../../components/CallBar";
 import { SendButton, sendButtonMode } from "../../components/SendButton";
 import { VoiceCallSheet } from "../../components/VoiceCallLine";
 import { GatewayClient, type ConnectionStatus } from "../gateway-client";
 import type { ClaudeUpdateRunner } from "../../components/ClaudeUpdateCard";
 import { VoiceWaveform } from "./VoiceWaveform";
-import { useSkills, type Skill } from "../hooks/useSkills";
+import { useSkills } from "../hooks/useSkills";
 import type HyoPlugin from "../../main";
 import { estimateTokens, formatTokens } from "../attachments";
 import { MODEL_OPTIONS, PERMISSION_MODES as PHONE_PERMISSION_MODES, EFFORT_OPTIONS, DEFAULT_EFFORT, getContextLimit } from "../../models";
@@ -42,6 +40,9 @@ import { useAgents } from "../hooks/useAgents";
 import { usePanelShown } from "../../hooks/useUnread";
 import { ReleaseCard } from "../../components/ReleaseCard";
 import { ReleaseNotes } from "../../components/ReleaseNotes";
+import { audioContextClass, openPluginSettings } from "./platform-internals";
+import { inputString } from "../../components/tool-input";
+import { cellText } from "../../components/excel-cell";
 
 interface AttachedFile {
   name: string;
@@ -51,6 +52,12 @@ interface AttachedFile {
   data?: string;          // image files / pdf — base64
   vaultPath?: string;     // vault-relative path (only set for "Attach current file")
 }
+
+/** What goes to Claude: plain text, or content blocks when files ride along. */
+type OutgoingBlock =
+  | { type: "text"; text: string }
+  | { type: "image" | "document"; source: { type: "base64"; media_type: string | undefined; data: string | undefined } };
+type OutgoingContent = string | OutgoingBlock[];
 
 interface ChatPanelProps {
   sessionManager: ReturnType<typeof useSessionManager>;
@@ -66,8 +73,8 @@ interface ChatPanelProps {
 // otherwise unlocked.
 function playPermissionChime() {
   try {
-    const Ctx =
-      window.AudioContext || (window as unknown as any).webkitAudioContext;
+    const Ctx = audioContextClass();
+    if (!Ctx) return;
     const ctx = new Ctx();
     void ctx.resume?.();
     const t0 = ctx.currentTime;
@@ -87,7 +94,11 @@ function playPermissionChime() {
       osc.start(t0 + at);
       osc.stop(t0 + at + 0.2);
     }
-    setTimeout(() => void ctx.close().catch(() => {}), 700);
+    window.setTimeout(() => {
+      ctx.close().catch(() => {
+        // Already closed or never started: nothing left to release.
+      });
+    }, 700);
   } catch {
     /* audio not available — no-op */
   }
@@ -129,7 +140,6 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
     activeGenerating,
     activeVoiceMode,
     toggleVoiceMode,
-    activeTabHasSession,
     activeAgent,
     activeModel,
     activePermissionMode,
@@ -367,7 +377,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
   const shownErrorsRef = useRef(new ShownErrors());
   const currentCallRef = useRef<() => VoiceCallRecord | null>(() => null);
   const sendToClaude = useCallback(
-    (content: string | any[], meta?: { displayText?: string; attachedFileNames?: string[]; handoff?: boolean }) => {
+    (content: OutgoingContent, meta?: { displayText?: string; attachedFileNames?: string[]; handoff?: boolean }) => {
       const tabId = activeTabIdRef.current;
       const current = callTabIdRef.current === tabId ? currentCallRef.current() : null;
       const { turns, advanced } = takeUnseenTurns(activeMessagesRef.current, current);
@@ -484,7 +494,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
     const parsed = parseVoiceResponse(last.content || "");
     if (parsed.spoken) {
       if (elCallRef.current) addTurn(elCallRef.current, "agent", parsed.spoken);
-      speakResponse(parsed.spoken);
+      void speakResponse(parsed.spoken);
     }
   }, [activeGenerating, activeVoiceMode, activeMessages, speakResponse, finishReply, voiceMode.isLive]);
 
@@ -496,6 +506,9 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
   const callOpen = activeVoiceMode && hasVoiceApiKey;
   const liveViewOpen = callOpen && voiceMode.isLive;
   const [callStartedAt, setCallStartedAt] = useState<number | null>(null);
+  // Read through a ref so a new onCallEnded never restarts the call.
+  const onCallEndedRef = useRef(onCallEnded);
+  onCallEndedRef.current = onCallEnded;
   useEffect(() => {
     if (!callOpen) return;
     callTabIdRef.current = activeTabIdRef.current;
@@ -515,10 +528,9 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
       setCallStartedAt(null);
       if (call) {
         endCall(call, "hung-up");
-        onCallEnded(callHasContent(call) ? call : null, "hung-up");
+        onCallEndedRef.current(callHasContent(call) ? call : null, "hung-up");
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, [callOpen, liveViewOpen]);
 
   // An error shown in the call's chat (the process ended, Claude couldn't
@@ -561,9 +573,11 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
       if (b.type === "tool" && b.toolId && !described.current.tools.has(b.toolId)) {
         const t = tools.find((x) => x.id === b.toolId);
         if (!t) return;
-        if (t.result === null && !(t.input && Object.keys(t.input).length > 0)) return;
+        const input: unknown = t.input;
+        const hasInput = typeof input === "object" && input !== null && Object.keys(input).length > 0;
+        if (t.result === null && !hasInput) return;
         described.current.tools.add(b.toolId);
-        const label = describeStep(t.name, t.input);
+        const label = describeStep(t.name, input);
         if (label) {
           notifyProgress(label);
           setCallStep(label.charAt(0).toUpperCase() + label.slice(1));
@@ -591,7 +605,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
     if (voiceMode.voiceState === "idle") {
       pressStartRef.current = Date.now();
       heldCycleRef.current = true;
-      voiceMode.startRecording();
+      void voiceMode.startRecording();
     }
   }, [canDictate, dictationKeyNotice, voiceMode]);
 
@@ -638,12 +652,6 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
     toggleVoiceMode();
   }, [dictating, hasVoiceApiKey, isLiveEngine, toggleVoiceMode]);
 
-  // Ask First toggle (plugin setting, sent with every prompt to the gateway)
-  const handleAskFirstToggle = useCallback(() => {
-    plugin.settings.askFirst = !plugin.settings.askFirst;
-    void plugin.saveSettings();
-  }, [plugin]);
-
   // Session settings chip — agent, model and permissions in one panel,
   // replacing the standalone Ask First toggle in the input bar. On a phone
   // there's no room for separate pickers, so they live behind one chip.
@@ -656,7 +664,8 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
   );
   const [sessionPanelOpen, setSessionPanelOpen] = useState(false);
   const [customModel, setCustomModel] = useState("");
-  const [customModelsVersion, setCustomModelsVersion] = useState(0);
+  // Adding a model re-renders so the picker picks up the new list.
+  const [, setCustomModelsVersion] = useState(0);
   // What the conversation in view really runs with: its process's own model,
   // agent and permission mode once the Mac has said, else what this phone
   // would start it with.
@@ -680,8 +689,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
       ...MODEL_OPTIONS,
       ...(plugin.settings.customModels || []).filter((id) => !MODEL_OPTIONS.some((m) => m.id === id)).map((id) => ({ id, name: id, context: "" })),
     ],
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
-    [plugin.settings.customModels, customModelsVersion]
+    [plugin.settings.customModels]
   );
   const addCustomModel = useCallback(
     (raw: string) => {
@@ -773,7 +781,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
   useLayoutEffect(() => {
     const el = inputRef.current;
     if (!el) return;
-    el.style.removeProperty("height");
+    el.setCssProps({ height: "" });
     el.setCssProps({ height: Math.min(el.scrollHeight, 200) + "px" });
   }, [inputValue, activeTabId]);
 
@@ -789,8 +797,9 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
         setAttachPopupOpen(false);
       }
     };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    const doc = activeDocument;
+    doc.addEventListener("mousedown", handler);
+    return () => doc.removeEventListener("mousedown", handler);
   }, [attachPopupOpen]);
 
   // Scroll selected skill into view
@@ -850,9 +859,8 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
           workbook.eachSheet((sheet) => {
             parts.push(`# Sheet: ${sheet.name}`);
             sheet.eachRow({ includeEmpty: false }, (row) => {
-              const values = (row.values as any[]).slice(1).map((v) =>
-                v === null || v === undefined ? "" : String(v)
-              );
+              const cells = Array.isArray(row.values) ? row.values.slice(1) : Object.values(row.values);
+              const values = cells.map(cellText);
               parts.push(values.join(","));
             });
             parts.push("");
@@ -1008,7 +1016,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
     if (!text && attachedFiles.length === 0) return;
     setInputValues((prev) => ({ ...prev, [activeTabId]: "" }));
     if (inputRef.current) {
-      inputRef.current.style.removeProperty("height");
+      inputRef.current.setCssProps({ height: "" });
     }
     setSlashMenuOpen(false);
     const meta = attachedFiles.length > 0
@@ -1032,7 +1040,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
     setAttachedFilesMap((prev) => ({ ...prev, [activeTabId]: [] }));
 
     if (imageFiles.length > 0 || pdfFiles.length > 0) {
-      const blocks: any[] = [];
+      const blocks: OutgoingBlock[] = [];
       if (messageText) blocks.push({ type: "text", text: messageText });
       for (const img of imageFiles) {
         blocks.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
@@ -1040,7 +1048,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
       for (const pdf of pdfFiles) {
         blocks.push({ type: "document", source: { type: "base64", media_type: pdf.mediaType, data: pdf.data } });
       }
-      sendMessage(blocks as any, meta);
+      sendMessage(blocks, meta);
     } else {
       sendMessage(messageText, meta);
     }
@@ -1121,10 +1129,39 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
   if (inVoiceView && activeGenerating) {
     const last = activeMessages[activeMessages.length - 1];
     const agentCall = [...(last?.toolCalls || [])].reverse().find((t) => (t.name === "Agent" || t.name === "Task") && t.result === null);
-    const desc = String(agentCall?.input?.description || "").trim();
+    const desc = (inputString(agentCall?.input, "description") || "").trim();
     callWorking = agentCall ? (desc ? `Sub-agent: ${desc}` : "Sub-agent running") : callStep || "Working on it";
   }
   const elSide = voiceMode.voiceState === "speaking" ? "agent" : voiceMode.voiceState === "listening" ? "user" : null;
+  // Clean up a session the thinking-block error broke, and put back the
+  // message that hit it so it can be sent again.
+  const recoverAndRestore = async () => {
+    let result;
+    try {
+      result = await recoverSession(activeTabId);
+    } catch (err) {
+      console.error("[hyo] Session recovery failed:", err);
+      new Notice(`Couldn't recover session: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    if (result.success) {
+      const captured = result.capturedUserText;
+      if (captured) {
+        setInputValues((prev) => ({
+          ...prev,
+          [activeTabId]: captured,
+        }));
+        window.setTimeout(() => inputRef.current?.focus(), 50);
+      }
+      new Notice(
+        `Session recovered (${result.linesRemoved} corrupt entries removed). Review your message and send.`
+      );
+    } else {
+      new Notice(
+        `Couldn't recover session: ${result.reason || "unknown error"}`
+      );
+    }
+  };
   const endCallNow = () => {
     voiceMode.stopAudio();
     if (voiceMode.isLive) voiceMode.stopLive();
@@ -1148,26 +1185,24 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
           muted={voiceMode.isLive ? voiceMode.liveMuted : false}
           onToggleMute={voiceMode.isLive ? voiceMode.toggleLiveMute : undefined}
           onEnd={endCallNow}
-          onSettings={() => {
-            const setting = (app as any).setting;
-            setting?.open();
-            setting?.openTabById?.(plugin.manifest.id);
-          }}
+          onSettings={() => openPluginSettings(app, plugin.manifest.id)}
           onOrbClick={!voiceMode.isLive && voiceMode.voiceState === "speaking" ? voiceMode.stopAudio : undefined}
         />
       )}
       {showReleaseCard && (
         <ReleaseCard
+          app={app}
           sinceVersion={plugin.settings.lastSeenVersion}
           version={currentVersion}
           onDismiss={dismissReleaseCard}
           onOpenNotes={() => setShowReleaseNotes(true)}
         />
       )}
-      {showReleaseNotes && <ReleaseNotes onClose={() => setShowReleaseNotes(false)} />}
+      {showReleaseNotes && <ReleaseNotes app={app} onClose={() => setShowReleaseNotes(false)} />}
 
       {activeMessages.length > 0 ? (
         <ChatMessages
+          app={app}
           messages={activeMessages}
           scrollRef={scrollRef}
           onPermissionResponse={answerPermission}
@@ -1179,25 +1214,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
           loadingOlder={activeLoadingOlder}
           olderError={activeOlderError}
           onLoadOlder={() => loadOlder(activeTabId)}
-          onRecover={async () => {
-            const result = await recoverSession(activeTabId);
-            if (result.success) {
-              if (result.capturedUserText) {
-                setInputValues((prev) => ({
-                  ...prev,
-                  [activeTabId]: result.capturedUserText!,
-                }));
-                setTimeout(() => inputRef.current?.focus(), 50);
-              }
-              new Notice(
-                `Session recovered (${result.linesRemoved} corrupt entries removed). Review your message and send.`
-              );
-            } else {
-              new Notice(
-                `Couldn't recover session: ${result.reason || "unknown error"}`
-              );
-            }
-          }}
+          onRecover={() => void recoverAndRestore()}
         />
       ) : activeLoading ? (
         // An earlier conversation on its way from the Mac.
@@ -1392,7 +1409,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
               </button>
               {attachPopupOpen && (
                 <div className="hyo-attach-popup">
-                  <button className="hyo-attach-popup-item" onClick={handleAttachCurrentFile}>
+                  <button className="hyo-attach-popup-item" onClick={() => void handleAttachCurrentFile()}>
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
                       <polyline points="14 2 14 8 20 8" />
