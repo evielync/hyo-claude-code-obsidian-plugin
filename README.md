@@ -31,7 +31,7 @@ No separate app, no extra billing — Hyo runs on your existing Claude login, no
 
 ## Requirements
 
-- [Obsidian](https://obsidian.md) (desktop only)
+- [Obsidian](https://obsidian.md) on your computer. Hyo also runs on your phone or tablet, connected to your computer (see Mobile access in the docs).
 - A Claude account — Pro, Max, Team, or Enterprise ([claude.ai](https://claude.ai))
 - Claude Code CLI (the plugin will walk you through installing it if needed)
 
