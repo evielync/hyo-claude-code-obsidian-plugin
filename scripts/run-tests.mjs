@@ -34,6 +34,9 @@ for (const f of files) {
     outfile,
     logLevel: "error",
     plugins: [desktopLoaderStub],
+    // Plugin code uses window.setTimeout and friends (popout-window safe);
+    // in plain Node the global object stands in for window.
+    banner: { js: "globalThis.window ??= globalThis;" },
     // Obsidian isn't available outside the app; a small stub stands in.
     // Tests that drive the real session-manager hooks (*.hooks.test.ts) get
     // a tiny React that runs a hook without a DOM.
