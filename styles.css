@@ -5107,3 +5107,36 @@ button.hyo-callline:hover { background: var(--background-secondary); }
 .hyo-dock-pop-status { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hyo-dock-pop-body { flex: 1; min-height: 0; }
 .hyo-dock-pop-body .hyo-app { padding-bottom: 0; }
+
+
+/* ── Settings and view layout (moved out of inline styles) ─────────────── */
+.view-header.hyo-hidden-view-header { display: none; }
+.view-content.hyo-view-content { padding: 0; }
+
+.hyo-settings-saved { font-size: 0.8em; color: var(--color-green); opacity: 0; transition: opacity 0.3s; }
+.hyo-settings-saved.is-visible { opacity: 1; }
+.hyo-setting-saved { margin-left: 8px; font-size: 0.8em; color: var(--color-green); opacity: 1; transition: opacity 0.5s; }
+.hyo-setting-saved.is-fading { opacity: 0; }
+
+.setting-item-control input.hyo-input-key { width: 240px; }
+textarea.hyo-textarea-full, .setting-item-control textarea.hyo-textarea-full { width: 100%; font-family: inherit; }
+.setting-item.hyo-setting-no-border-bottom { border-bottom: none; }
+.setting-item.hyo-setting-attached { border-top: none; padding-top: 0; }
+.setting-item.hyo-setting-attached .setting-item-control { width: 100%; }
+.setting-item.hyo-setting-stacked { flex-direction: column; align-items: stretch; }
+.setting-item.hyo-setting-stacked .setting-item-control { margin-top: 8px; }
+
+.setting-item.hyo-commands-type-row { cursor: pointer; }
+.setting-item.hyo-commands-type-row .setting-item-name { font-weight: 600; }
+.setting-item.hyo-commands-heading .setting-item-name { font-weight: 700; font-size: 1.1em; }
+.setting-item.hyo-setting-danger { margin-top: 24px; }
+
+.setting-item.hyo-command-row { position: relative; }
+.setting-item.hyo-command-row.is-dragging { opacity: 0.5; }
+.setting-item.hyo-command-row .setting-item-control { flex: 1; justify-content: flex-start; }
+.hyo-command-grip { cursor: grab; color: var(--text-faint); display: flex; align-items: center; flex-shrink: 0; }
+.hyo-command-dropline { position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--interactive-accent); display: none; pointer-events: none; }
+.hyo-command-dropline.is-active { display: block; }
+.setting-item-control input.hyo-command-label { width: 170px; flex-shrink: 0; }
+.setting-item-control select.hyo-command-skill { flex: 1; text-align: left; text-align-last: left; }
+.setting-item-control select.hyo-command-skill.is-missing { border-color: var(--text-error); color: var(--text-error); }

@@ -35,13 +35,13 @@ export function HyoApp({ app, plugin, isShown }: HyoAppProps) {
     const el = rootRef.current;
     if (!el) return;
     const lift = (px: number) => {
-      el.style.paddingBottom = px > 4 ? `${px}px` : "";
+      el.setCssStyles({ paddingBottom: px > 4 ? `${px}px` : "" });
     };
     // Lift by the ACTUAL overlap between the input card and the keyboard top,
     // not the full keyboard height (there's chrome below the card, so the full
     // height overshoots). Clear padding first to measure the resting position.
     const liftForKeyboard = (kbHeight: number) => {
-      el.style.paddingBottom = "";
+      el.setCssStyles({ paddingBottom: "" });
       // A hardware/external keyboard (iPad Magic Keyboard, Bluetooth) still
       // fires keyboardWillShow, but with a 0 or accessory-bar-sized height —
       // there's no on-screen keyboard eating real estate, so lifting the panel
@@ -54,7 +54,7 @@ export function HyoApp({ app, plugin, isShown }: HyoAppProps) {
         ? card.getBoundingClientRect().bottom
         : window.innerHeight;
       const overlap = Math.round(cardBottom - kbTop + 8); // 8px breathing room
-      if (overlap > 4) el.style.paddingBottom = `${overlap}px`;
+      if (overlap > 4) el.setCssStyles({ paddingBottom: `${overlap}px` });
     };
     const KB = (window as any).Capacitor?.Plugins?.Keyboard;
     const hasCap = typeof KB?.addListener === "function";
@@ -71,7 +71,7 @@ export function HyoApp({ app, plugin, isShown }: HyoAppProps) {
       return () => {
         show?.remove?.();
         hide?.remove?.();
-        el.style.paddingBottom = "";
+        el.setCssStyles({ paddingBottom: "" });
       };
     }
 
@@ -91,7 +91,7 @@ export function HyoApp({ app, plugin, isShown }: HyoAppProps) {
     return () => {
       el.removeEventListener("focusin", onIn);
       el.removeEventListener("focusout", onOut);
-      el.style.paddingBottom = "";
+      el.setCssStyles({ paddingBottom: "" });
     };
   }, []);
 

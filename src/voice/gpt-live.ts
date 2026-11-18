@@ -105,7 +105,6 @@ let logPath: string | null = null;
 export function liveLog(line: string): void {
   if (!logPath) return;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     require("fs").appendFileSync(logPath, `${new Date().toISOString()} ${line}\n`);
   } catch {}
 }
@@ -194,7 +193,6 @@ export class GptLiveSession {
     this.setState("connecting");
     if (this.opts.debugLog && Platform.isDesktop) {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
         const os = require("os");
         logPath = `${os.homedir()}/Dropbox/chad/hyo-live.log`;
       } catch {}
@@ -272,7 +270,7 @@ export class GptLiveSession {
     // the WebRTC echo canceller its reference signal.
     const audio = document.createElement("audio");
     audio.autoplay = true;
-    audio.style.display = "none";
+    audio.hidden = true;
     document.body.appendChild(audio);
     this.remoteAudio = audio;
 
@@ -408,7 +406,6 @@ export class GptLiveSession {
     if (!Platform.isDesktop) {
       throw new Error("The WebSocket voice path is desktop-only.");
     }
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const WS = require("ws");
     this.ws = new WS(LIVE_WS_URL, {
       headers: { Authorization: `Bearer ${this.opts.apiKey}` },
@@ -754,7 +751,6 @@ export class GptLiveSession {
  */
 export async function playVoiceSample(apiKey: string, voice: string | { id: string }): Promise<void> {
   if (!Platform.isDesktop) throw new Error("Samples play on desktop only.");
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const WS = require("ws");
   const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
   let nextAt = 0;
@@ -864,7 +860,8 @@ export function splitForAppend(text: string, max: number = MAX_APPEND_CHARS): st
   if (!t) return [];
   if (t.length <= max) return [t];
   const units: string[] = [];
-  for (const sentence of t.split(/(?<=[.!?])\s+/)) {
+  // Mark each sentence end, then split on the marks (iOS < 16.4 has no lookbehind).
+  for (const sentence of t.replace(/([.!?])\s+/g, "$1\u0000").split("\u0000")) {
     if (sentence.length <= max) {
       units.push(sentence);
       continue;
@@ -925,11 +922,8 @@ export interface AgentIdentity {
 export function readAgentIdentity(agent: string): AgentIdentity | null {
   if (!agent || !Platform.isDesktop) return null;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const fs = require("fs");
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const path = require("path");
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const os = require("os");
     const p = path.join(os.homedir(), ".claude", "agents", `${agent}.md`);
     if (!fs.existsSync(p)) return null;

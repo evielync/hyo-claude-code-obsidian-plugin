@@ -33,11 +33,11 @@ export class HyoView extends ItemView {
     // header; mobile leaves the native header in place (matches the mobile app).
     if (!Platform.isMobile) {
       const header = this.containerEl.children[0] as HTMLElement;
-      if (header) header.style.display = "none";
+      if (header) header.addClass("hyo-hidden-view-header");
     }
 
     const container = this.containerEl.children[1] as HTMLElement;
-    container.style.padding = "0";
+    container.addClass("hyo-view-content");
     container.empty();
     container.addClass("hyo-plugin");
 

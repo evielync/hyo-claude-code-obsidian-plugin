@@ -1039,7 +1039,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         ),
       }));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, [state.tabs]);
 
   // Move a tab to sit where another tab currently is. Dropping onto the right
@@ -1598,7 +1598,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     const entries: OpenEntry[] = store ? store.list() : (saved?.sessions || []).filter((s) => s?.id).map((s) => ({ id: s.id, title: s.title || "Untitled" }));
     if (!entries.length) return;
     applyOpenList(entries, { activeId: saved?.activeId });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, []);
 
   // Hear every change to the list, from the phone or another panel.
@@ -1618,7 +1618,7 @@ export function useSessionManager(options: SessionManagerOptions) {
   useEffect(() => {
     const store = openStore();
     if (store && restoredRef.current) applyOpenListRef.current(store.list());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, [busyKey, options.mainChat, options.mainChatSessionId]);
 
   // Tell the list what changed here: a conversation that got its session id
@@ -1635,7 +1635,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       else store.open({ id: g.sid, title: g.title });
     }
     for (const sid of ch.cleared) store.close(sid);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, [state.tabs]);
 
   useEffect(() => {
@@ -1708,7 +1708,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       }
       openTransport(t.id, t.cliSessionId);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, [state.tabs]);
   // ---- The main chat --------------------------------------------------------
   // Settings → Main chat on: a pinned first tab carrying the one long
@@ -1728,7 +1728,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       }
       return { tabs: mainFirst(tabs), activeTabId };
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, [options.mainChat]);
 
   const compact = useCallback(() => {

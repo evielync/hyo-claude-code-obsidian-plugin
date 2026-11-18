@@ -106,7 +106,7 @@ export class CommandsManager {
       );
     }
     const hide = this.standaloneActive() || this.commandsForFile(view.file).length === 0;
-    v.__hyoCommandsEl.style.display = hide ? "none" : "";
+    v.__hyoCommandsEl.setCssStyles({ display: hide ? "none" : "" });
   }
 
   private commandsForFile(file: TFile | null): HyoCommand[] {

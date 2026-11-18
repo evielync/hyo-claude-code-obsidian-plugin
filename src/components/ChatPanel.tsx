@@ -730,7 +730,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   // Reset textarea height when switching tabs
   useEffect(() => {
     if (inputRef.current) {
-      inputRef.current.style.height = "auto";
+      inputRef.current.style.removeProperty("height");
     }
     setSlashMenuOpen(false);
   }, [activeTabId]);
@@ -1004,8 +1004,8 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
       const el = e.target;
       const val = el.value;
       setInputValues((prev) => ({ ...prev, [activeTabId]: val }));
-      el.style.height = "auto";
-      el.style.height = Math.min(el.scrollHeight, 150) + "px";
+      el.style.removeProperty("height");
+      el.setCssProps({ height: Math.min(el.scrollHeight, 150) + "px" });
 
       // Slash command detection: only when input is exactly /word (no spaces, no newlines)
       if (val.startsWith("/") && !val.includes(" ") && !val.includes("\n")) {
@@ -1024,7 +1024,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     if (!text && attachedFiles.length === 0) return;
     setInputValues((prev) => ({ ...prev, [activeTabId]: "" }));
     if (inputRef.current) {
-      inputRef.current.style.height = "auto";
+      inputRef.current.style.removeProperty("height");
     }
     setSlashMenuOpen(false);
     const meta = attachedFiles.length > 0

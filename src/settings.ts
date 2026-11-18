@@ -180,9 +180,9 @@ export class HyoSettingTab extends PluginSettingTab {
   private showSaved(): void {
     if (this.savedIndicator) {
       if (this.savedTimeout) clearTimeout(this.savedTimeout);
-      this.savedIndicator.style.opacity = "1";
+      this.savedIndicator.addClass("is-visible");
       this.savedTimeout = setTimeout(() => {
-        if (this.savedIndicator) this.savedIndicator.style.opacity = "0";
+        if (this.savedIndicator) this.savedIndicator.removeClass("is-visible");
       }, 1500);
     }
   }
@@ -195,9 +195,7 @@ export class HyoSettingTab extends PluginSettingTab {
       cls: "hyo-setting-saved",
       text: "✓ Saved",
     });
-    badge.style.cssText =
-      "margin-left: 8px; font-size: 0.8em; color: var(--color-green); opacity: 1; transition: opacity 0.5s;";
-    setTimeout(() => (badge.style.opacity = "0"), 1200);
+    setTimeout(() => badge.addClass("is-fading"), 1200);
     setTimeout(() => badge.remove(), 1800);
   }
 
@@ -205,13 +203,13 @@ export class HyoSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    // One row: title, links, and the saved indicator all on the same baseline.
+    // One row: links and the saved indicator on the same baseline. The tab
+    // itself carries the plugin name, so there's no title here.
     const header = containerEl.createEl("div", {
       attr: {
         style: "display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 20px;",
       },
     });
-    header.createEl("h2", { text: "Hyo Plugin", attr: { style: "margin: 0;" } });
     header.createEl("a", {
       text: "Read the docs →",
       href: "https://docs.gethyo.co",
@@ -224,9 +222,7 @@ export class HyoSettingTab extends PluginSettingTab {
     });
     this.savedIndicator = header.createEl("span", {
       text: "Saved",
-      attr: {
-        style: "font-size: 0.8em; color: var(--color-green); opacity: 0; transition: opacity 0.3s;",
-      },
+      cls: "hyo-settings-saved",
     });
 
     // Tab bar. On a phone only the tabs that apply there are shown — Commands
@@ -536,7 +532,7 @@ export class HyoSettingTab extends PluginSettingTab {
         .setDesc("From platform.openai.com → API keys. Calls are billed to this key at OpenAI's per-minute rate. On the phone, this same key also transcribes dictation, so you don't need ElevenLabs as well.")
         .addText((text) => {
           text.inputEl.type = "password";
-          text.inputEl.style.width = "240px";
+          text.inputEl.addClass("hyo-input-key");
           return text
             .setPlaceholder("sk-...")
             .setValue(this.plugin.settings.openAiApiKey)
@@ -630,10 +626,9 @@ export class HyoSettingTab extends PluginSettingTab {
       const descArea = containerEl.createEl("textarea", {
         attr: { rows: "3", placeholder: "The voice's description, e.g. A natural, relaxed British man in his forties…" },
       });
-      descArea.style.width = "100%";
-      descArea.style.fontFamily = "inherit";
+      descArea.addClass("hyo-textarea-full");
       descArea.addEventListener("input", () => (draft.description = descArea.value));
-      customSetting.settingEl.style.borderBottom = "none";
+      customSetting.settingEl.addClass("hyo-setting-no-border-bottom");
 
       const aboutNote = this.plugin.settings.voiceAboutYouNote || "";
       const aboutSetting = new Setting(containerEl)
@@ -665,8 +660,7 @@ export class HyoSettingTab extends PluginSettingTab {
       } else {
         const aboutText = new Setting(containerEl).addTextArea((text) => {
           text.inputEl.rows = 3;
-          text.inputEl.style.width = "100%";
-          text.inputEl.style.fontFamily = "inherit";
+          text.inputEl.addClass("hyo-textarea-full");
           return text
             .setPlaceholder("I'm Sam. I run a small design studio. Keep it brief and skip the pleasantries.")
             .setValue(this.plugin.settings.voiceAboutYou || "")
@@ -678,9 +672,7 @@ export class HyoSettingTab extends PluginSettingTab {
             });
         });
         aboutText.infoEl.remove();
-        aboutText.settingEl.style.borderTop = "none";
-        aboutText.settingEl.style.paddingTop = "0";
-        (aboutText.controlEl as HTMLElement).style.width = "100%";
+        aboutText.settingEl.addClass("hyo-setting-attached");
       }
 
       const personalitySetting = new Setting(containerEl)
@@ -688,8 +680,7 @@ export class HyoSettingTab extends PluginSettingTab {
         .setDesc("How the voice talks and who it's talking to: its character, your name, anything it should always know about you. A few sentences. Its name comes from the tab's agent file; with no agent it's simply your agent. Everything about your files and work still comes from Claude.")
         .addTextArea((text) => {
           text.inputEl.rows = 5;
-          text.inputEl.style.width = "100%";
-          text.inputEl.style.fontFamily = "inherit";
+          text.inputEl.addClass("hyo-textarea-full");
           return text
             .setPlaceholder(DEFAULT_VOICE_PERSONALITY)
             .setValue(this.plugin.settings.voicePersonality || "")
@@ -700,9 +691,7 @@ export class HyoSettingTab extends PluginSettingTab {
               dispatchSettingsChanged();
             });
         });
-      personalitySetting.settingEl.style.flexDirection = "column";
-      personalitySetting.settingEl.style.alignItems = "stretch";
-      (personalitySetting.controlEl as HTMLElement).style.marginTop = "8px";
+      personalitySetting.settingEl.addClass("hyo-setting-stacked");
       return;
     }
 
@@ -711,7 +700,7 @@ export class HyoSettingTab extends PluginSettingTab {
       .setDesc("Get your API key from elevenlabs.io/app/settings/api-keys")
       .addText((text) => {
         text.inputEl.type = "password";
-        text.inputEl.style.width = "240px";
+        text.inputEl.addClass("hyo-input-key");
         return text
           .setPlaceholder("xi_...")
           .setValue(this.plugin.settings.elevenLabsApiKey)
@@ -902,14 +891,13 @@ export class HyoSettingTab extends PluginSettingTab {
     });
     const setStatus = (kind: "ok" | "warn" | "bad" | "muted", detail: string) => {
       statusEl.setText(detail);
-      statusEl.style.color =
-        kind === "ok"
+      statusEl.setCssStyles({ color: kind === "ok"
           ? "var(--color-green)"
           : kind === "warn"
           ? "var(--color-orange)"
           : kind === "bad"
           ? "var(--color-red)"
-          : "var(--text-muted)";
+          : "var(--text-muted)" });
     };
 
     // Reflect reality on open: run Claude, check sign-in. No file-existence guess.
@@ -1109,8 +1097,7 @@ export class HyoSettingTab extends PluginSettingTab {
               ? "1 command"
               : `${commands.length} commands`,
         );
-      row.nameEl.style.fontWeight = "600";
-      row.settingEl.style.cursor = "pointer";
+      row.settingEl.addClass("hyo-commands-type-row");
       row.addExtraButton((b) => b.setIcon("chevron-right").setTooltip("Open"));
       row.settingEl.addEventListener("click", () => {
         this.commandsDetailType = type;
@@ -1137,8 +1124,7 @@ export class HyoSettingTab extends PluginSettingTab {
     const heading = new Setting(containerEl)
       .setName(type)
       .setDesc("Every note with this type gets these commands in its header.");
-    heading.nameEl.style.fontWeight = "700";
-    heading.nameEl.style.fontSize = "1.1em";
+    heading.settingEl.addClass("hyo-commands-heading");
     heading.addButton((b) =>
       b
         .setButtonText("Add command")
@@ -1178,7 +1164,7 @@ export class HyoSettingTab extends PluginSettingTab {
     const danger = new Setting(containerEl)
       .setName("Remove these commands")
       .setDesc(`Stops showing command buttons on "${type}" notes. Your notes and their type stay exactly as they are.`);
-    danger.settingEl.style.marginTop = "24px";
+    danger.settingEl.addClass("hyo-setting-danger");
     danger.addButton((b) =>
       b
         .setButtonText("Remove")
@@ -1288,8 +1274,7 @@ export class HyoSettingTab extends PluginSettingTab {
                 ? `On · ${s.clients} device${s.clients === 1 ? "" : "s"} connected`
                 : "On";
       const statusSetting = new Setting(containerEl).setName("Status").setDesc(statusText);
-      statusSetting.descEl.style.color =
-        s?.state === "on" ? "var(--color-green)" : s?.state === "error" ? "var(--color-red)" : "var(--text-muted)";
+      statusSetting.descEl.setCssStyles({ color: s?.state === "on" ? "var(--color-green)" : s?.state === "error" ? "var(--color-red)" : "var(--text-muted)" });
 
       if (s?.state === "on" && s.url) {
         new Setting(containerEl)
@@ -1357,45 +1342,40 @@ export class HyoSettingTab extends PluginSettingTab {
       // and crush it to a couple of characters. Remove it and give the whole
       // row to the controls.
       row.infoEl.remove();
-      row.controlEl.style.flex = "1";
-      row.controlEl.style.justifyContent = "flex-start";
+      row.settingEl.addClass("hyo-command-row");
 
       // Drag to reorder — same interaction as the chat tabs. The grip is the
       // drag surface (dragging from an input would fight text selection).
-      const grip = row.controlEl.createDiv();
+      const grip = row.controlEl.createDiv({ cls: "hyo-command-grip" });
       setIcon(grip, "grip-vertical");
-      grip.style.cssText = "cursor: grab; color: var(--text-faint); display: flex; align-items: center; flex-shrink: 0;";
       grip.setAttribute("aria-label", "Drag to reorder");
       grip.addEventListener("mousedown", () => (row.settingEl.draggable = true));
       grip.addEventListener("mouseup", () => (row.settingEl.draggable = false));
       row.settingEl.addEventListener("dragstart", (e: DragEvent) => {
         e.dataTransfer?.setData("text/plain", String(i));
         if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-        row.settingEl.style.opacity = "0.5";
+        row.settingEl.addClass("is-dragging");
       });
       // The drop indicator is its own element laid over the row's top edge —
       // a shadow or border would follow the card's rounded corners and read
       // as a curve rather than a line.
-      row.settingEl.style.position = "relative";
-      const dropLine = row.settingEl.createDiv();
-      dropLine.style.cssText =
-        "position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--interactive-accent); display: none; pointer-events: none;";
+      const dropLine = row.settingEl.createDiv({ cls: "hyo-command-dropline" });
       row.settingEl.addEventListener("dragend", () => {
         row.settingEl.draggable = false;
-        row.settingEl.style.opacity = "";
-        dropLine.style.display = "none";
+        row.settingEl.removeClass("is-dragging");
+        dropLine.removeClass("is-active");
       });
       row.settingEl.addEventListener("dragover", (e: DragEvent) => {
         e.preventDefault();
         if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-        dropLine.style.display = "block";
+        dropLine.addClass("is-active");
       });
       row.settingEl.addEventListener("dragleave", () => {
-        dropLine.style.display = "none";
+        dropLine.removeClass("is-active");
       });
       row.settingEl.addEventListener("drop", async (e: DragEvent) => {
         e.preventDefault();
-        dropLine.style.display = "none";
+        dropLine.removeClass("is-active");
         const from = parseInt(e.dataTransfer?.getData("text/plain") ?? "", 10);
         if (isNaN(from) || from === i) return;
         const [moved] = commands.splice(from, 1);
@@ -1414,8 +1394,7 @@ export class HyoSettingTab extends PluginSettingTab {
           });
         // Fixed column widths, not flex-to-content: every row lines up with
         // the headers and each other regardless of how long a skill name is.
-        text.inputEl.style.width = "170px";
-        text.inputEl.style.flexShrink = "0";
+        text.inputEl.addClass("hyo-command-label");
       });
       row.addDropdown((dropdown) => {
         for (const sk of skills) dropdown.addOption(sk.name, sk.name);
@@ -1427,8 +1406,7 @@ export class HyoSettingTab extends PluginSettingTab {
         // A command pointing at a skill that isn't installed does nothing when
         // clicked, so it has to stand out here, not just in the option text.
         if (missing) {
-          dropdown.selectEl.style.borderColor = "var(--text-error)";
-          dropdown.selectEl.style.color = "var(--text-error)";
+          dropdown.selectEl.addClass("is-missing");
           dropdown.selectEl.title = `"${cmd.skill}" isn't installed. Pick the skill this command should run.`;
         }
         dropdown.onChange(async (v) => {
@@ -1438,9 +1416,7 @@ export class HyoSettingTab extends PluginSettingTab {
         });
         // (Legacy `extra` instructions from the standalone plugin still fire
         // with the command — there's just no editing UI for them anymore.)
-        dropdown.selectEl.style.flex = "1";
-        dropdown.selectEl.style.textAlign = "left";
-        (dropdown.selectEl.style as any).textAlignLast = "left";
+        dropdown.selectEl.addClass("hyo-command-skill");
       });
       row.addExtraButton((b) =>
         b

@@ -518,7 +518,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
         onCallEnded(callHasContent(call) ? call : null, "hung-up");
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, [callOpen, liveViewOpen]);
 
   // An error shown in the call's chat (the process ended, Claude couldn't
@@ -680,7 +680,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
       ...MODEL_OPTIONS,
       ...(plugin.settings.customModels || []).filter((id) => !MODEL_OPTIONS.some((m) => m.id === id)).map((id) => ({ id, name: id, context: "" })),
     ],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
     [plugin.settings.customModels, customModelsVersion]
   );
   const addCustomModel = useCallback(
@@ -773,8 +773,8 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
   useLayoutEffect(() => {
     const el = inputRef.current;
     if (!el) return;
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 200) + "px";
+    el.style.removeProperty("height");
+    el.setCssProps({ height: Math.min(el.scrollHeight, 200) + "px" });
   }, [inputValue, activeTabId]);
 
   useEffect(() => {
@@ -1008,7 +1008,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
     if (!text && attachedFiles.length === 0) return;
     setInputValues((prev) => ({ ...prev, [activeTabId]: "" }));
     if (inputRef.current) {
-      inputRef.current.style.height = "auto";
+      inputRef.current.style.removeProperty("height");
     }
     setSlashMenuOpen(false);
     const meta = attachedFiles.length > 0

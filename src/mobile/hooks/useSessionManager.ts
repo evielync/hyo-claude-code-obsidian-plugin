@@ -999,7 +999,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         ),
       }));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, [state.tabs]);
 
   /**
@@ -1529,7 +1529,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     for (const t of state.tabs) {
       if (t.loading && t.cliSessionId && !requestedRef.current.has(t.id)) backfill(t.id, t.cliSessionId);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, [state.tabs, options.gatewayUrl]);
   // Close a list's busy tabs only once their work is done.
   const isBusy = (t: TabSession) =>
@@ -1608,7 +1608,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       remoteRef.current ?? (saved?.sessions || []).filter((s) => s?.id).map((s) => ({ id: s.id, title: s.title || "Untitled" }));
     if (!entries.length) return;
     applyOpenList(entries, { activeId: saved?.activeId });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, [options.gatewayUrl]);
 
   // Hear the Mac's list: now, after every reconnect (what was changed here
@@ -1636,7 +1636,7 @@ export function useSessionManager(options: SessionManagerOptions) {
   const busyKey = state.tabs.filter(isBusy).map((t) => t.id).join(",");
   useEffect(() => {
     if (remoteRef.current) applyOpenListRef.current(remoteRef.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, [busyKey, options.mainChat, options.mainChatSessionId]);
 
   // Tell the Mac what changed here: a conversation that got its session id
@@ -1651,7 +1651,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       else tellMac.open(g.sid, g.title);
     }
     for (const sid of ch.cleared) tellMac.close(sid);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, [state.tabs]);
 
   useEffect(() => {
@@ -1699,7 +1699,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       const transport = ensureTransport(t.id);
       if (!t.loading) transport.attach();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, [state.tabs, options.gatewayUrl]);
   // ---- The main chat --------------------------------------------------------
   // Same as desktop: a pinned first tab carrying the one long conversation
@@ -1741,7 +1741,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     });
     // Its history (if it has any) is fetched by the loader effect.
     void filled;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, [options.mainChat, options.gatewayUrl]);
 
   const compact = useCallback(() => {
@@ -1934,7 +1934,7 @@ export function useSessionManager(options: SessionManagerOptions) {
   /** Tell the Mac which conversation this phone has on screen (read-state.ts). */
   const reportViewing = useCallback((sessionId: string | null) => {
     gateway()?.setViewing(sessionId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, []);
 
   return {

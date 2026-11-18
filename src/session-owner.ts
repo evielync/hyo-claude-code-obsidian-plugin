@@ -928,9 +928,7 @@ export function lockHeldByOther(rec: LockRecord | null, myPid: number, alive: (p
 
 /** A lock file next to Hyo's other per-machine state (~/.hyo). Desktop only. */
 export function fileLock(file: string, pid: number = process.pid): LockOps {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const fs = require("fs");
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const path = require("path");
   const alive = (p: number) => {
     try {
