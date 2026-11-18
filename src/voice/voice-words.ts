@@ -5,8 +5,19 @@
  * mcp__claude_ai_Circle_MCP__list_posts.
  */
 
+/** A tool's input, as an object of unknown fields (anything else reads as empty). */
+function fieldsOf(v: unknown): Record<string, unknown> {
+  return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+}
+
+/** A tool input field as text: strings and numbers as themselves, anything else as "". */
+function text(v: unknown): string {
+  if (typeof v === "string") return v;
+  return typeof v === "number" ? String(v) : "";
+}
+
 function base(p: unknown): string {
-  const s = String(p || "").replace(/[\\/]+$/, "");
+  const s = text(p).replace(/[\\/]+$/, "");
   const last = s.split(/[\\/]/).pop() || s;
   return last.replace(/\.(md|markdown|txt)$/i, "");
 }
@@ -28,40 +39,42 @@ const SILENT_TOOLS = new Set(["toolsearch", "taskoutput", "enterplanmode", "exit
  * "searching for 'due: 2026-10-22'", "running a sub-agent: Fetch overdue
  * tasks". Null for bookkeeping that isn't worth mentioning.
  */
-export function describeStep(name: string, input: any): string | null {
+export function describeStep(name: string, input: unknown): string | null {
   const raw = name || "";
   const n = raw.toLowerCase();
   if (SILENT_TOOLS.has(n)) return null;
+  const f = fieldsOf(input);
   if (n === "todowrite") {
-    const todos: any[] = Array.isArray(input?.todos) ? input.todos : [];
-    const now = todos.find((t) => t?.status === "in_progress");
-    const label = now?.activeForm || now?.content;
-    return label ? lowerFirst(clip(String(label))) : null;
+    const todos: unknown[] = Array.isArray(f.todos) ? f.todos : [];
+    const now = todos.map(fieldsOf).find((t) => t.status === "in_progress");
+    const label = now ? text(now.activeForm) || text(now.content) : "";
+    return label ? lowerFirst(clip(label)) : null;
   }
   if (n === "agent" || n === "task") {
-    const d = String(input?.description || "").trim();
+    const d = text(f.description).trim();
     return d ? `working on ${lowerFirst(clip(d))}` : "working through it";
   }
   if (n === "skill") {
-    const s = String(input?.skill || input?.name || "").trim();
+    const s = (text(f.skill) || text(f.name)).trim();
     return s ? `using the ${s.split(":").pop()} skill` : "using a skill";
   }
-  if (n === "read") return input?.file_path ? `reading ${clip(base(input.file_path), 40)}` : "reading a file";
-  if (n === "grep") return input?.pattern ? `searching for "${clip(String(input.pattern), 40)}"` : "searching through files";
+  const filePath = text(f.file_path);
+  if (n === "read") return filePath ? `reading ${clip(base(filePath), 40)}` : "reading a file";
+  if (n === "grep") return text(f.pattern) ? `searching for "${clip(text(f.pattern), 40)}"` : "searching through files";
   if (n === "glob" || n === "ls") return "looking through files";
-  if (n === "edit" || n === "multiedit") return input?.file_path ? `editing ${clip(base(input.file_path), 40)}` : "changing a file";
-  if (n === "write") return input?.file_path ? `writing ${clip(base(input.file_path), 40)}` : "writing a file";
+  if (n === "edit" || n === "multiedit") return filePath ? `editing ${clip(base(filePath), 40)}` : "changing a file";
+  if (n === "write") return filePath ? `writing ${clip(base(filePath), 40)}` : "writing a file";
   if (n === "notebookedit") return "editing a notebook";
-  if (n === "websearch") return input?.query ? `searching the web for "${clip(String(input.query), 40)}"` : "searching the web";
+  if (n === "websearch") return text(f.query) ? `searching the web for "${clip(text(f.query), 40)}"` : "searching the web";
   if (n === "webfetch") {
     try {
-      return `reading ${new URL(String(input?.url)).hostname.replace(/^www\./, "")}`;
+      return `reading ${new URL(text(f.url)).hostname.replace(/^www\./, "")}`;
     } catch {
       return "reading a web page";
     }
   }
   if (n === "bash") {
-    const d = String(input?.description || "").trim();
+    const d = text(f.description).trim();
     return d ? `running a command to ${lowerFirst(clip(d.replace(/\.$/, "")))}` : "running a command";
   }
   if (n.startsWith("mcp__")) {
@@ -79,7 +92,7 @@ export function describeStep(name: string, input: any): string | null {
 }
 
 /** Something on screen needs the user, said as the agent would say it. */
-export function attentionLine(kind: "permission" | "question", toolName = "", input: any = null): string {
+export function attentionLine(kind: "permission" | "question", toolName = "", input: unknown = null): string {
   if (kind === "question") return "I've put a question on screen for the user. Ask them to answer it there.";
   const what = describeStep(toolName, input) || "the next step";
   return `I need the user's OK on screen before I go ahead with ${what}. Ask them to allow it there.`;

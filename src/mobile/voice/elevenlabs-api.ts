@@ -27,6 +27,20 @@ export interface ElevenLabsVoice {
   preview_url?: string;
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+/** A voice from GET /v1/voices: the fields Hyo relies on are present. */
+function isVoice(v: unknown): v is ElevenLabsVoice {
+  return isRecord(v) && typeof v.voice_id === "string" && typeof v.name === "string" && typeof v.category === "string";
+}
+
+/** `text` from a transcription response, or "". */
+export function transcriptText(json: unknown): string {
+  return isRecord(json) && typeof json.text === "string" ? json.text : "";
+}
+
 /**
  * Fetch available voices from the user's ElevenLabs account.
  * Filters out premade voices — only returns cloned/custom voices.
@@ -39,9 +53,10 @@ export async function listVoices(
     method: "GET",
     headers: { "xi-api-key": apiKey },
   });
-  const data = res.json;
-  if (!data?.voices) throw new Error("Invalid response from ElevenLabs");
-  return (data.voices as ElevenLabsVoice[])
+  const data: unknown = res.json;
+  if (!isRecord(data) || !Array.isArray(data.voices)) throw new Error("Invalid response from ElevenLabs");
+  return data.voices
+    .filter(isVoice)
     .filter((v) => v.category !== "premade")
     .sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -80,9 +95,9 @@ function stripMarkdown(text: string): string {
 }
 
 /**
- * Convert text to speech using ElevenLabs streaming TTS endpoint.
- * Uses native fetch for streaming response (faster than requestUrl).
- * Returns raw MP3 audio as an ArrayBuffer.
+ * Convert text to speech using ElevenLabs streaming TTS endpoint (it starts
+ * generating sooner than the plain one). The whole MP3 is waited for either
+ * way. Returns raw MP3 audio as an ArrayBuffer.
  */
 export async function textToSpeech(
   apiKey: string,
@@ -95,27 +110,23 @@ export async function textToSpeech(
     ttsText = ttsText.substring(0, MAX_TTS_CHARS) + "... response truncated for speech.";
   }
 
-  // Use native fetch with the streaming endpoint for lower latency
-  const res = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
-    {
-      method: "POST",
-      headers: {
-        "xi-api-key": apiKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        text: ttsText,
-        model_id: TTS_MODEL,
-      }),
-    }
-  );
+  const res = await requestUrl({
+    url: `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
+    method: "POST",
+    headers: { "xi-api-key": apiKey },
+    contentType: "application/json",
+    body: JSON.stringify({
+      text: ttsText,
+      model_id: TTS_MODEL,
+    }),
+    throw: false,
+  });
 
-  if (!res.ok) {
+  if (res.status < 200 || res.status >= 300) {
     throw new Error(`ElevenLabs TTS error: ${res.status}`);
   }
 
-  return await res.arrayBuffer();
+  return res.arrayBuffer;
 }
 
 /**
@@ -187,19 +198,18 @@ export async function speechToText(
   });
   // Swallow a late rejection if the timeout has already won, so it doesn't
   // surface as an unhandled rejection after we've recovered the UI.
-  reqPromise.catch(() => {});
+  reqPromise.catch(() => undefined);
 
-  let timer: ReturnType<typeof setTimeout>;
+  let timer = 0;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(STT_TIMEOUT_ERROR)), timeoutMs);
+    timer = window.setTimeout(() => reject(new Error(STT_TIMEOUT_ERROR)), timeoutMs);
   });
 
   try {
     const res = await Promise.race([reqPromise, timeout]);
-    const data = res.json;
-    return data?.text || "";
+    return transcriptText(res.json);
   } finally {
-    clearTimeout(timer!);
+    window.clearTimeout(timer);
   }
 }
 

@@ -1,6 +1,9 @@
 import { Platform } from "obsidian";
 import { TranscriptGrouper } from "openai/helpers/live";
+import type { ClientEvent, ServerEvent } from "openai/resources/live/live";
+import type WebSocket from "ws";
 import type { Message } from "../hooks/useChatEngine";
+import { nodeFs, nodeOs, nodePath } from "../platform/node";
 import { parseVoiceResponse } from "./voice-persona";
 import { plainForVoice, type VoiceCallRecord } from "./voice-call";
 
@@ -29,8 +32,9 @@ import { plainForVoice, type VoiceCallRecord } from "./voice-call";
  *   - **WebRTC** (default). Mic and speaker are media tracks; events ride the
  *     "oai-events" data channel; echo cancellation is the browser's WebRTC
  *     stack, so barge-in on speakers works. `exchangeSdp` turns the offer
- *     into OpenAI's answer — on desktop a direct POST with the user's key; on
- *     the phone, a request to the desktop gateway, which holds the key.
+ *     into OpenAI's answer — on desktop a direct POST with the user's key
+ *     (live-sdp.ts); on the phone, a request to the desktop gateway, which
+ *     holds the key.
  *   - **WebSocket** (fallback, desktop only). Base64 PCM16 24 kHz both ways.
  */
 
@@ -43,16 +47,17 @@ export interface GptLiveHistoryItem {
   text: string;
 }
 
+/** One history item: the user's words are input text, the assistant's output text. */
+export type LiveHistoryMessage =
+  | { type: "message"; role: "user"; content: Array<{ type: "input_text"; text: string }> }
+  | { type: "message"; role: "assistant"; content: Array<{ type: "output_text"; text: string }> };
+
 /** The session object sent at creation (identical for both transports). */
 export interface LiveSessionConfig {
   model: "gpt-live-1";
   delegation: { type: "client" };
   instructions: string;
-  input: Array<{
-    type: "message";
-    role: "user" | "assistant";
-    content: Array<{ type: "input_text" | "output_text"; text: string }>;
-  }>;
+  input: LiveHistoryMessage[];
   audio: {
     format?: { type: "audio/pcm"; rate: 24000 };
     /** A built-in voice name, or `{ id }` for a custom voice (SDK: CustomVoice). */
@@ -79,8 +84,9 @@ export interface GptLiveOptions {
   /** Call bank only: no microphone or speakers (WebSocket transport). */
   headless?: HeadlessAudio;
   /**
-   * WebRTC only: turn the local SDP offer into OpenAI's answer. Defaults to a
-   * direct POST with `apiKey`. The phone passes one that asks the gateway.
+   * WebRTC only (required for it): turn the local SDP offer into OpenAI's
+   * answer. The desktop passes a direct POST with the user's key
+   * (live-sdp.ts); the phone passes one that asks the gateway.
    */
   exchangeSdp?: (offerSdp: string, session: LiveSessionConfig) => Promise<{ sdp: string }>;
   onState: (state: GptLiveState) => void;
@@ -105,13 +111,109 @@ let logPath: string | null = null;
 export function liveLog(line: string): void {
   if (!logPath) return;
   try {
-    require("fs").appendFileSync(logPath, `${new Date().toISOString()} ${line}\n`);
-  } catch {}
+    nodeFs().appendFileSync(logPath, `${new Date().toISOString()} ${line}\n`);
+  } catch {
+    // Diagnostics only: a log that can't be written must never disturb the call.
+  }
 }
 
-const LIVE_HTTP_URL = "https://api.openai.com/v1/live/sessions";
+/**
+ * Microphone capture for the WebSocket path, run on the audio thread. It
+ * gathers the 128-frame render quanta into chunks of `chunkFrames` and posts
+ * each full chunk (a Float32Array, transferred) to the main thread, which
+ * converts it to PCM16 and sends it. An unconnected input renders silence,
+ * as the old ScriptProcessor did. Shipped as a string and loaded from a Blob
+ * URL so the plugin needs no extra release file.
+ */
+const MIC_WORKLET_NAME = "hyo-mic-capture";
+const MIC_WORKLET_CODE = `
+class HyoMicCapture extends AudioWorkletProcessor {
+  constructor(options) {
+    super();
+    this.size = options.processorOptions.chunkFrames;
+    this.buf = new Float32Array(this.size);
+    this.filled = 0;
+  }
+  process(inputs) {
+    const channel = inputs[0] && inputs[0][0];
+    const frames = channel ? channel.length : 128;
+    let read = 0;
+    while (read < frames) {
+      const n = Math.min(frames - read, this.size - this.filled);
+      if (channel) this.buf.set(channel.subarray(read, read + n), this.filled);
+      else this.buf.fill(0, this.filled, this.filled + n);
+      this.filled += n;
+      read += n;
+      if (this.filled === this.size) {
+        this.port.postMessage(this.buf, [this.buf.buffer]);
+        this.buf = new Float32Array(this.size);
+        this.filled = 0;
+      }
+    }
+    return true;
+  }
+}
+registerProcessor(${JSON.stringify(MIC_WORKLET_NAME)}, HyoMicCapture);
+`;
+
+/** Register the capture worklet on `ctx`, from a Blob URL that is revoked straight after. */
+async function addMicWorklet(ctx: AudioContext): Promise<void> {
+  const url = URL.createObjectURL(new Blob([MIC_WORKLET_CODE], { type: "application/javascript" }));
+  try {
+    await ctx.audioWorklet.addModule(url);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+/**
+ * A parsed message from the Live session. The server is the authority on
+ * its own event shapes (typed by the SDK's ServerEvent union); this only
+ * checks it's an event object at all before it's handled.
+ */
+function isServerEvent(v: unknown): v is ServerEvent {
+  return isRecord(v) && typeof v.type === "string";
+}
+
+function parseServerEvent(raw: string): ServerEvent | null {
+  const v: unknown = JSON.parse(raw);
+  return isServerEvent(v) ? v : null;
+}
+
+/**
+ * Run one step of releasing a call's resources. Release is best-effort: a
+ * part that is already gone (or throws on the way out) must not stop the
+ * rest being released.
+ */
+function releaseQuietly(release: () => void): void {
+  try {
+    release();
+  } catch {
+    // Already released, or never fully set up: nothing more to do for this part.
+  }
+}
+
+/** A WebSocket message as text (ws hands over Buffers, fragments or ArrayBuffers). */
+function rawText(data: WebSocket.RawData): string {
+  if (Array.isArray(data)) return Buffer.concat(data).toString();
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString();
+  return data.toString();
+}
+
+function errorText(e: unknown, fallback: string): string {
+  return e instanceof Error && e.message ? e.message : fallback;
+}
+
 const LIVE_WS_URL = "wss://api.openai.com/v1/live/sessions";
 const SAMPLE_RATE = 24000;
+/** WebSocket.OPEN (ws and the DOM agree on the ready-state numbers). */
+const WS_OPEN = 1;
+/** Microphone frames per input_audio.append on the WebSocket path. */
+const CAPTURE_CHUNK_FRAMES = 2048;
 /**
  * Every append is capped at 500 tokens (SDK: CommentaryAppendEvent /
  * ThinkingAppendEvent). 1,200 characters is ≈ 300–400 tokens. Longer text is
@@ -140,8 +242,8 @@ const nextEventId = (prefix: string) => `${prefix}_${Date.now().toString(36)}_${
 export class GptLiveSession {
   private transport: LiveTransport;
   // WebSocket path
-  private ws: any = null;
-  private processor: ScriptProcessorNode | null = null;
+  private ws: WebSocket | null = null;
+  private capture: AudioWorkletNode | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
   private nextPlayAt = 0;
   // WebRTC path
@@ -193,9 +295,10 @@ export class GptLiveSession {
     this.setState("connecting");
     if (this.opts.debugLog && Platform.isDesktop) {
       try {
-        const os = require("os");
-        logPath = `${os.homedir()}/Dropbox/chad/hyo-live.log`;
-      } catch {}
+        logPath = `${nodeOs().homedir()}/Dropbox/chad/hyo-live.log`;
+      } catch {
+        // No home directory to log to: the call runs without the diagnostics file.
+      }
       liveLog(`=== call start (${this.transport}) voice=${JSON.stringify(this.opts.voice)} history=${this.opts.history.length} instructions=${this.opts.instructions.length}ch`);
     } else {
       logPath = null;
@@ -230,6 +333,8 @@ export class GptLiveSession {
     }
     if (this.transport === "webrtc") await this.startWebRTC();
     else await this.startWebSocket();
+    // Ended while connecting (teardown has already run): nothing to tick.
+    if (this.closed) return;
 
     this.speakTimer = window.setInterval(() => {
       if (this.closed || !this.isReady()) return;
@@ -243,11 +348,11 @@ export class GptLiveSession {
       model: "gpt-live-1",
       delegation: { type: "client" },
       instructions: this.opts.instructions,
-      input: this.opts.history.map((h) => ({
-        type: "message",
-        role: h.role,
-        content: [{ type: h.role === "user" ? "input_text" : "output_text", text: h.text }],
-      })),
+      input: this.opts.history.map((h): LiveHistoryMessage =>
+        h.role === "user"
+          ? { type: "message", role: "user", content: [{ type: "input_text", text: h.text }] }
+          : { type: "message", role: "assistant", content: [{ type: "output_text", text: h.text }] }
+      ),
       audio: {
         ...(this.transport === "ws" ? { format: { type: "audio/pcm", rate: SAMPLE_RATE } } : {}),
         output: { voice: this.opts.voice || "marin" },
@@ -268,10 +373,9 @@ export class GptLiveSession {
 
     // Remote audio plays through a hidden <audio> element — that's what gives
     // the WebRTC echo canceller its reference signal.
-    const audio = document.createElement("audio");
+    const audio = activeDocument.body.createEl("audio");
     audio.autoplay = true;
     audio.hidden = true;
-    document.body.appendChild(audio);
     this.remoteAudio = audio;
 
     this.ctx = new AudioContext();
@@ -282,7 +386,8 @@ export class GptLiveSession {
     pc.ontrack = (e) => {
       const remote = e.streams[0] || new MediaStream([e.track]);
       audio.srcObject = remote;
-      void audio.play().catch(() => {});
+      // autoplay is set as well; if the nudge is refused there is nothing else to try.
+      audio.play().catch(() => undefined);
       if (this.ctx) {
         this.agentAnalyser = this.ctx.createAnalyser();
         this.agentAnalyser.fftSize = 1024;
@@ -311,9 +416,12 @@ export class GptLiveSession {
     // Data channel and its listeners before the offer (docs: connection sequence).
     const dc = pc.createDataChannel("oai-events");
     this.dc = dc;
-    dc.onmessage = (e) => {
+    dc.onmessage = (e: MessageEvent<unknown>) => {
+      // Live events are JSON text messages.
+      if (typeof e.data !== "string") return;
       try {
-        this.handle(JSON.parse(String(e.data)));
+        const ev = parseServerEvent(e.data);
+        if (ev) this.handle(ev);
       } catch (err) {
         liveLog(`!! event handling failed: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -337,7 +445,7 @@ export class GptLiveSession {
         }, ICE_TIMEOUT_MS);
         const onState = () => {
           if (pc.iceGatheringState !== "complete") return;
-          clearTimeout(timeout);
+          window.clearTimeout(timeout);
           pc.removeEventListener("icegatheringstatechange", onState);
           resolve();
         };
@@ -347,7 +455,8 @@ export class GptLiveSession {
     }
     const sdp = pc.localDescription?.sdp;
     if (!sdp) throw new Error("No local SDP offer");
-    const exchange = this.opts.exchangeSdp || this.defaultExchangeSdp;
+    const exchange = this.opts.exchangeSdp;
+    if (!exchange) throw new Error("No SDP exchange was given for the WebRTC call.");
     const answer = await exchange(sdp, this.sessionConfig());
     await pc.setRemoteDescription({ type: "answer", sdp: answer.sdp });
     // The HTTP request started the session; session.start is not sent here.
@@ -373,60 +482,35 @@ export class GptLiveSession {
     }, LEVEL_TICK_MS);
   }
 
-  /** Desktop default: the plugin holds the key, so it signs the offer itself. */
-  private defaultExchangeSdp = async (
-    offerSdp: string,
-    session: LiveSessionConfig
-  ): Promise<{ sdp: string }> => {
-    const res = await fetch(LIVE_HTTP_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.opts.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ session, transport: { type: "webrtc", sdp: offerSdp } }),
-    });
-    if (!res.ok) {
-      let detail = "";
-      try {
-        const j = await res.json();
-        detail = j?.error?.message || "";
-      } catch {}
-      throw new Error(`OpenAI refused the call (${res.status})${detail ? ": " + detail : ""}`);
-    }
-    const data = await res.json();
-    if (!data?.transport?.sdp) throw new Error("OpenAI returned no SDP answer");
-    liveLog(`   webrtc session ${data?.session?.id}`);
-    return { sdp: data.transport.sdp };
-  };
-
   // ---- WebSocket (fallback) -------------------------------------------------
 
   private async startWebSocket(): Promise<void> {
     if (!Platform.isDesktop) {
       throw new Error("The WebSocket voice path is desktop-only.");
     }
-    const WS = require("ws");
-    this.ws = new WS(LIVE_WS_URL, {
+    const { default: WS } = await import("ws");
+    const ws = new WS(LIVE_WS_URL, {
       headers: { Authorization: `Bearer ${this.opts.apiKey}` },
     });
-    this.ws.on("open", () => {
+    this.ws = ws;
+    ws.on("open", () => {
       this.send({ type: "session.start", session: this.sessionConfig() });
     });
-    this.ws.on("message", (data: any) => {
+    ws.on("message", (data: WebSocket.RawData) => {
       try {
-        this.handle(JSON.parse(String(data)));
+        const ev = parseServerEvent(rawText(data));
+        if (ev) this.handle(ev);
       } catch (err) {
         liveLog(`!! event handling failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     });
-    this.ws.on("error", (e: any) => {
-      this.opts.onError(e?.message || "GPT-Live connection error");
+    ws.on("error", (e: Error) => {
+      this.opts.onError(errorText(e, "GPT-Live connection error"));
     });
-    this.ws.on("close", (code: number, reason: any) => {
+    ws.on("close", (code: number, reason: Buffer) => {
       if (!this.closed && !this.closing) {
         this.opts.onError(
-          `GPT-Live call ended (${code}${reason ? ": " + String(reason) : ""})`
+          `GPT-Live call ended (${code}${reason ? ": " + reason.toString() : ""})`
         );
       }
       this.teardown();
@@ -440,13 +524,24 @@ export class GptLiveSession {
       return;
     }
 
-    this.ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
-    this.source = this.ctx.createMediaStreamSource(this.stream!);
-    // 2048 frames @ 24 kHz ≈ 85 ms per packet.
-    this.processor = this.ctx.createScriptProcessor(2048, 1, 1);
-    this.processor.onaudioprocess = (e) => {
+    const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
+    this.ctx = ctx;
+    await addMicWorklet(ctx);
+    // The socket can fail while the worklet loads; teardown has released the context by then.
+    if (this.closed || this.ctx !== ctx) return;
+    this.source = ctx.createMediaStreamSource(this.stream!);
+    // 2048 frames @ 24 kHz ≈ 85 ms per packet. Mono in, one (silent) output to keep it pulled.
+    this.capture = new AudioWorkletNode(ctx, MIC_WORKLET_NAME, {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+      channelCount: 1,
+      channelCountMode: "explicit",
+      processorOptions: { chunkFrames: CAPTURE_CHUNK_FRAMES },
+    });
+    this.capture.port.onmessage = (e: MessageEvent<Float32Array>) => {
       if (!this.started || this.muted || this.closed) return;
-      const f32 = e.inputBuffer.getChannelData(0);
+      const f32 = e.data;
       const i16 = new Int16Array(f32.length);
       let sum = 0;
       for (let i = 0; i < f32.length; i++) {
@@ -463,12 +558,12 @@ export class GptLiveSession {
         audio: Buffer.from(i16.buffer).toString("base64"),
       });
     };
-    this.source.connect(this.processor);
-    // ScriptProcessor needs a sink to run; a silent gain keeps the mic inaudible.
-    const sink = this.ctx.createGain();
+    this.source.connect(this.capture);
+    // Keep the node connected to the destination so it is always rendered; a silent gain keeps the mic inaudible.
+    const sink = ctx.createGain();
     sink.gain.value = 0;
-    this.processor.connect(sink);
-    sink.connect(this.ctx.destination);
+    this.capture.connect(sink);
+    sink.connect(ctx.destination);
   }
 
   private playPcm(b64: string): void {
@@ -504,7 +599,7 @@ export class GptLiveSession {
   // Events (identical on both transports)
   // ---------------------------------------------------------------------------
 
-  private handle(ev: any): void {
+  private handle(ev: ServerEvent): void {
     if (ev.type !== "session.output_audio.delta") {
       liveLog(`<- ${ev.type} ${JSON.stringify(ev).slice(0, 300)}`);
     }
@@ -530,7 +625,7 @@ export class GptLiveSession {
         if (this.transport === "ws") this.playPcm(ev.delta);
         return;
       case "session.output_transcript.delta":
-        if (!this.spokenYet && String(ev.delta || "").trim()) {
+        if (!this.spokenYet && (ev.delta || "").trim()) {
           this.spokenYet = true;
           this.opts.onFirstSpeech?.();
         }
@@ -632,7 +727,7 @@ export class GptLiveSession {
     const next = this.thinkQueue.shift()!;
     this.thinkInFlight = next.event_id;
     this.send({ type: "session.thinking.append", ...next });
-    if (this.thinkTimer) clearTimeout(this.thinkTimer);
+    if (this.thinkTimer) window.clearTimeout(this.thinkTimer);
     this.thinkTimer = window.setTimeout(() => {
       // No acknowledgement: don't stall the queue for ever.
       if (this.thinkInFlight === next.event_id) {
@@ -661,7 +756,9 @@ export class GptLiveSession {
     this.closing = true;
     try {
       this.grouper?.close();
-    } catch {}
+    } catch {
+      // Already closed: the turns it held are in the record either way.
+    }
     this.send({ type: "session.close", event_id: nextEventId("close") });
     this.closeTimer = window.setTimeout(() => {
       if (!this.closed) {
@@ -673,54 +770,55 @@ export class GptLiveSession {
   }
 
   private teardown(): void {
-    for (const t of [this.speakTimer, this.levelTimer, this.closeTimer, this.thinkTimer]) if (t) clearTimeout(t);
+    for (const t of [this.speakTimer, this.levelTimer]) if (t) window.clearInterval(t);
+    for (const t of [this.closeTimer, this.thinkTimer]) if (t) window.clearTimeout(t);
     this.speakTimer = null;
     this.levelTimer = null;
     this.closeTimer = null;
     this.thinkTimer = null;
     this.thinkQueue = [];
-    try {
-      this.stopHeadless?.();
-    } catch {}
+    releaseQuietly(() => this.stopHeadless?.());
     this.stopHeadless = null;
-    try {
-      this.grouper?.close();
-    } catch {}
+    // stop() may have closed it already.
+    releaseQuietly(() => this.grouper?.close());
     this.grouper = null;
-    try {
-      this.processor?.disconnect();
+    const capture = this.capture;
+    releaseQuietly(() => {
+      if (capture) capture.port.onmessage = null;
+      capture?.disconnect();
       this.source?.disconnect();
-    } catch {}
+    });
+    this.capture = null;
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
-    try {
+    releaseQuietly(() => {
       this.dc?.close();
       this.pc?.close();
-    } catch {}
+    });
     this.dc = null;
     this.pc = null;
-    if (this.remoteAudio) {
-      try {
-        this.remoteAudio.pause();
-        this.remoteAudio.srcObject = null;
-        this.remoteAudio.remove();
-      } catch {}
+    const remoteAudio = this.remoteAudio;
+    if (remoteAudio) {
+      releaseQuietly(() => {
+        remoteAudio.pause();
+        remoteAudio.srcObject = null;
+        remoteAudio.remove();
+      });
       this.remoteAudio = null;
     }
-    void this.ctx?.close().catch(() => {});
+    // Closing an already-closed context rejects; nothing is left to release then.
+    this.ctx?.close().catch(() => undefined);
     this.ctx = null;
-    try {
-      this.ws?.close();
-    } catch {}
+    releaseQuietly(() => this.ws?.close());
     this.ws = null;
     this.started = false;
     this.closed = true;
     this.setState("closed");
   }
 
-  private send(ev: unknown): void {
+  private send(ev: ClientEvent): void {
     const json = JSON.stringify(ev);
-    const type = (ev as any)?.type;
+    const type = ev.type;
     if (type !== "session.input_audio.append") {
       liveLog(`-> ${type} ${json.slice(0, 400)}`);
     }
@@ -729,7 +827,7 @@ export class GptLiveSession {
       else liveLog(`!! dropped ${type}: data channel ${this.dc?.readyState ?? "missing"}`);
       return;
     }
-    if (!this.ws || this.ws.readyState !== 1) {
+    if (!this.ws || this.ws.readyState !== WS_OPEN) {
       liveLog(`!! dropped ${type}: socket ${this.ws?.readyState ?? "missing"}`);
       return;
     }
@@ -751,33 +849,29 @@ export class GptLiveSession {
  */
 export async function playVoiceSample(apiKey: string, voice: string | { id: string }): Promise<void> {
   if (!Platform.isDesktop) throw new Error("Samples play on desktop only.");
-  const WS = require("ws");
+  const { default: WS } = await import("ws");
   const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
   let nextAt = 0;
   let lastAudioAt = 0;
   let gotAudio = false;
   const ws = new WS(LIVE_WS_URL, { headers: { Authorization: `Bearer ${apiKey}` } });
-  const send = (ev: unknown) => {
-    if (ws.readyState === 1) ws.send(JSON.stringify(ev));
+  const send = (ev: ClientEvent) => {
+    if (ws.readyState === WS_OPEN) ws.send(JSON.stringify(ev));
   };
   await new Promise<void>((resolve, reject) => {
     const fail = (msg: string) => {
-      try {
-        ws.close();
-      } catch {}
+      releaseQuietly(() => ws.close());
       reject(new Error(msg));
     };
     const watchdog = window.setTimeout(() => fail("The sample took too long."), 20000);
     // Finish once audio has stopped for a moment after it started.
     const poll = window.setInterval(() => {
       if (gotAudio && performance.now() - lastAudioAt > 900 && ctx.currentTime >= nextAt - 0.05) {
-        clearInterval(poll);
-        clearTimeout(watchdog);
+        window.clearInterval(poll);
+        window.clearTimeout(watchdog);
         send({ type: "session.close" });
         window.setTimeout(() => {
-          try {
-            ws.close();
-          } catch {}
+          releaseQuietly(() => ws.close());
           resolve();
         }, 300);
       }
@@ -793,13 +887,15 @@ export async function playVoiceSample(apiKey: string, voice: string | { id: stri
         },
       });
     });
-    ws.on("message", (data: any) => {
-      let ev: any;
+    ws.on("message", (data: WebSocket.RawData) => {
+      let ev: ServerEvent | null;
       try {
-        ev = JSON.parse(String(data));
+        ev = parseServerEvent(rawText(data));
       } catch {
+        // Not JSON: nothing in it for the sample.
         return;
       }
+      if (!ev) return;
       if (ev.type === "session.started") {
         send({
           type: "session.commentary.append",
@@ -810,7 +906,10 @@ export async function playVoiceSample(apiKey: string, voice: string | { id: stri
         // The model needs an input stream to run; feed silence.
         const silence = Buffer.alloc(4800).toString("base64");
         const feed = window.setInterval(() => {
-          if (ws.readyState !== 1) return clearInterval(feed);
+          if (ws.readyState !== WS_OPEN) {
+            window.clearInterval(feed);
+            return;
+          }
           send({ type: "session.input_audio.append", audio: silence });
         }, 100);
       } else if (ev.type === "session.output_audio.delta") {
@@ -835,18 +934,19 @@ export async function playVoiceSample(apiKey: string, voice: string | { id: stri
         src.start(at);
         nextAt = at + buf.duration;
       } else if (ev.type === "error") {
-        clearInterval(poll);
-        clearTimeout(watchdog);
+        window.clearInterval(poll);
+        window.clearTimeout(watchdog);
         fail(ev.error?.message || "OpenAI refused the sample");
       }
     });
-    ws.on("error", (e: any) => {
-      clearInterval(poll);
-      clearTimeout(watchdog);
-      fail(e?.message || "Couldn't connect for the sample");
+    ws.on("error", (e: Error) => {
+      window.clearInterval(poll);
+      window.clearTimeout(watchdog);
+      fail(errorText(e, "Couldn't connect for the sample"));
     });
   }).finally(() => {
-    void ctx.close().catch(() => {});
+    // Closing an already-closed context rejects; nothing is left to release then.
+    ctx.close().catch(() => undefined);
   });
 }
 
@@ -922,12 +1022,10 @@ export interface AgentIdentity {
 export function readAgentIdentity(agent: string): AgentIdentity | null {
   if (!agent || !Platform.isDesktop) return null;
   try {
-    const fs = require("fs");
-    const path = require("path");
-    const os = require("os");
-    const p = path.join(os.homedir(), ".claude", "agents", `${agent}.md`);
+    const fs = nodeFs();
+    const p = nodePath().join(nodeOs().homedir(), ".claude", "agents", `${agent}.md`);
     if (!fs.existsSync(p)) return null;
-    const head = String(fs.readFileSync(p, "utf8")).slice(0, 4000);
+    const head = fs.readFileSync(p, "utf8").slice(0, 4000);
     const fm = head.match(/^---\s*\n([\s\S]*?)\n---/);
     const block = fm ? fm[1] : "";
     const pick = (key: string) => {

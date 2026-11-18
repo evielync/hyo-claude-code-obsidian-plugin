@@ -8,6 +8,7 @@ import {
 } from "../voice/elevenlabs-api";
 import { loadSmartTurn, turnEndProbability } from "../voice/smart-turn";
 import { buildLiveInstructions, buildLiveHistory, readAgentIdentity } from "../voice/gpt-live";
+import { directSdpExchange } from "../voice/live-sdp";
 import { playChime, CONNECT_CHIME, HANGUP_CHIME } from "../voice/chimes";
 import { LiveCall } from "../voice/live-call";
 import { startCall, addTurn, endCall, callHasContent, type VoiceCallRecord, type CallEndReason } from "../voice/voice-call";
@@ -116,25 +117,14 @@ export function useVoiceMode({
   // alone never fires `onended`, which would otherwise hang the runner.
   const currentResolveRef = useRef<(() => void) | null>(null);
 
-  // Hands-free conversation state. An always-on mic + energy VAD auto-detects
-  // when you stop talking and sends; half-duplex mutes capture while Chad speaks
-  // or works, so his voice never gets picked up as your turn.
-  const streamRef = useRef<MediaStream | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
+  // Hands-free conversation state. Silero VAD (MicVAD) hears when you stop
+  // talking and Smart Turn decides you've finished; half-duplex pauses the VAD
+  // while Chad speaks or works, so his voice never gets picked up as your turn.
   const vadTimerRef = useRef<number | null>(null);
   const convActiveRef = useRef(false);
   const mutedRef = useRef(false);
   const busyRef = useRef(false); // Chad is generating (set from ChatPanel)
-  const busyEndedAtRef = useRef(0); // when the last generation finished
   const suspendedPrevRef = useRef(false);
-  const hfRecorderRef = useRef<MediaRecorder | null>(null);
-  const hfChunksRef = useRef<Blob[]>([]);
-  const hfHasSpeechRef = useRef(false);
-  const hfLastVoiceRef = useRef(0);
-  const hfDiscardRef = useRef(false);
-  const hfActiveRecRef = useRef(false);
-  const hfListeningRef = useRef(false);
   const vadRef = useRef<MicVADInstance | null>(null);
   // Smart Turn accumulation: utterance segments across pauses, and a fallback
   // timer that sends anyway if the model keeps saying "not finished" but she's
@@ -229,31 +219,6 @@ export function useVoiceMode({
     }
   }, [apiKey, onTranscript]);
 
-  // Transcribe a captured utterance and send it. Returns whether it sent.
-  const transcribeAndSend = useCallback(
-    async (blob: Blob): Promise<boolean> => {
-      try {
-        const arrayBuffer = await blob.arrayBuffer();
-        const transcript = await speechToText(apiKey, arrayBuffer);
-        debug("[hyo-voice] HF transcript:", JSON.stringify(transcript));
-        if (transcript && transcript.trim()) {
-          onTranscript(transcript);
-          return true;
-        }
-      } catch (err) {
-        console.error("[hyo-voice] HF transcription error:", err);
-        new Notice(
-          `Hyo voice: transcription failed — ${
-            err instanceof Error ? err.message : "unknown error"
-          }`,
-          6000
-        );
-      }
-      return false;
-    },
-    [apiKey, onTranscript]
-  );
-
   // --- Record button handler ---
 
   const handleRecordClick = useCallback(() => {
@@ -266,7 +231,8 @@ export function useVoiceMode({
       return;
     }
     if (voiceState === "idle") {
-      startRecording();
+      // startRecording reports its own failures (a Notice), so nothing to wait for here.
+      void startRecording();
     }
   }, [voiceState, stopRecording, startRecording]);
 
@@ -414,6 +380,8 @@ export function useVoiceMode({
       session: {
         debugLog,
         apiKey: openAiApiKey,
+        // The desktop holds the key, so it signs the WebRTC offer itself.
+        exchangeSdp: directSdpExchange(openAiApiKey),
         voice: gptLiveVoice,
         instructions: buildLiveInstructions(personality, identity, { voiceDescription: gptLiveVoiceDescription, aboutYou }),
         history: buildLiveHistory(messages),
@@ -533,7 +501,7 @@ export function useVoiceMode({
       // unavailable — force single-threaded wasm and point ORT at the bundled
       // .wasm files.
       ort.env.wasm.numThreads = 1;
-      (ort.env.wasm as any).proxy = false;
+      ort.env.wasm.proxy = false;
       ort.env.wasm.wasmPaths = vadAssetBase;
 
       // Smart Turn endpointing — decides "is she actually finished?" so a long
@@ -558,7 +526,7 @@ export function useVoiceMode({
 
       const clearForceTimer = () => {
         if (forceTimerRef.current) {
-          clearTimeout(forceTimerRef.current);
+          window.clearTimeout(forceTimerRef.current);
           forceTimerRef.current = null;
         }
       };
@@ -730,7 +698,7 @@ export function useVoiceMode({
     convActiveRef.current = false;
     setConversationActive(false);
     if (vadTimerRef.current) {
-      clearInterval(vadTimerRef.current);
+      window.clearInterval(vadTimerRef.current);
       vadTimerRef.current = null;
     }
     const v = vadRef.current;
@@ -740,7 +708,7 @@ export function useVoiceMode({
       void v.destroy();
     }
     if (forceTimerRef.current) {
-      clearTimeout(forceTimerRef.current);
+      window.clearTimeout(forceTimerRef.current);
       forceTimerRef.current = null;
     }
     turnSegmentsRef.current = [];
@@ -764,7 +732,7 @@ export function useVoiceMode({
       // Pause: stop listening and cancel any pending auto-send, but KEEP the
       // buffer so she can pick the thought back up when she resumes.
       if (forceTimerRef.current) {
-        clearTimeout(forceTimerRef.current);
+        window.clearTimeout(forceTimerRef.current);
         forceTimerRef.current = null;
       }
       if (v) void v.pause();
@@ -781,14 +749,16 @@ export function useVoiceMode({
 
   // Called from ChatPanel so the loop knows to stay muted while Chad works.
   const setBusy = useCallback((b: boolean) => {
-    if (busyRef.current && !b) busyEndedAtRef.current = performance.now();
     busyRef.current = b;
   }, []);
 
   const togglePause = useCallback(() => {
     if (!audioRef.current) return;
     if (audioRef.current.paused) {
-      audioRef.current.play();
+      audioRef.current.play().catch((err) => {
+        console.error("[hyo-voice] couldn't resume playback:", err);
+        setIsPaused(true);
+      });
       setIsPaused(false);
     } else {
       audioRef.current.pause();
@@ -809,7 +779,12 @@ export function useVoiceMode({
       setIsPaused(false);
     };
     setVoiceState("speaking");
-    audio.play();
+    audio.play().catch((err) => {
+      // It never started, so onended won't come: settle back the same way.
+      console.error("[hyo-voice] couldn't replay the last reply:", err);
+      setVoiceState("idle");
+      setIsPaused(false);
+    });
   }, [currentSpeed]);
 
   const cycleSpeed = useCallback(() => {

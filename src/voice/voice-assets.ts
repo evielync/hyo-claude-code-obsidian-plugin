@@ -90,7 +90,7 @@ export async function ensureVoiceAssets(
       await adapter.writeBinary(localPath, res.arrayBuffer);
     }
     notice.setMessage("Voice is ready.");
-    setTimeout(() => notice.hide(), 2500);
+    window.setTimeout(() => notice.hide(), 2500);
   } catch (err) {
     notice.hide();
     throw err;

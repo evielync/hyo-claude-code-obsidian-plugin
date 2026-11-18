@@ -1,13 +1,24 @@
 import { debug } from "./debug";
 import type { ChildProcess } from "child_process";
-import { Platform } from "obsidian";
-// Desktop-only transport; Node requires deferred so importing this module is
-// mobile-safe (GatewayTransport is used on mobile; this class isn't instantiated there).
-const spawn: typeof import("child_process").spawn = Platform.isMobile ? (undefined as any) : require("child_process").spawn;
-const randomUUID: typeof import("crypto").randomUUID = Platform.isMobile ? (undefined as any) : require("crypto").randomUUID;
-const nodePath: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
+// Desktop-only transport (GatewayTransport is used on mobile; this class isn't
+// instantiated there). Node modules load through the desktop loader when a
+// process is spawned, so importing this module is mobile-safe.
+import { nodeChildProcess, nodeCrypto, nodeFs, nodePath } from "./platform/node";
 import { isNative1M, baseModelId } from "./models";
 import { supportsEffortFlag, supportsReplayFlag, probeCliCapabilities } from "./cli-capabilities";
+
+/**
+ * A content block in a user message (text, image, document…), passed through
+ * to the CLI's stream-json input as the Anthropic Messages API shapes it.
+ */
+export interface UserContentBlock {
+  type: string;
+  [key: string]: unknown;
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
 
 // Current models run 1M context natively and don't accept a "[1m]" suffix —
 // the API doesn't recognize it as a valid variant and silently falls back to
@@ -49,7 +60,12 @@ export interface TransportOptions {
    */
   settingSources?: string;
   settingsPath?: string;
-  onMessage: (msg: any) => void;
+  /**
+   * Every stream-json line the CLI prints, parsed. The shapes are the CLI's
+   * (system, assistant, user, stream_event, control_request, result…) and
+   * are narrowed by the session code that handles them.
+   */
+  onMessage: (msg: unknown) => void;
   onError: (error: string) => void;
   onClose: (code: number | null) => void;
 }
@@ -129,7 +145,7 @@ export class ClaudeTransport {
     const effort = this.options.effort;
     const useEffortFlag = !!effort && supportsEffortFlag(cliPath);
     if (useEffortFlag) {
-      args.push("--effort", effort!);
+      args.push("--effort", effort);
     }
     // Kick off a probe if this CLI hasn't been checked yet, so later spawns in
     // this session can use the flag. Fire-and-forget: the fallback below keeps
@@ -158,20 +174,21 @@ export class ClaudeTransport {
     // ":" joined onto it would corrupt the whole variable there.
     if (process.platform !== "win32") {
       const home = process.env.HOME || "";
+      const path = nodePath();
       env.PATH = [
         "/usr/local/bin",
         "/opt/homebrew/bin",
         "/opt/homebrew/sbin",
-        nodePath.join(home, ".local", "bin"),
-        nodePath.join(home, ".npm-global", "bin"),
-        nodePath.join(home, ".nvm", "versions", "node", "v22.15.0", "bin"),
+        path.join(home, ".local", "bin"),
+        path.join(home, ".npm-global", "bin"),
+        path.join(home, ".nvm", "versions", "node", "v22.15.0", "bin"),
         "/usr/bin",
         "/bin",
         "/usr/sbin",
         "/sbin",
-        nodePath.join(home, ".bun", "bin"),
+        path.join(home, ".bun", "bin"),
         process.env.PATH || "",
-      ].join(nodePath.delimiter);
+      ].join(path.delimiter);
     }
 
     debug("[hyo] Spawning CLI:", cliPath, args.join(" "));
@@ -184,7 +201,7 @@ export class ClaudeTransport {
       useEffortFlag ? "via --effort flag" : "via CLAUDE_CODE_EFFORT_LEVEL"
     );
 
-    this.proc = spawn(cliPath, args, {
+    this.proc = nodeChildProcess().spawn(cliPath, args, {
       cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],
@@ -199,9 +216,9 @@ export class ClaudeTransport {
       for (const line of lines) {
         if (!line.trim()) continue;
         try {
-          const parsed = JSON.parse(line);
+          const parsed: unknown = JSON.parse(line);
 
-          if (parsed.type === "system" && parsed.subtype === "init") {
+          if (isRecord(parsed) && parsed.type === "system" && parsed.subtype === "init") {
             debug("[hyo] CLI ready, session:", parsed.session_id);
           }
 
@@ -209,13 +226,14 @@ export class ClaudeTransport {
           // request_id so concurrent tool calls can't clobber each other.
           // sendPermissionResponse must echo this back — see the note there.
           if (
+            isRecord(parsed) &&
             parsed.type === "control_request" &&
-            parsed.request?.subtype === "can_use_tool"
+            typeof parsed.request_id === "string" &&
+            isRecord(parsed.request) &&
+            parsed.request.subtype === "can_use_tool"
           ) {
-            this.pendingToolInput.set(
-              parsed.request_id,
-              parsed.request.input ?? {},
-            );
+            const input = parsed.request.input;
+            this.pendingToolInput.set(parsed.request_id, isRecord(input) ? input : {});
           }
 
           this.options.onMessage(parsed);
@@ -244,10 +262,10 @@ export class ClaudeTransport {
       // Flush remaining buffer
       if (this.buffer.trim()) {
         try {
-          const parsed = JSON.parse(this.buffer);
+          const parsed: unknown = JSON.parse(this.buffer);
           this.options.onMessage(parsed);
         } catch {
-          // Ignore
+          // A partial last line that isn't JSON carries nothing to deliver.
         }
       }
       this.options.onClose(code);
@@ -259,7 +277,7 @@ export class ClaudeTransport {
    * its command_lifecycle events), so a message sent mid-reply can be
    * followed to the moment Claude takes it in.
    */
-  sendUserMessage(content: string | any[], opts: { uuid?: string } = {}): void {
+  sendUserMessage(content: string | UserContentBlock[], opts: { uuid?: string } = {}): void {
     if (!this.proc?.stdin?.writable) return;
 
     const messageContent =
@@ -351,7 +369,7 @@ export class ClaudeTransport {
    */
   setPermissionMode(mode: string): string | undefined {
     if (!this.proc?.stdin?.writable) return undefined;
-    const request_id = randomUUID();
+    const request_id = nodeCrypto().randomUUID();
     this.proc.stdin.write(JSON.stringify({ type: "control_request", request_id, request: { subtype: "set_permission_mode", mode } }) + "\n");
     return request_id;
   }
@@ -362,7 +380,7 @@ export class ClaudeTransport {
     const msg =
       JSON.stringify({
         type: "control_request",
-        request_id: randomUUID(),
+        request_id: nodeCrypto().randomUUID(),
         request: { subtype: "interrupt" },
       }) + "\n";
 
@@ -377,7 +395,7 @@ export class ClaudeTransport {
       } catch {
         // Process already dead
       }
-      setTimeout(() => {
+      window.setTimeout(() => {
         try {
           if (this.proc && !this.proc.killed) {
             this.proc.kill("SIGKILL");
@@ -401,8 +419,7 @@ export class ClaudeTransport {
 
 export function checkCliExists(cliPath: string): boolean {
   try {
-    const fs = require("fs");
-    return fs.existsSync(cliPath);
+    return nodeFs().existsSync(cliPath);
   } catch {
     return false;
   }

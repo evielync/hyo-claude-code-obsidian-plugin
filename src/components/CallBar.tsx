@@ -33,7 +33,7 @@ export function CallBar({ startedAt, connecting, side, level, working, muted, on
   useEffect(() => {
     if (connecting || !startedAt) return;
     const t = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
+    return () => window.clearInterval(t);
   }, [connecting, startedAt]);
 
   const time = startedAt ? formatCallDuration(now - startedAt) : "";

@@ -230,17 +230,27 @@ export function resumeModel(recorded: string | null | undefined, lastContextToke
  * thread only: a sub-agent's replies run on their own (often smaller) model.
  * Pure: takes the parsed jsonl lines, for the desktop reader and the phone.
  */
-export function transcriptModel(lines: any[]): { model: string | null; contextTokens: number } {
+export function transcriptModel(lines: unknown[]): { model: string | null; contextTokens: number } {
   for (let i = lines.length - 1; i >= 0; i--) {
     const d = lines[i];
-    if (d?.type !== "assistant" || d.isSidechain === true) continue;
-    const id = d.message?.model;
+    if (!isRecord(d) || d.type !== "assistant" || d.isSidechain === true) continue;
+    const message = isRecord(d.message) ? d.message : {};
+    const id = message.model;
     if (typeof id !== "string" || !id.startsWith("claude-")) continue;
-    const u = d.message?.usage || {};
-    const contextTokens = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+    const u = isRecord(message.usage) ? message.usage : {};
+    const contextTokens = tokens(u.input_tokens) + tokens(u.cache_creation_input_tokens) + tokens(u.cache_read_input_tokens);
     return { model: id, contextTokens };
   }
   return { model: null, contextTokens: 0 };
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+/** A usage count from a transcript line; absent (or not a number) counts as none. */
+function tokens(v: unknown): number {
+  return typeof v === "number" ? v : 0;
 }
 
 /** The permission modes a conversation can run in, as both devices name them. */

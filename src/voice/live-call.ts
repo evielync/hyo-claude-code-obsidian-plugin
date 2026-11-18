@@ -251,7 +251,7 @@ export class LiveCall {
   }
 
   private clearStillWorking(): void {
-    if (this.stillTimer) clearTimeout(this.stillTimer);
+    if (this.stillTimer) window.clearTimeout(this.stillTimer);
     this.stillTimer = null;
   }
 
@@ -265,7 +265,7 @@ export class LiveCall {
   }
 
   private flushProgress(): void {
-    if (this.progressTimer) clearTimeout(this.progressTimer);
+    if (this.progressTimer) window.clearTimeout(this.progressTimer);
     this.progressTimer = null;
     const label = this.pendingProgress;
     this.pendingProgress = null;
@@ -345,13 +345,15 @@ export class LiveCall {
     if (this.ended) return;
     this.ended = true;
     this.clearStillWorking();
-    if (this.progressTimer) clearTimeout(this.progressTimer);
+    if (this.progressTimer) window.clearTimeout(this.progressTimer);
     this.progressTimer = null;
     const s = this.session;
     this.session = null;
     try {
       s?.stop();
-    } catch {}
+    } catch {
+      // The session is already gone; the call still ends here.
+    }
     endCall(this.record, reason);
     this.setUi({ status: "off", side: null, level: 0 });
     this.opts.onEnded(callHasContent(this.record) ? this.record : null, reason);

@@ -124,10 +124,10 @@ export function VoiceOrb({ side, level, working, connecting, size = 220 }: Voice
       ctx.stroke();
       ctx.globalAlpha = 1;
 
-      raf = requestAnimationFrame(draw);
+      raf = window.requestAnimationFrame(draw);
     };
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
+    raf = window.requestAnimationFrame(draw);
+    return () => window.cancelAnimationFrame(raf);
   }, [size]);
 
   return (
