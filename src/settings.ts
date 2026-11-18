@@ -8,11 +8,10 @@ import {
   Platform,
   TFile,
   requireApiVersion,
-  setIcon,
-  type ButtonComponent,
   type SettingDefinitionItem,
 } from "obsidian";
-import { FallbackRenderer, controlRows, toDefinitions, type ControlRow, type Layout, type Page, type Row } from "./settings-layout";
+import { FallbackRenderer, arrangeTab, controlRows, toDefinitions, type ControlRow, type Layout, type Page, type Row } from "./settings-layout";
+import { commandsPage } from "./settings-commands";
 import { MAIN_CHAT_AVAILABLE } from "./main-chat";
 // Node built-ins and Electron are desktop-only, loaded where they're used.
 import { electron, nodeFs, nodeOs, nodePath, type ElectronApi } from "./platform/node";
@@ -22,9 +21,8 @@ import type HyoPlugin from "./main";
 import { CUSTOM_VOICE_PREFIX, resolveLiveVoice, type CustomLiveVoice } from "./voice/live-voice";
 export { CUSTOM_VOICE_PREFIX, resolveLiveVoice, type CustomLiveVoice };
 import { MODEL_OPTIONS, EFFORT_OPTIONS, DEFAULT_EFFORT } from "./models";
-import type { Skill } from "./hooks/useSkills";
 import { checkMobileAccess, mobileLogPath } from "./gateway-host";
-import { detectClaude, probeClaude, checkAuth, installClaude, signIn } from "./cli-probe";
+import { detectClaude, checkClaude, installClaude, signIn, type ClaudeStatus } from "./cli-probe";
 import { DEFAULT_VOICE_PERSONALITY } from "./voice/gpt-live";
 import { DICTATION_PROVIDERS, isDictationProvider, type DictationProvider } from "./voice/dictation";
 
@@ -192,7 +190,6 @@ function setStatusKind(el: HTMLElement, kind: StatusKind): void {
 const DOCS_URL = "https://docs.gethyo.co";
 const USER_GUIDE_URL = "https://www.loom.com/share/349eaac59e514142bc47b10469287db0";
 const MOBILE_GUIDE_URL = "https://docs.gethyo.co/mobile/setup/";
-const COMMANDS_GUIDE_URL = "https://docs.gethyo.co/skills/note-commands/";
 
 function openUrl(url: string): void {
   window.open(url, "_blank", "noopener");
@@ -226,13 +223,6 @@ function listAgents(): string[] {
   }
 }
 
-/** Style a button as destructive: `setDestructive` from 1.13, Obsidian's warning class before it. */
-function markDestructive(b: ButtonComponent): ButtonComponent {
-  if (requireApiVersion("1.13.0")) return b.setDestructive();
-  b.buttonEl.addClass("mod-warning");
-  return b;
-}
-
 /**
  * Settings → Hyo. Every row is described once, in `layout()`
  * (settings-layout.ts): Obsidian 1.13+ draws it from getSettingDefinitions()
@@ -243,6 +233,12 @@ export class HyoSettingTab extends PluginSettingTab {
   plugin: HyoPlugin;
   private controls = new Map<string, ControlRow>();
   private fallback: FallbackRenderer;
+  /**
+   * Setup's check of Claude Code, run once per visit to the tab (it starts
+   * Claude twice, so not on every redraw) and again after Auto-detect,
+   * Install or Sign in.
+   */
+  private claudeCheck: { path: string; status: Promise<ClaudeStatus> } | null = null;
 
   constructor(app: App, plugin: HyoPlugin) {
     super(app, plugin);
@@ -268,13 +264,17 @@ export class HyoSettingTab extends PluginSettingTab {
     if (row) await this.applyControl(row, value);
   }
 
-  /** Obsidian 1.7.2 to 1.12. From 1.13 the definitions above are drawn instead. */
   /** Obsidian before 1.13 calls this to draw the tab; 1.13+ uses getSettingDefinitions. */
   display(): void {
     this.drawFallback();
   }
 
-  /** The tab as drawn for Obsidian before 1.13 (the tab bar and its pages). */
+  hide(): void {
+    super.hide();
+    this.claudeCheck = null;
+  }
+
+  /** The tab as drawn for Obsidian before 1.13. */
   private drawFallback(): void {
     this.fallback.render(this.containerEl, this.buildLayout());
   }
@@ -342,34 +342,45 @@ export class HyoSettingTab extends PluginSettingTab {
   // ---- The layout -------------------------------------------------------------
 
   private layout(): Layout {
-    // The phone shows what applies there; Setup, Commands and Advanced are
-    // desktop concerns (installing Claude, note-header buttons, CLI paths).
-    const pages: Page[] = Platform.isMobile
-      ? [this.generalPage(), this.voicePage(), this.mobilePage()]
-      : [this.setupPage(), this.generalPage(), this.voicePage(), this.mobilePage(), this.commandsPage(), this.advancedPage()];
-    return {
-      top: [
-        {
-          items: [
-            {
-              kind: "custom",
-              name: "Documentation",
-              desc: "How every part of Hyo works, and a video walk-through.",
-              aliases: ["help", "docs", "guide"],
-              build: (s) => {
-                s.addButton((b) => b.setButtonText("Read the docs").onClick(() => openUrl(DOCS_URL)));
-                s.addButton((b) => b.setButtonText("Watch the user guide").onClick(() => openUrl(USER_GUIDE_URL)));
-              },
+    return arrangeTab(
+      {
+        documentation: () => [
+          {
+            kind: "custom",
+            name: "Documentation",
+            desc: "How every part of Hyo works, and a video walk-through.",
+            aliases: ["help", "docs", "guide"],
+            build: (s) => {
+              s.addButton((b) => b.setButtonText("Read the docs").onClick(() => openUrl(DOCS_URL)));
+              s.addButton((b) => b.setButtonText("Watch the user guide").onClick(() => openUrl(USER_GUIDE_URL)));
             },
-          ],
-        },
-      ],
-      pages,
-    };
+          },
+        ],
+        setup: () => this.setupRows(),
+        general: () => this.generalRows(),
+        customModels: () => this.customModelRows(),
+        voice: () => this.voicePage(),
+        mobile: () => this.mobilePage(),
+        commands: () =>
+          commandsPage({
+            app: () => this.app,
+            commands: () => this.plugin.settings.commands,
+            noteTypes: () => this.plugin.commands.getNoteTypes(),
+            skills: () => this.plugin.commands.getSkills(),
+            skillMissing: (skill, skills) => this.plugin.commands.skillMissing(skill, skills),
+            save: () => this.plugin.saveSettings(),
+            rebuild: () => this.rebuild(),
+            confirm: (message, onConfirm) => new ConfirmDeleteModal(this.app, message, onConfirm).open(),
+            openUrl,
+          }),
+        advanced: () => this.advancedPage(),
+      },
+      Platform.isMobile
+    );
   }
 
   // ---- General: everyday defaults for new conversations ---------------------
-  private generalPage(): Page {
+  private generalRows(): Row[] {
     const s = this.plugin.settings;
     const settings = () => this.plugin.settings;
 
@@ -493,10 +504,13 @@ export class HyoSettingTab extends PluginSettingTab {
         },
       }
     );
+    return rows;
+  }
 
-    // Custom models: added from the picker's "Custom model ID" field, removed
-    // here, next to the Model default they feed.
-    const customModels: Row[] = s.customModels.map((id) => ({
+  // Custom models: added from the picker's "Custom model ID" field, removed
+  // here, just below the Model default they feed.
+  private customModelRows(): Row[] {
+    return this.plugin.settings.customModels.map((id) => ({
       kind: "custom",
       name: id,
       desc: "Added from the model picker. Remove it here if you no longer want it.",
@@ -517,17 +531,6 @@ export class HyoSettingTab extends PluginSettingTab {
         );
       },
     }));
-
-    return {
-      kind: "page",
-      id: "general",
-      name: "General",
-      desc: "Everyday defaults for new conversations.",
-      sections: [
-        { items: rows },
-        { heading: "Custom models", items: customModels, visible: () => this.plugin.settings.customModels.length > 0 },
-      ],
-    };
   }
 
   // ---- Voice ----------------------------------------------------------------
@@ -554,7 +557,7 @@ export class HyoSettingTab extends PluginSettingTab {
       {
         kind: "custom",
         name: "OpenAI API key",
-        desc: "From platform.openai.com → API keys. Calls are billed to this key at OpenAI's per-minute rate. Calls from your phone use this key too, through your desktop. It can also transcribe dictation (below).",
+        desc: "A voice call is a real back-and-forth with OpenAI's GPT-Live: it talks with you and hands anything that needs your files or real work to Claude. Get a key from platform.openai.com → API keys. Calls are billed to this key at OpenAI's per-minute rate. Calls from your phone use this key too, through your desktop. It can also transcribe dictation (below).",
         aliases: ["voice call", "gpt-live"],
         build: (setting) => this.buildKeyInput(setting, "sk-...", () => settings().openAiApiKey, (v) => (settings().openAiApiKey = v)),
       },
@@ -633,7 +636,7 @@ export class HyoSettingTab extends PluginSettingTab {
       kind: "page",
       id: "voice",
       name: "Voice",
-      desc: "A voice call is a real back-and-forth conversation with GPT-Live. The voice talks with you and hands anything that needs your files or real work to Claude, then tells you what came back. Paste an OpenAI API key and pick a voice.",
+      desc: "Talk to your agent on a voice call, and choose who transcribes your dictation.",
       sections: [{ items: calls }, { heading: "Dictation", items: dictation }],
     };
   }
@@ -758,7 +761,7 @@ export class HyoSettingTab extends PluginSettingTab {
       kind: "page",
       id: "advanced",
       name: "Advanced",
-      desc: "You shouldn't need these unless something isn't working or your setup is unusual.",
+      desc: "Claude's working folder and the cap on response length. Rarely needed.",
       sections: [
         {
           items: [
@@ -838,92 +841,84 @@ export class HyoSettingTab extends PluginSettingTab {
   // actually running Claude — never by guessing from a file on disk — and does
   // its work headlessly: no terminal window ever shows, only a browser tab for
   // approving sign-in.
-  private setupPage(): Page {
+  private setupRows(): Row[] {
     const settings = () => this.plugin.settings;
-    return {
-      kind: "page",
-      id: "setup",
-      name: "Setup",
-      desc: "Hyo runs on Claude Code. This checks it's installed and signed in — and sets it up for you if not.",
-      sections: [
-        {
-          items: [
-            {
-              kind: "custom",
-              name: "Claude Code",
-              desc: "Whether Claude is installed, working and signed in on this machine.",
-              aliases: ["install", "sign in", "auto-detect"],
-              build: (setting) => this.buildClaudeStatus(setting),
-            },
-            {
-              kind: "custom",
-              name: "Install Claude Code",
-              desc: "Not installed yet? Hyo installs it for you in the background.",
-              build: (setting) => {
-                setting.addButton((b) =>
-                  b.setButtonText("Install Claude").onClick(async () => {
-                    b.setDisabled(true);
-                    const notice = new Notice("Installing Claude…", 0);
-                    const r = await installClaude((msg) => notice.setMessage(msg));
-                    notice.hide();
-                    b.setDisabled(false);
-                    if (r.ok) {
-                      const found = detectClaude();
-                      if (found.path) {
-                        settings().cliPath = found.path;
-                        await this.plugin.saveSettings();
-                      }
-                      new Notice("✓ Claude installed. Now sign in.");
-                    } else {
-                      new Notice(`Install didn't finish: ${r.error}`);
-                    }
-                    this.rebuild();
-                  })
-                );
-              },
-            },
-            {
-              kind: "custom",
-              name: "Sign in to Claude",
-              desc: "Opens your browser to approve. No terminal, nothing to copy.",
-              build: (setting) => {
-                setting.addButton((b) =>
-                  b.setButtonText("Sign in to Claude").onClick(async () => {
-                    const p = settings().cliPath;
-                    if (!p) {
-                      new Notice("Install or auto-detect Claude first.");
-                      return;
-                    }
-                    b.setDisabled(true);
-                    const notice = new Notice("Starting sign-in…", 0);
-                    const r = await signIn(p, (msg) => notice.setMessage(msg));
-                    notice.hide();
-                    b.setDisabled(false);
-                    new Notice(r.ok ? "✓ Signed in." : `Sign-in didn't finish: ${r.error}`);
-                    this.rebuild();
-                  })
-                );
-              },
-            },
-            {
-              kind: "custom",
-              name: "Claude Code path",
-              desc: "Set automatically by Auto-detect. Only change this if you know you need a specific install.",
-              aliases: ["cli path"],
-              build: (setting) =>
-                this.buildPathInput(setting, {
-                  placeholder: "/usr/local/bin/claude",
-                  get: () => settings().cliPath,
-                  set: (v) => (settings().cliPath = v),
-                  browse: "openFile",
-                  browseFrom: () => nodePath().dirname(settings().cliPath || "/usr/local/bin"),
-                  label: "Browse…",
-                }),
-            },
-          ],
+    return [
+      {
+        kind: "custom",
+        name: "Claude Code",
+        desc: "Hyo runs on Claude Code. This shows whether it's installed, working and signed in on this computer, and sets it up for you if not.",
+        aliases: ["install", "sign in", "auto-detect"],
+        build: (setting) => this.buildClaudeStatus(setting),
+      },
+      {
+        kind: "custom",
+        name: "Install Claude Code",
+        desc: "Not installed yet? Hyo installs it for you in the background.",
+        build: (setting) => {
+          setting.addButton((b) =>
+            b.setButtonText("Install Claude").onClick(async () => {
+              b.setDisabled(true);
+              const notice = new Notice("Installing Claude…", 0);
+              const r = await installClaude((msg) => notice.setMessage(msg));
+              notice.hide();
+              b.setDisabled(false);
+              if (r.ok) {
+                const found = detectClaude();
+                if (found.path) {
+                  settings().cliPath = found.path;
+                  await this.plugin.saveSettings();
+                }
+                new Notice("✓ Claude installed. Now sign in.");
+              } else {
+                new Notice(`Install didn't finish: ${r.error}`);
+              }
+              this.claudeCheck = null;
+              this.rebuild();
+            })
+          );
         },
-      ],
-    };
+      },
+      {
+        kind: "custom",
+        name: "Sign in to Claude",
+        desc: "Opens your browser to approve. No terminal, nothing to copy.",
+        build: (setting) => {
+          setting.addButton((b) =>
+            b.setButtonText("Sign in to Claude").onClick(async () => {
+              const p = settings().cliPath;
+              if (!p) {
+                new Notice("Install or auto-detect Claude first.");
+                return;
+              }
+              b.setDisabled(true);
+              const notice = new Notice("Starting sign-in…", 0);
+              const r = await signIn(p, (msg) => notice.setMessage(msg));
+              notice.hide();
+              b.setDisabled(false);
+              new Notice(r.ok ? "✓ Signed in." : `Sign-in didn't finish: ${r.error}`);
+              this.claudeCheck = null;
+              this.rebuild();
+            })
+          );
+        },
+      },
+      {
+        kind: "custom",
+        name: "Claude Code path",
+        desc: "Set automatically by Auto-detect. Only change this if you know you need a specific install.",
+        aliases: ["cli path"],
+        build: (setting) =>
+          this.buildPathInput(setting, {
+            placeholder: "/usr/local/bin/claude",
+            get: () => settings().cliPath,
+            set: (v) => (settings().cliPath = v),
+            browse: "openFile",
+            browseFrom: () => nodePath().dirname(settings().cliPath || "/usr/local/bin"),
+            label: "Browse…",
+          }),
+      },
+    ];
   }
 
   private buildClaudeStatus(setting: Setting): void {
@@ -933,25 +928,28 @@ export class HyoSettingTab extends PluginSettingTab {
       setStatusKind(statusEl, kind);
     };
 
-    // Reflect reality on open: run Claude, check sign-in. No file-existence guess.
+    // Reflect reality: run Claude, check sign-in. No file-existence guess.
+    // It runs in the background, so opening the tab never waits on it.
     const p = this.plugin.settings.cliPath;
     if (!p) {
       setStatus("muted", "Not set up yet — click Auto-detect, or Install Claude below.");
     } else {
-      const probe = probeClaude(p);
-      if (!probe.works) {
-        setStatus("bad", "✗ Claude isn't running from the saved path — Auto-detect or Install below.");
-      } else {
-        const auth = checkAuth(p);
-        if (auth.loggedIn === false) setStatus("warn", `✓ Claude ${probe.version} — but not signed in. Sign in below.`);
-        else if (auth.loggedIn && auth.email) setStatus("ok", `✓ Ready — Claude ${probe.version}, signed in as ${auth.email}.`);
-        else setStatus("ok", `✓ Ready — Claude ${probe.version}.`);
-      }
+      setStatus("muted", "Checking Claude…");
+      if (this.claudeCheck?.path !== p) this.claudeCheck = { path: p, status: checkClaude(p) };
+      this.claudeCheck.status
+        .then(({ probe, auth }) => {
+          if (!probe.works) setStatus("bad", "✗ Claude isn't running from the saved path — Auto-detect or Install below.");
+          else if (auth.loggedIn === false) setStatus("warn", `✓ Claude ${probe.version} — but not signed in. Sign in below.`);
+          else if (auth.loggedIn && auth.email) setStatus("ok", `✓ Ready — Claude ${probe.version}, signed in as ${auth.email}.`);
+          else setStatus("ok", `✓ Ready — Claude ${probe.version}.`);
+        })
+        .catch((e: unknown) => setStatus("bad", `✗ Couldn't check Claude: ${errorMessage(e)}`));
     }
 
     setting.addButton((b) =>
       b.setButtonText("Auto-detect").onClick(async () => {
         setStatus("muted", "Looking for Claude…");
+        this.claudeCheck = null;
         const result = detectClaude();
         if (result.path) {
           this.plugin.settings.cliPath = result.path;
@@ -970,272 +968,6 @@ export class HyoSettingTab extends PluginSettingTab {
         }
         this.rebuild();
       })
-    );
-  }
-
-  // ---- Commands: note-header buttons ------------------------------------------
-  // Ported from the standalone AI Commands plugin. A note's `type` frontmatter
-  // drives which commands show. Each configured note type is its own page:
-  // its commands, an add button, and — behind a confirmation — the only place
-  // the type can be removed.
-  private commandsPage(): Page {
-    const configured = Object.keys(this.plugin.settings.commands).sort();
-    // Read once per render, and only when a row needs them.
-    let skills: Skill[] | null = null;
-    const getSkills = () => (skills ??= this.plugin.commands.getSkills());
-
-    const typePages: Page[] = configured.map((type) => this.commandTypePage(type, getSkills));
-
-    return {
-      kind: "page",
-      id: "commands",
-      name: "Commands",
-      desc: "Attach a skill to a note type in your vault and run one-click commands. For example: a Summarise command on your meeting notes.",
-      sections: [
-        {
-          items: [
-            {
-              kind: "custom",
-              name: "How commands work",
-              desc: "A short guide to note commands.",
-              build: (setting) => {
-                setting.addButton((b) => b.setButtonText("Open the guide").onClick(() => openUrl(COMMANDS_GUIDE_URL)));
-              },
-            },
-            {
-              kind: "custom",
-              name: "Add a note type",
-              desc: "Pick a note type found in your vault to add commands for.",
-              build: (setting) => this.buildAddNoteType(setting),
-            },
-          ],
-        },
-        { heading: "Note types", items: typePages, visible: () => Object.keys(this.plugin.settings.commands).length > 0 },
-      ],
-    };
-  }
-
-  // Adding a type opens its page straight away (Obsidian 1.13+ lists it
-  // under Note types, where it's opened from).
-  private buildAddNoteType(setting: Setting): void {
-    const commands = this.plugin.settings.commands;
-    const available = this.plugin.commands.getNoteTypes().filter((t) => !commands[t]);
-    if (!available.length) {
-      setting.setDesc(
-        Object.keys(commands).length
-          ? 'Note types come from the "type" property on your notes. Every type in this vault already has commands set up — give a note a new type and it will appear here to choose.'
-          : 'Note types come from the "type" property on your notes. Give a note one in its frontmatter and it will appear here to choose.'
-      );
-      return;
-    }
-    let newType = available[0];
-    setting
-      .addDropdown((d) => {
-        for (const t of available) d.addOption(t, t);
-        d.setValue(newType).onChange((v) => (newType = v));
-      })
-      .addButton((b) =>
-        b
-          .setButtonText("Add")
-          .setCta()
-          .onClick(async () => {
-            if (!newType || this.plugin.settings.commands[newType]) return;
-            this.plugin.settings.commands[newType] = [];
-            await this.plugin.saveSettings();
-            this.fallback.openNested(`type:${newType}`);
-            this.rebuild();
-          })
-      );
-  }
-
-  private commandTypePage(type: string, getSkills: () => Skill[]): Page {
-    const commands = this.plugin.settings.commands[type];
-    const count = commands.length === 0 ? "No commands yet" : commands.length === 1 ? "1 command" : `${commands.length} commands`;
-    const rows: Row[] = [
-      {
-        kind: "custom",
-        name: type,
-        desc: "Every note with this type gets these commands in its header.",
-        build: (setting) => {
-          setting.settingEl.addClass("hyo-commands-heading");
-          setting.addButton((b) =>
-            b
-              .setButtonText("Add command")
-              .setCta()
-              .onClick(async () => {
-                const skills = getSkills();
-                commands.push({ skill: skills.length ? skills[0].name : "", label: "", extra: "" });
-                await this.plugin.saveSettings();
-                this.rebuild();
-              })
-          );
-        },
-      },
-    ];
-    if (commands.length === 0) {
-      rows.push({
-        kind: "custom",
-        name: "No commands yet",
-        desc: "Add one with the button above.",
-        searchable: false,
-        build: (setting) => {
-          setting.settingEl.addClass("hyo-commands-empty");
-        },
-      });
-    } else {
-      // Column headers, sized exactly like the row controls below so the
-      // whole thing reads as one table.
-      rows.push({
-        kind: "custom",
-        name: "Commands",
-        searchable: false,
-        build: (setting) => {
-          setting.settingEl.empty();
-          setting.settingEl.addClass("hyo-commands-columns");
-          setting.settingEl.createSpan({ cls: "hyo-commands-col-grip" });
-          setting.settingEl.createSpan({ text: "Name", cls: "hyo-commands-col-name" });
-          setting.settingEl.createSpan({ text: "Skill it runs", cls: "hyo-commands-col-skill" });
-          setting.settingEl.createSpan({ cls: "hyo-commands-col-action" });
-        },
-      });
-      commands.forEach((cmd, i) =>
-        rows.push({
-          kind: "custom",
-          name: cmd.label || "Untitled command",
-          desc: `Runs the ${cmd.skill || "(no skill)"} skill on "${type}" notes`,
-          build: (setting) => this.buildCommandRow(setting, commands, cmd, i, getSkills()),
-        })
-      );
-    }
-    // Removing a type's commands takes all of them at once — never one stray
-    // click. The wording stays clearly about commands: nothing here touches
-    // the user's notes or their type property.
-    rows.push({
-      kind: "custom",
-      name: "Remove these commands",
-      desc: `Stops showing command buttons on "${type}" notes. Your notes and their type stay exactly as they are.`,
-      build: (setting) => {
-        setting.settingEl.addClass("hyo-setting-danger");
-        setting.addButton((b) =>
-          markDestructive(b)
-            .setButtonText("Remove")
-            .onClick(() => {
-              const what =
-                commands.length === 0
-                  ? `Remove "${type}" from this list?`
-                  : `Remove ${commands.length === 1 ? "the 1 command" : `all ${commands.length} commands`} from "${type}" notes? This can't be undone.`;
-              new ConfirmDeleteModal(this.app, what, async () => {
-                delete this.plugin.settings.commands[type];
-                await this.plugin.saveSettings();
-                this.fallback.openNested(null);
-                this.rebuild();
-              }).open();
-            })
-        );
-      },
-    });
-    return { kind: "page", id: `type:${type}`, name: type, desc: count, back: "All note types", sections: [{ items: rows }] };
-  }
-
-  // One command: drag grip, name, the skill it runs, delete.
-  private buildCommandRow(
-    row: Setting,
-    commands: { skill: string; label?: string; extra?: string }[],
-    cmd: { skill: string; label?: string; extra?: string },
-    i: number,
-    skills: Skill[],
-  ): void {
-    // The row's built-in name column would only duplicate the label input —
-    // and crush it to a couple of characters. Remove it and give the whole
-    // row to the controls.
-    row.infoEl.remove();
-    row.settingEl.addClass("hyo-command-row");
-
-    // Drag to reorder — same interaction as the chat tabs. The grip is the
-    // drag surface (dragging from an input would fight text selection).
-    const grip = row.controlEl.createDiv({ cls: "hyo-command-grip" });
-    setIcon(grip, "grip-vertical");
-    grip.setAttribute("aria-label", "Drag to reorder");
-    grip.addEventListener("mousedown", () => (row.settingEl.draggable = true));
-    grip.addEventListener("mouseup", () => (row.settingEl.draggable = false));
-    row.settingEl.addEventListener("dragstart", (e: DragEvent) => {
-      e.dataTransfer?.setData("text/plain", String(i));
-      if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-      row.settingEl.addClass("is-dragging");
-    });
-    // The drop indicator is its own element laid over the row's top edge —
-    // a shadow or border would follow the card's rounded corners and read
-    // as a curve rather than a line.
-    const dropLine = row.settingEl.createDiv({ cls: "hyo-command-dropline" });
-    row.settingEl.addEventListener("dragend", () => {
-      row.settingEl.draggable = false;
-      row.settingEl.removeClass("is-dragging");
-      dropLine.removeClass("is-active");
-    });
-    row.settingEl.addEventListener("dragover", (e: DragEvent) => {
-      e.preventDefault();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-      dropLine.addClass("is-active");
-    });
-    row.settingEl.addEventListener("dragleave", () => {
-      dropLine.removeClass("is-active");
-    });
-    row.settingEl.addEventListener("drop", (e: DragEvent) => {
-      e.preventDefault();
-      dropLine.removeClass("is-active");
-      const from = parseInt(e.dataTransfer?.getData("text/plain") ?? "", 10);
-      if (isNaN(from) || from === i) return;
-      const [moved] = commands.splice(from, 1);
-      commands.splice(i, 0, moved);
-      this.plugin
-        .saveSettings()
-        .then(() => this.rebuild())
-        .catch((err: unknown) => console.error("[hyo] Couldn't save the new command order:", err));
-    });
-
-    row.addText((text) => {
-      text
-        .setPlaceholder("Command name")
-        .setValue(cmd.label || "")
-        .onChange(async (v) => {
-          cmd.label = v;
-          await this.plugin.saveSettings();
-        });
-      // Fixed column widths, not flex-to-content: every row lines up with
-      // the headers and each other regardless of how long a skill name is.
-      text.inputEl.addClass("hyo-command-label");
-    });
-    row.addDropdown((dropdown) => {
-      for (const sk of skills) dropdown.addOption(sk.name, sk.name);
-      const missing = this.plugin.commands.skillMissing(cmd.skill, skills);
-      if (cmd.skill && !skills.find((sk) => sk.name === cmd.skill)) {
-        dropdown.addOption(cmd.skill, `${cmd.skill} (not installed)`);
-      }
-      dropdown.setValue(cmd.skill || skills[0]?.name || "");
-      // A command pointing at a skill that isn't installed does nothing when
-      // clicked, so it has to stand out here, not just in the option text.
-      if (missing) {
-        dropdown.selectEl.addClass("is-missing");
-        dropdown.selectEl.title = `"${cmd.skill}" isn't installed. Pick the skill this command should run.`;
-      }
-      dropdown.onChange(async (v) => {
-        cmd.skill = v;
-        await this.plugin.saveSettings();
-        this.rebuild();
-      });
-      // (Legacy `extra` instructions from the standalone plugin still fire
-      // with the command — there's just no editing UI for them anymore.)
-      dropdown.selectEl.addClass("hyo-command-skill");
-    });
-    row.addExtraButton((b) =>
-      b
-        .setIcon("trash-2")
-        .setTooltip("Delete command")
-        .onClick(async () => {
-          commands.splice(i, 1);
-          await this.plugin.saveSettings();
-          this.rebuild();
-        })
     );
   }
 
@@ -1353,7 +1085,7 @@ export class HyoSettingTab extends PluginSettingTab {
       name: "Mobile",
       desc: Platform.isMobile
         ? "Connect this phone to Hyo on your Mac."
-        : "Set up Hyo to work on your mobile devices, so you can talk to your agent from anywhere. This involves setting up a mobile gateway on your desktop that the mobile can connect to.",
+        : "Talk to your agent from your phone, through a gateway on this computer.",
       sections: [{ items: rows }],
     };
   }

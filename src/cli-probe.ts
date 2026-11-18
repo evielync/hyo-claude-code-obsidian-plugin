@@ -142,12 +142,9 @@ export function probeClaude(path: string): ClaudeCandidate {
   }
 }
 
-/** Ask Claude whether it's signed in. Returns loggedIn: undefined if we can't tell. */
-export function checkAuth(cliPath: string): AuthStatus {
-  const cp = childProcess();
-  if (!cp || !cliPath) return {};
+/** What `claude auth status` printed, read as JSON. Empty when it isn't. */
+function parseAuth(out: string): AuthStatus {
   try {
-    const out = cp.execSync(`"${cliPath}" auth status`, { encoding: "utf8", timeout: 8000 });
     const json: unknown = JSON.parse(out);
     if (typeof json !== "object" || json === null) return {};
     const { loggedIn, email, subscriptionType } = json as Record<string, unknown>;
@@ -157,7 +154,56 @@ export function checkAuth(cliPath: string): AuthStatus {
       subscriptionType: typeof subscriptionType === "string" ? subscriptionType : undefined,
     };
   } catch {
+    // Not JSON: we can't tell.
     return {};
+  }
+}
+
+/** Ask Claude whether it's signed in. Returns loggedIn: undefined if we can't tell. */
+export function checkAuth(cliPath: string): AuthStatus {
+  const cp = childProcess();
+  if (!cp || !cliPath) return {};
+  try {
+    return parseAuth(cp.execSync(`"${cliPath}" auth status`, { encoding: "utf8", timeout: 8000 }));
+  } catch {
+    return {};
+  }
+}
+
+/** Run a command in the background; resolves to what it printed. */
+function runInBackground(cmd: string, timeout: number): Promise<string> {
+  const cp = childProcess();
+  if (!cp) return Promise.reject(new Error("not available on mobile"));
+  return new Promise((resolve, reject) => {
+    cp.exec(cmd, { encoding: "utf8", timeout }, (err, stdout, stderr) => {
+      if (err) reject(new Error(stderr.split(/\r?\n/)[0] || err.message));
+      else resolve(stdout);
+    });
+  });
+}
+
+export interface ClaudeStatus {
+  probe: ClaudeCandidate;
+  auth: AuthStatus;
+}
+
+/**
+ * Whether the Claude at `path` runs and is signed in: the same answer as
+ * probeClaude and checkAuth together, without holding up Obsidian meanwhile.
+ */
+export async function checkClaude(path: string): Promise<ClaudeStatus> {
+  let probe: ClaudeCandidate;
+  try {
+    const out = (await runInBackground(`"${path}" --version`, 8000)).trim();
+    probe = { path, works: true, version: out || "unknown version" };
+  } catch (e) {
+    probe = { path, works: false, error: (e instanceof Error && e.message) || "could not run" };
+  }
+  if (!probe.works) return { probe, auth: {} };
+  try {
+    return { probe, auth: parseAuth(await runInBackground(`"${path}" auth status`, 8000)) };
+  } catch {
+    return { probe, auth: {} };
   }
 }
 

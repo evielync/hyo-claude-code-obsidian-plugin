@@ -11,6 +11,12 @@ export const MarkdownRenderer = { render: async () => {}, renderMarkdown: async 
 export function setIcon() {}
 export class Modal {}
 export class Setting {}
+export abstract class AbstractInputSuggest<T> {
+  protected abstract getSuggestions(query: string): T[];
+}
+export function requireApiVersion(): boolean {
+  return true;
+}
 
 // Network calls aren't made in tests; anything that reaches one fails loudly.
 export async function requestUrl(): Promise<never> {
