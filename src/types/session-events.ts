@@ -307,6 +307,23 @@ export function allowedPrompts(input: ToolInput | undefined): { tool: string; pr
   return a.filter((p): p is { tool: string; prompt: string } => isRecord(p) && typeof p.tool === "string" && typeof p.prompt === "string");
 }
 
+/** The fields of ToolInput that Hyo shows, and so must really be strings. */
+const SHOWN_TEXT_FIELDS = ["file_path", "pattern", "command", "description", "content", "skill", "name"] as const;
+
+/**
+ * Read a tool's raw input (from a transcript or the stream) as a ToolInput.
+ * A field Hyo shows that isn't a string is dropped rather than trusted, so
+ * the type's promise holds; every other field is kept as it came.
+ */
+export function toToolInput(raw: unknown): ToolInput {
+  if (!isRecord(raw) || Array.isArray(raw)) return {};
+  const input: ToolInput = { ...raw };
+  for (const key of SHOWN_TEXT_FIELDS) {
+    if (key in input && typeof input[key] !== "string") delete input[key];
+  }
+  return input;
+}
+
 /** A string field of a tool's input, if it's there and not empty. */
 export function inputText(input: ToolInput | undefined, key: string): string | undefined {
   const v = input?.[key];

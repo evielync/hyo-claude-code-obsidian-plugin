@@ -25,6 +25,7 @@
 
 import type { ToolCallData, OrderedBlock } from "./hooks/useChatEngine";
 import { asObject, str } from "./types/json";
+import { toToolInput } from "./types/session-events";
 import { blockType, contentOf, isBlockList, readBlock, type UserRecord } from "./types/claude-session";
 
 export interface StreamState {
@@ -185,7 +186,7 @@ export function processContentBlocks(contentArr: unknown, ss: StreamState, sourc
       const tool: ToolCallData = {
         id: block.id,
         name: block.name,
-        input: block.input,
+        input: toToolInput(block.input),
         result: null,
       };
       if (!ss.toolCalls.find((t) => t.id === tool.id)) {

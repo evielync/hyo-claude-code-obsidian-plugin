@@ -8,6 +8,7 @@ import type * as fsTypes from "fs"; // type-only (erased at build) for annotatio
 // module also loads on mobile (where only the pure parsing is used).
 import { nodeFs, nodeOs, nodePath } from "./platform/node";
 import { asObject, errorCode, isObject, str } from "./types/json";
+import { toToolInput, type ToolInput } from "./types/session-events";
 import { blockTexts, blockType, contentOf, isBlockList, messageOf, readBlocks, type TextBlock } from "./types/claude-session";
 
 export interface PastSession {
@@ -577,7 +578,7 @@ export interface HistoryToolCall {
   id: string;
   name: string;
   /** The tool's arguments, as Claude wrote them. */
-  input: unknown;
+  input: ToolInput;
   result: string | null;
 }
 
@@ -809,7 +810,7 @@ export function parseSessionEntries(entries: unknown[]): HistoryMessage[] {
               toolCalls.push({
                 id: block.id,
                 name: block.name,
-                input: block.input,
+                input: toToolInput(block.input),
                 result: null,
               });
               orderedBlocks.push({ type: "tool", toolId: block.id, turnIndex });

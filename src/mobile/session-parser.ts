@@ -12,6 +12,7 @@ import type { VoiceCallRecord } from "../voice/voice-call";
 import { transcriptModel, resumeModel } from "../models";
 import type { HistoryBlock, HistoryToolCall } from "../session-parser";
 import { asObject, str } from "../types/json";
+import { toToolInput } from "../types/session-events";
 import { blockTexts, blockType, contentOf, isBlockList, messageOf, readBlocks } from "../types/claude-session";
 
 export interface PastSession {
@@ -278,7 +279,7 @@ export function parseSessionLines(lines: unknown[]): HistoryMessage[] {
             toolCalls.push({
               id: block.id,
               name: block.name,
-              input: block.input,
+              input: toToolInput(block.input),
               result: null,
             });
             orderedBlocks.push({ type: "tool", toolId: block.id, turnIndex });

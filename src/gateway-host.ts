@@ -50,6 +50,7 @@ import { Platform, Notice, requestUrl } from "obsidian";
 import { debug } from "./debug";
 import { nodeChildProcess, nodeCrypto, nodeFs, nodeNet, nodeOs, nodePath } from "./platform/node";
 import { errorMessage, field, isRecord, isVoiceCallRecord, str } from "./types/gateway-json";
+import type { ToolInput } from "./types/session-events";
 import type { RepairResult } from "./session-repair";
 import type { MetaEntry } from "./voice/voice-call";
 import { readState, type ReadState } from "./read-state";
@@ -445,9 +446,8 @@ function shorten<T>(text: T, max: number): T | string {
   return text.slice(0, max) + "\n… (shortened for your phone; the full text is on your Mac)";
 }
 
-/** A tool call's input (whatever the tool took) with its long strings shortened. */
-function shortenInput(input: unknown): unknown {
-  if (!input || typeof input !== "object") return input;
+/** A tool call's input with its long strings shortened. */
+function shortenInput(input: ToolInput): ToolInput {
   let size = 0;
   try {
     size = JSON.stringify(input).length;
@@ -455,10 +455,9 @@ function shortenInput(input: unknown): unknown {
     return {};
   }
   if (size <= PHONE_TEXT_MAX * 2) return input;
-  const short = (v: unknown): unknown => (typeof v === "string" ? shorten(v, PHONE_TEXT_MAX) : v);
-  if (Array.isArray(input)) return input.map(short);
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(input)) out[k] = short(v);
+  // Strings stay strings (only shorter), so the result is still a ToolInput.
+  const out: ToolInput = {};
+  for (const [k, v] of Object.entries(input)) out[k] = typeof v === "string" ? shorten(v, PHONE_TEXT_MAX) : v;
   return out;
 }
 
