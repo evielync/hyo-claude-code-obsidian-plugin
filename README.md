@@ -55,7 +55,7 @@ Click **Add Plugin**.
 Go to Settings → Community Plugins, find **Hyo Claude Code Agent**, and enable it.
 
 **Step 4: Open Hyo**
-Press `Cmd+Shift+H` (Mac) or `Ctrl+Shift+H` (Windows). If Claude Code isn't installed yet, the plugin will show you exactly how to set it up.
+Click the chat icon in the ribbon, or run **Hyo Claude Code Agent: Open chat panel** from the command palette. To open it with a shortcut, assign one in Settings → Hotkeys. If Claude Code isn't installed yet, the plugin will show you exactly how to set it up.
 
 ---
 
@@ -67,15 +67,31 @@ If your Claude project lives in a different folder, you can point Hyo there: Set
 
 ---
 
+## What Hyo accesses, and why
+
+Hyo is a front end for the Claude Code CLI, which runs on your computer. That's why, on desktop, it does things most Obsidian plugins don't. Everything below happens only in the desktop app. On a phone or tablet, Hyo talks to your own computer (see Mobile access) and touches nothing else on the device.
+
+- **Runs programs (`child_process`).** Hyo starts the `claude` CLI and talks to it over standard input and output. It also finds and updates the CLI (`claude --version`, `claude update`), opens the Claude sign-in, and, only if you turn on mobile access, runs the `tailscale` CLI to make your computer reachable from your phone.
+- **Reads and writes files outside the vault (`fs`).** Hyo reads Claude Code's own files in `~/.claude`: past conversations, so they appear in Hyo's history, plus your skills, agents and settings. It writes Hyo's shared list of open conversations and pins there, and stores mobile access settings in `~/.hyo`. Inside your vault, notes are read and written through Obsidian's API.
+- **Reads your user name and environment.** Hyo uses your home folder, `PATH` and shell to find the `claude` CLI where your terminal would. On a Mac, it reads your user name to look up Claude Code's sign-in in the Keychain (`security find-generic-password`) for the usage meter. Nothing is fingerprinted or sent anywhere.
+- **Opens a local network port (`net`), only if you turn on mobile access.** The gateway listens on `127.0.0.1` only, and Tailscale carries it privately to your phone. It's off by default.
+- **Lists vault files.** This feeds the note picker and finds the notes that note commands apply to.
+- **Uses the clipboard.** Hyo only writes to it, when you click a copy button. It never reads it.
+- **Keeps device-local state in `localStorage`.** Your open tabs on the phone are cached for offline start-up. A one-time move of open tabs from older versions of Hyo also reads it. Settings that belong to one device use Obsidian's own device storage.
+
 ## Network use & privacy
 
-Hyo is transparent about every network connection it makes:
+Hyo connects to these services and nothing else:
 
-- **Anthropic (Claude)** — the plugin runs the Claude Code CLI, which connects to Anthropic using your existing Claude login. Your messages and any vault content you choose to share are sent to Anthropic under your own Claude account, subject to [Anthropic's terms](https://www.anthropic.com/legal). Hyo also reads your Claude usage stats from Anthropic's API to power the usage meter.
-- **ElevenLabs (optional voice)** — the voice feature is **off by default**. If you turn it on, your microphone audio and message text are sent to ElevenLabs for speech-to-text and text-to-speech, using an ElevenLabs API key that you provide in settings.
-- **No telemetry** — Hyo collects no analytics and sends no data anywhere else. Nothing leaves your machine unless you're actively using the plugin.
+- **Anthropic (Claude).** The Claude Code CLI connects to Anthropic with your existing Claude login. Your messages, and any vault content you choose to share, go to Anthropic under your own account, subject to [Anthropic's terms](https://www.anthropic.com/legal). Hyo reads your usage from Anthropic's API (`api.anthropic.com`) for the usage meter, refreshing the CLI's sign-in token (`claude.ai`) when it has expired.
+- **Claude Code installer (`claude.ai`).** Only when you click Install, to download the official CLI installer.
+- **OpenAI (optional voice).** Off by default. If you choose GPT-Live voice or OpenAI dictation, your microphone audio and the conversation are sent to OpenAI with an API key you provide.
+- **ElevenLabs (optional voice).** Off by default. If you turn it on, your microphone audio and message text are sent to ElevenLabs for speech-to-text and text-to-speech, using an API key you provide.
+- **GitHub.** The first time you use voice mode, Hyo downloads its speech-detection models and the runtime that runs them (about 50 MB) from this plugin's own GitHub releases, and keeps them in the plugin folder.
+- **Your own computer (optional mobile access).** The phone connects to your computer through your private Tailscale network. Nothing goes through a Hyo server, because there isn't one.
+- **No telemetry.** Hyo collects no analytics and sends nothing anywhere else.
 
-Credentials (your ElevenLabs key and cached Claude tokens) are stored locally in the plugin's data and are never transmitted except to the services above.
+Your API keys and settings are stored locally, in the plugin's data or on your computer, and are only ever sent to the service they belong to.
 
 ---
 
