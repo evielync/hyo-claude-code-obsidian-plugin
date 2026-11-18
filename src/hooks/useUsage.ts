@@ -1,6 +1,8 @@
 import { debug } from "../debug";
 import { useState, useEffect, useCallback, useRef } from "react";
-import { requestUrl } from "obsidian";
+import { Platform, requestUrl } from "obsidian";
+import { nodeChildProcess, nodeFs, nodeOs, nodePath, nodeUtil } from "../platform/node";
+import { errorText, isRecord } from "../types/session-json";
 
 // Type definitions for the usage API response
 export interface UsageData {
@@ -71,7 +73,16 @@ interface OAuthCreds {
   expiresAt?: number;
 }
 
-import { Platform } from "obsidian";
+/** Claude Code's stored login: the `claudeAiOauth` entry, if it has a token. */
+function credsFrom(stored: unknown): OAuthCreds | null {
+  const oauth = isRecord(stored) ? stored.claudeAiOauth : null;
+  if (!isRecord(oauth) || typeof oauth.accessToken !== "string" || !oauth.accessToken) return null;
+  return {
+    accessToken: oauth.accessToken,
+    ...(typeof oauth.refreshToken === "string" ? { refreshToken: oauth.refreshToken } : {}),
+    ...(typeof oauth.expiresAt === "number" ? { expiresAt: oauth.expiresAt } : {}),
+  };
+}
 
 /**
  * Read Claude Code's OAuth credentials from wherever it stores them on this
@@ -90,12 +101,9 @@ async function getOAuthCreds(): Promise<OAuthCreds | null> {
 
   const readFile = (): OAuthCreds | null => {
     try {
-      const fs = require("fs");
-      const path = require("path");
-      const home = require("os").homedir();
-      const credsPath = path.join(home, ".claude", ".credentials.json");
-      const oauth = JSON.parse(fs.readFileSync(credsPath, "utf-8"))?.claudeAiOauth;
-      return oauth?.accessToken ? oauth : null;
+      const home = nodeOs().homedir();
+      const credsPath = nodePath().join(home, ".claude", ".credentials.json");
+      return credsFrom(JSON.parse(nodeFs().readFileSync(credsPath, "utf-8")));
     } catch {
       return null;
     }
@@ -103,17 +111,14 @@ async function getOAuthCreds(): Promise<OAuthCreds | null> {
 
   const readKeychain = async (): Promise<OAuthCreds | null> => {
     try {
-      const { execFile } = require("child_process");
-      const { promisify } = require("util");
-      const execFileAsync = promisify(execFile);
-      const username: string = require("os").userInfo().username;
+      const execFileAsync = nodeUtil().promisify(nodeChildProcess().execFile);
+      const username = nodeOs().userInfo().username;
       const { stdout } = await execFileAsync(
         "security",
         ["find-generic-password", "-s", "Claude Code-credentials", "-a", username, "-w"],
         { timeout: 5000, maxBuffer: 1024 * 1024 }
       );
-      const oauth = JSON.parse(stdout.trim())?.claudeAiOauth;
-      return oauth?.accessToken ? oauth : null;
+      return credsFrom(JSON.parse(stdout.trim()));
     } catch {
       // Keychain missing (non-mac) or unreadable/truncated — caller falls back.
       return null;
@@ -164,9 +169,10 @@ async function refreshOAuthToken(
       console.warn("[hyo][usage] Token refresh failed:", res.status);
       return null;
     }
-    return res.json?.access_token || null;
-  } catch (e: any) {
-    console.warn("[hyo][usage] Token refresh error:", e?.message || e);
+    const body: unknown = res.json;
+    return isRecord(body) && typeof body.access_token === "string" && body.access_token ? body.access_token : null;
+  } catch (e) {
+    console.warn("[hyo][usage] Token refresh error:", errorText(e));
     return null;
   }
 }
@@ -191,9 +197,11 @@ async function fetchUsageWithToken(
       console.warn("[hyo][usage] API returned status:", res.status);
       return { status: res.status, data: null };
     }
-    return { status: 200, data: res.json };
-  } catch (e: any) {
-    console.warn("[hyo][usage] API request error:", e?.message || e);
+    const body: unknown = res.json;
+    // The usage endpoint's own shape: every field is optional and read as such.
+    return { status: 200, data: isRecord(body) ? body : null };
+  } catch (e) {
+    console.warn("[hyo][usage] API request error:", errorText(e));
     return { status: 0, data: null };
   }
 }
@@ -240,8 +248,8 @@ async function fetchUsage(): Promise<{ status: number; data: UsageData | null }>
     }
 
     return result;
-  } catch (e: any) {
-    console.warn("[hyo][usage] fetchUsage error:", e?.message || e);
+  } catch (e) {
+    console.warn("[hyo][usage] fetchUsage error:", errorText(e));
     return { status: 0, data: null };
   }
 }
@@ -305,23 +313,26 @@ export function useUsage() {
   // to a 5 min cap (30s, 60s, 120s, 240s, 300s...) instead of a fixed 15s hammer.
   useEffect(() => {
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
+    let timer: number | undefined;
+    // poll() catches its own failures, so nothing here rejects.
     const run = async () => {
       await poll();
       if (cancelled) return;
       const n = failuresRef.current;
       const delay = n === 0 ? 300_000 : Math.min(300_000, 30_000 * 2 ** (n - 1));
-      timer = setTimeout(run, delay);
+      timer = window.setTimeout(() => void run(), delay);
     };
-    run();
-    return () => { cancelled = true; clearTimeout(timer); };
+    void run();
+    return () => { cancelled = true; window.clearTimeout(timer); };
   }, [poll]);
 
   // Re-poll when window regains visibility (catches stale token after long idle)
   useEffect(() => {
-    const onVisible = () => { if (document.visibilityState === "visible") poll(); };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
+    // The document the panel was opened in (a popout window has its own).
+    const doc = activeDocument;
+    const onVisible = () => { if (doc.visibilityState === "visible") void poll(); };
+    doc.addEventListener("visibilitychange", onVisible);
+    return () => doc.removeEventListener("visibilitychange", onVisible);
   }, [poll]);
 
   const sessionPct = usage?.five_hour

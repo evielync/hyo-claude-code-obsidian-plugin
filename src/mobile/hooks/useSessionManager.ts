@@ -1,42 +1,36 @@
 import { asksHeld } from "../../held-asks";
 import { debug } from "../debug";
-import { addOutgoing, startQueued } from "../../send-queue";
+import { addOutgoing } from "../../send-queue";
 import { turnStarted, queued as queuedElsewhere, permissionAnswered, replayBase, queueDropped, hasQueued, steering, steered } from "../../live-sync";
 import { newStreamState, processContentBlocks, buildSnapshot, endTurn, startsTurnOfItsOwn, openReply, isInjectedContext, type StreamState } from "../../reply-stream";
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { GatewayTransport } from "../gateway-transport";
 import { MAIN_CHAT_WIRE_ID, unexpectedExitNotice } from "../../session-owner";
 import { VOICE_PERSONA } from "../voice/voice-persona";
-import type {
-  Message,
-  ToolCallData,
-  OrderedBlock,
-  AskQuestionData,
-  PlanReviewData,
-} from "./useChatEngine";
-import { listPastSessions, loadSessionHistory, saveCustomTitle, setTaskMeta as persistTaskMeta, saveVoiceCall, type PastSession } from "../session-parser";
+import type { Message, ToolCallData } from "./useChatEngine";
+import { allowedPrompts, askedQuestions, blocksOf, eventSubtype, eventType, inputText, isSessionEvent, type UserContent } from "../../types/session-events";
+import { errorMessage, isRecord } from "../../types/session-json";
+import { listPastSessions, loadSessionHistory, saveCustomTitle, setTaskMeta as persistTaskMeta, saveVoiceCall, type PastSession, type HistoryMessage } from "../session-parser";
 import { LIVE_BACKEND_PERSONA } from "../../voice/voice-persona";
 import { handoffRequestText, HANDOFF_MARKER, threadCalls, insertCallLine, sessionSpawn, callHome, type VoiceCallRecord } from "../../voice/voice-call";
 import { isThinkingBlockApiError, type RepairResult } from "../session-repair";
 import { generateConversationTitle } from "../title-generator";
 import { autoTitleRequest } from "../../conversation-title";
 import { parseClaudeUpdateError } from "../../models";
-import { applyJobEvent, hasRunningJobs, jobAsking, jobList, maySwapProcess, IdleGate, asksEnded, endedJobs, type JobMap, type BackgroundJob } from "../../background-jobs";
-import { appendedPrompt, withMainChatReminder, withMainChat, mainFirst, canCloseTab, canReorder, startupActive, MAIN_CHAT_TITLE } from "../../main-chat";
+import { applyJobEvent, hasRunningJobs, jobAsking, jobList, IdleGate, asksEnded, endedJobs, type JobMap, type BackgroundJob } from "../../background-jobs";
+import { appendedPrompt, withMainChatReminder, withMainChat, mainFirst, canCloseTab, startupActive, MAIN_CHAT_TITLE } from "../../main-chat";
 import { GatewayClient, HISTORY_TIMEOUT_MS } from "../gateway-client";
 import { PendingOps, reconcileTabs, syncChanges, syncedSid, type OpenEntry } from "../../open-conversations";
+import { parseSavedDesk, type SavedDesk } from "../../types/session-desk";
 
 // Re-export for convenience
 export type { PastSession };
 
-// Locked scope: mobile Hyo always talks to Chad on Sonnet 5.5, asking before
-// it acts. The gateway enforces all three server-side regardless of what's
-// sent — these are just the values shown in the UI.
+// Locked scope: mobile Hyo always talks to Chad on Sonnet 5.5. The gateway
+// enforces both server-side regardless of what's sent — these are just the
+// values shown in the UI.
 const LOCKED_MODEL = "claude-sonnet-5-5";
 const LOCKED_AGENT = ""; // empty = the CLI default agent
-// Display value only — matches PERMISSION_MODES' "manual" ("Ask First"),
-// which reflects the gateway's actual hardcoded behaviour.
-const LOCKED_PERMISSION_MODE = "manual";
 
 // ------- types -------
 
@@ -171,7 +165,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       ...prev,
       tabs: prev.tabs.map((t) => (t.id === tabId ? { ...t, jobs, ...(ended.size ? { messages: asksEnded(t.messages, ended) } : {}) } : t)),
     }));
-    setTimeout(() => gate(tabId).update(jobsRef.current[tabId]), 0);
+    window.setTimeout(() => gate(tabId).update(jobsRef.current[tabId]), 0);
   };
   // An auto-compaction that ended the turn without carrying on (older CLIs).
   const compactNudgeRef = useRef<Record<string, boolean>>({});
@@ -179,7 +173,10 @@ export function useSessionManager(options: SessionManagerOptions) {
   optionsRef.current = options;
   // A conversation this phone starts begins in the phone's Ask first choice.
   // New conversations start in Settings → Permission mode, as on the desktop.
-  const defaultMode = () => optionsRef.current.permissionMode || (optionsRef.current.askFirst === false ? "bypassPermissions" : "manual");
+  const defaultMode = useCallback(
+    () => optionsRef.current.permissionMode || (optionsRef.current.askFirst === false ? "bypassPermissions" : "manual"),
+    []
+  );
   // Messages sent while Claude is still answering, per tab, oldest first.
   // They show in the chat at once and go to Claude when the turn ends (see
   // send-queue.ts). turnRunningRef is set the moment a turn starts, so two
@@ -229,17 +226,27 @@ export function useSessionManager(options: SessionManagerOptions) {
   const pendingRef = useRef(new PendingOps());
   const remoteRef = useRef<OpenEntry[] | null>(null);
   const [openList, setOpenList] = useState<OpenEntry[] | null>(null);
-  const mainSid = () => (optionsRef.current.mainChat ? optionsRef.current.mainChatSessionId || undefined : undefined);
-  const gateway = () => (optionsRef.current.gatewayUrl ? GatewayClient.get(optionsRef.current.gatewayUrl) : null);
-  const tellMac = {
-    open: (sid: string, title: string) => gateway()?.openAdd(sid, title, pendingRef.current.note(sid, "add")),
-    close: (sid: string) => gateway()?.openRemove(sid, pendingRef.current.note(sid, "remove")),
-    rename: (sid: string, title: string) => gateway()?.openRename(sid, title, pendingRef.current.note(sid, "rename")),
-    replace: (oldSid: string, sid: string, title: string) => {
-      pendingRef.current.note(oldSid, "remove");
-      gateway()?.openReplace(oldSid, sid, title, pendingRef.current.note(sid, "add"));
-    },
-  };
+  // These read the options and the list through refs, so they never change.
+  const mainSid = useCallback(
+    () => (optionsRef.current.mainChat ? optionsRef.current.mainChatSessionId || undefined : undefined),
+    []
+  );
+  const gateway = useCallback(
+    () => (optionsRef.current.gatewayUrl ? GatewayClient.get(optionsRef.current.gatewayUrl) : null),
+    []
+  );
+  const tellMac = useMemo(
+    () => ({
+      open: (sid: string, title: string) => gateway()?.openAdd(sid, title, pendingRef.current.note(sid, "add")),
+      close: (sid: string) => gateway()?.openRemove(sid, pendingRef.current.note(sid, "remove")),
+      rename: (sid: string, title: string) => gateway()?.openRename(sid, title, pendingRef.current.note(sid, "rename")),
+      replace: (oldSid: string, sid: string, title: string) => {
+        pendingRef.current.note(oldSid, "remove");
+        gateway()?.openReplace(oldSid, sid, title, pendingRef.current.note(sid, "add"));
+      },
+    }),
+    [gateway]
+  );
   const isPinned = (sid: string | null | undefined) => !!sid && !!remoteRef.current?.some((e) => e.id === sid && e.pinned);
 
   // Cleanup transports on unmount
@@ -276,18 +283,19 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   const makeProcessEvent = useCallback(
     (tabId: string) => {
-      const handle = (event: any): void => {
+      const handle = (raw: unknown): void => {
+        if (!isSessionEvent(raw)) {
+          debug("[hyo] event:", eventType(raw));
+          return;
+        }
+        const event = raw;
         if (event.type === "stream_event") {
           const evt = event.event || event;
           if (evt.type !== "content_block_delta") {
             debug("[hyo] event:", event.type, evt.type);
           }
         } else {
-          debug(
-            "[hyo] event:",
-            event.type,
-            event.subtype || event.request?.subtype || ""
-          );
+          debug("[hyo] event:", event.type, eventSubtype(event));
         }
 
         // The conversation is shared live with other views (session-owner.ts):
@@ -373,9 +381,10 @@ export function useSessionManager(options: SessionManagerOptions) {
             for (const e of turn.events || []) handle(e);
           }
           for (const q of event.queued || []) onTab((t) => ({ ...t, messages: queuedElsewhere(t.messages, q) }));
-          if ((event.asks || []).length) {
+          const asks = event.asks || [];
+          if (asks.length) {
             if (!streamStatesRef.current[tabId]) streamStatesRef.current[tabId] = { ...newStreamState(), turnDone: true };
-            for (const e of event.asks) handle(e);
+            for (const e of asks) handle(e);
           }
           return;
         }
@@ -401,18 +410,19 @@ export function useSessionManager(options: SessionManagerOptions) {
 
         // System init
         if (event.type === "system" && event.subtype === "init") {
-          if (event.session_id) {
+          const sessionId = event.session_id;
+          if (sessionId) {
             const t = stateRef.current.tabs.find((x) => x.id === tabId);
-            if (t?.isMain && event.session_id !== optionsRef.current.mainChatSessionId) {
-              optionsRef.current.onMainChatSession?.(event.session_id);
+            if (t?.isMain && sessionId !== optionsRef.current.mainChatSessionId) {
+              optionsRef.current.onMainChatSession?.(sessionId);
               // Named in History too, wherever it's opened.
-              void saveCustomTitle(optionsRef.current.gatewayUrl, event.session_id, MAIN_CHAT_TITLE);
+              void saveCustomTitle(optionsRef.current.gatewayUrl, sessionId, MAIN_CHAT_TITLE);
             }
             setState((prev) => ({
               ...prev,
               tabs: prev.tabs.map((tab) =>
                 tab.id === tabId
-                  ? { ...tab, cliSessionId: event.session_id, sessionPending: false }
+                  ? { ...tab, cliSessionId: sessionId, sessionPending: false }
                   : tab
               ),
             }));
@@ -495,7 +505,7 @@ export function useSessionManager(options: SessionManagerOptions) {
                 ? { ...msg.askQuestion, id: requestId }
                 : {
                     id: requestId,
-                    questions: input.questions || [{ question: input.question }],
+                    questions: askedQuestions(input) || [{ question: inputText(input, "question") ?? "" }],
                     answers: {},
                   },
             }));
@@ -515,22 +525,22 @@ export function useSessionManager(options: SessionManagerOptions) {
             // the plan (the content is right there in the input), then fall
             // back to readPlanFile (always null on mobile — no fs).
             let planContent: string | null = null;
-            const writeCalls = ss.toolCalls.filter(
-              (t) => t.name === "Write" && t.input?.content
-            );
-            if (writeCalls.length > 0) {
-              planContent = writeCalls[writeCalls.length - 1].input.content;
+            const written = ss.toolCalls.flatMap((t) => {
+              const content = t.name === "Write" ? inputText(t.input, "content") : undefined;
+              return content ? [content] : [];
+            });
+            if (written.length > 0) {
+              planContent = written[written.length - 1];
             }
             if (!planContent) {
               planContent = readPlanFile();
             }
 
-            const allowedPrompts = req.input?.allowedPrompts || [];
             updateTabLastAssistant(tabId, () => ({
               planReview: {
                 requestId,
                 planContent,
-                allowedPrompts,
+                allowedPrompts: allowedPrompts(req.input),
               },
             }));
             return;
@@ -567,9 +577,8 @@ export function useSessionManager(options: SessionManagerOptions) {
           }
           endTurn(ss, event);
           updateTabLastAssistant(tabId, () => ({ streaming: false }));
-          const mu: any = event.modelUsage || {};
-          const firstModel: any = Object.values(mu)[0];
-          const contextWindow: number | undefined = firstModel?.contextWindow;
+          const firstModel: { contextWindow?: number } | undefined = Object.values(event.modelUsage || {})[0];
+          const contextWindow = firstModel?.contextWindow;
           setState((prev) => ({
             ...prev,
             tabs: prev.tabs.map((tab) =>
@@ -656,8 +665,7 @@ export function useSessionManager(options: SessionManagerOptions) {
           if (event.isSidechain || event.parent_tool_use_id) return;
           // A skill's instructions, added for the agent to read: never a message.
           if (isInjectedContext(event)) return;
-          const contentArr = event.message?.content || [];
-          processContentBlocks(contentArr, ss, "user");
+          processContentBlocks(blocksOf(event), ss, "user");
           updateTabLastAssistant(tabId, () => buildSnapshot(ss));
           return;
         }
@@ -687,21 +695,21 @@ export function useSessionManager(options: SessionManagerOptions) {
           // A sub-agent's narration and report stay out of the chat's reply.
           if (isSidechain) return;
           compactNudgeRef.current[tabId] = false;
-          const contentArr = event.message?.content || [];
-          processContentBlocks(contentArr, ss, "assistant");
+          processContentBlocks(blocksOf(event), ss, "assistant");
           updateTabLastAssistant(tabId, () => buildSnapshot(ss));
 
           // Eagerly detect AskUserQuestion from the complete assistant event.
           // The control_request arrives AFTER this, so set the question UI now.
           // The control_request handler will update the id to the requestId.
           const askTool = ss.toolCalls.find(
-            (t) => t.name === "AskUserQuestion" && !t.result && t.input?.questions
+            (t) => t.name === "AskUserQuestion" && !t.result && askedQuestions(t.input)
           );
-          if (askTool) {
+          const questions = askTool && askedQuestions(askTool.input);
+          if (askTool && questions) {
             updateTabLastAssistant(tabId, () => ({
               askQuestion: {
                 id: askTool.id,
-                questions: askTool.input.questions,
+                questions,
                 answers: {},
               },
             }));
@@ -713,13 +721,11 @@ export function useSessionManager(options: SessionManagerOptions) {
         if (event.type === "stream_event") {
           const evt = event.event || event;
 
-          if (
-            evt.type === "content_block_start" &&
-            evt.content_block?.type === "tool_use"
-          ) {
+          const started = evt.type === "content_block_start" ? evt.content_block : undefined;
+          if (started?.type === "tool_use") {
             const tool: ToolCallData = {
-              id: evt.content_block.id,
-              name: evt.content_block.name,
+              id: started.id ?? "",
+              name: started.name ?? "",
               input: {},
               result: null,
             };
@@ -761,9 +767,10 @@ export function useSessionManager(options: SessionManagerOptions) {
               if (!lastTool._inputJson) lastTool._inputJson = "";
               lastTool._inputJson += evt.delta.partial_json || "";
               try {
-                lastTool.input = JSON.parse(lastTool._inputJson);
+                const parsed: unknown = JSON.parse(lastTool._inputJson);
+                if (isRecord(parsed)) lastTool.input = parsed;
               } catch {
-                // partial
+                // Not whole JSON yet: the next delta completes it.
               }
             }
           }
@@ -830,6 +837,7 @@ export function useSessionManager(options: SessionManagerOptions) {
             model: activeTab?.model || LOCKED_MODEL,
             permissionMode: defaultMode(),
             agent: optionsRef.current.agent || LOCKED_AGENT,
+            inputTokens: 0,
             voiceMode: false,
           },
         ],
@@ -868,6 +876,7 @@ export function useSessionManager(options: SessionManagerOptions) {
               model: LOCKED_MODEL,
               permissionMode: defaultMode(),
               agent: optionsRef.current.agent || LOCKED_AGENT,
+              inputTokens: 0,
               voiceMode: false,
             },
           ],
@@ -906,9 +915,9 @@ export function useSessionManager(options: SessionManagerOptions) {
 
       // If this tab has a persisted session, save the custom title and refresh dropdown
       if (tab?.cliSessionId) {
-        saveCustomTitle(options.gatewayUrl, tab.cliSessionId, title).then(() => {
-          refreshPastSessions();
-        });
+        saveCustomTitle(options.gatewayUrl, tab.cliSessionId, title)
+          .then(() => refreshPastSessions())
+          .catch((e) => console.error("[hyo] Couldn't save the title:", e));
       }
 
       return {
@@ -924,9 +933,9 @@ export function useSessionManager(options: SessionManagerOptions) {
   // title via the gateway and refreshes; updates the tab title too if it's open.
   const renamePastSession = useCallback((sessionId: string, title: string) => {
     if (remoteRef.current?.some((e) => e.id === sessionId)) tellMac.rename(sessionId, title);
-    saveCustomTitle(options.gatewayUrl, sessionId, title).then(() => {
-      refreshPastSessions();
-    });
+    saveCustomTitle(options.gatewayUrl, sessionId, title)
+      .then(() => refreshPastSessions())
+      .catch((e) => console.error("[hyo] Couldn't save the title:", e));
     setState((prev) => ({
       ...prev,
       tabs: prev.tabs.map((t) =>
@@ -949,7 +958,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         else tellMac.close(sessionId);
       }
       persistTaskMeta(options.gatewayUrl, sessionId, patch);
-      setTimeout(() => refreshPastSessions(), 0);
+      window.setTimeout(() => refreshPastSessions(), 0);
     },
     [options.gatewayUrl]
   );
@@ -999,8 +1008,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         ),
       }));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
-  }, [state.tabs]);
+  }, [state.tabs, options.gatewayUrl]);
 
   /**
    * The tab's connection to its conversation on the Mac: subscribed (by the
@@ -1069,7 +1077,7 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   const sendMessage = useCallback(
     (
-      content: string | any[],
+      content: UserContent,
       meta?: { displayText?: string; attachedFileNames?: string[]; isCompaction?: boolean; handoff?: boolean },
       opts?: { tabId?: string }
     ) => {
@@ -1384,8 +1392,8 @@ export function useSessionManager(options: SessionManagerOptions) {
   }, [options.gatewayUrl]);
 
   /** History messages from the Mac, as chat messages. */
-  const toChat = (history: { messages: any[] }): Message[] =>
-    history.messages.map((m: any) => {
+  const toChat = (history: { messages: HistoryMessage[] }): Message[] =>
+    history.messages.map((m) => {
       // Hand-offs from a live call carry the marker in the prompt itself.
       const handoff = m.role === "user" && typeof m.content === "string" && m.content.includes(HANDOFF_MARKER);
       return {
@@ -1418,15 +1426,15 @@ export function useSessionManager(options: SessionManagerOptions) {
   /** A request to the Mac that settles no matter what: its answer, its error, or ours after `ms`. */
   function settleWithin<T>(p: Promise<T>, ms: number, why: string): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(why)), ms);
+      const timer = window.setTimeout(() => reject(new Error(why)), ms);
       p.then(
         (v) => {
-          clearTimeout(timer);
+          window.clearTimeout(timer);
           resolve(v);
         },
-        (e) => {
-          clearTimeout(timer);
-          reject(e);
+        (e: unknown) => {
+          window.clearTimeout(timer);
+          reject(e instanceof Error ? e : new Error(errorMessage(e)));
         }
       );
     });
@@ -1473,8 +1481,8 @@ export function useSessionManager(options: SessionManagerOptions) {
           }),
         }));
       })
-      .catch((e: any) => {
-        const cause = e?.message || String(e);
+      .catch((e: unknown) => {
+        const cause = errorMessage(e);
         console.error("[hyo] Couldn't load the conversation:", cause);
         setState((prev) => ({
           ...prev,
@@ -1513,8 +1521,8 @@ export function useSessionManager(options: SessionManagerOptions) {
           ),
         }));
       })
-      .catch((e: any) => {
-        const cause = e?.message || String(e);
+      .catch((e: unknown) => {
+        const cause = errorMessage(e);
         console.error("[hyo] Couldn't load earlier messages:", cause);
         setState((prev) => ({ ...prev, tabs: prev.tabs.map((x) => (x.id === tabId ? { ...x, loadingOlder: false, olderError: cause } : x)) }));
       });
@@ -1524,12 +1532,16 @@ export function useSessionManager(options: SessionManagerOptions) {
   // from several places (opening from History, the Mac's list, the main
   // chat, the desk restored at startup); asking here, after they exist, means
   // none is ever left on "Loading conversation…" with nothing asked.
+  // backfill and ensureTransport are this render's, through a ref: what runs
+  // these effects again is the tabs or the Mac changing.
+  const tabHelpersRef = useRef({ backfill, ensureTransport });
+  tabHelpersRef.current = { backfill, ensureTransport };
   useEffect(() => {
     if (!options.gatewayUrl) return;
+    const { backfill } = tabHelpersRef.current;
     for (const t of state.tabs) {
       if (t.loading && t.cliSessionId && !requestedRef.current.has(t.id)) backfill(t.id, t.cliSessionId);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, [state.tabs, options.gatewayUrl]);
   // Close a list's busy tabs only once their work is done.
   const isBusy = (t: TabSession) =>
@@ -1574,7 +1586,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     });
     // The updater has run by the next tick: stop hearing closed tabs. (The
     // ones just opened load their history from the loader effect.)
-    setTimeout(() => {
+    window.setTimeout(() => {
       for (const t of done.closed) {
         transportsRef.current[t.id]?.stop();
         delete transportsRef.current[t.id];
@@ -1594,22 +1606,22 @@ export function useSessionManager(options: SessionManagerOptions) {
   const restoreKey = `hyo-open-tabs:${options.gatewayUrl}`;
   const restoredRef = useRef(false);
 
+  // Once, as soon as there's a Mac: restoredRef keeps it from running again.
   useEffect(() => {
     if (restoredRef.current || !options.gatewayUrl) return;
     restoredRef.current = true;
-    let saved: { sessions: { id: string; title: string }[]; activeId?: string | null } | null = null;
+    let saved: SavedDesk | null = null;
     try {
-      saved = JSON.parse(window.localStorage.getItem(restoreKey) || "null");
+      saved = parseSavedDesk(window.localStorage.getItem(restoreKey));
     } catch {
-      /* absent or corrupt — start fresh */
+      /* storage unavailable — start fresh */
     }
     // The Mac's list got here first: it's what's open.
     const entries: OpenEntry[] =
-      remoteRef.current ?? (saved?.sessions || []).filter((s) => s?.id).map((s) => ({ id: s.id, title: s.title || "Untitled" }));
+      remoteRef.current ?? (saved?.sessions || []).map((s) => ({ id: s.id, title: s.title || "Untitled" }));
     if (!entries.length) return;
-    applyOpenList(entries, { activeId: saved?.activeId });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
-  }, [options.gatewayUrl]);
+    applyOpenListRef.current(entries, { activeId: saved?.activeId });
+  }, [options.gatewayUrl, restoreKey]);
 
   // Hear the Mac's list: now, after every reconnect (what was changed here
   // while offline goes first), and whenever it changes there.
@@ -1633,10 +1645,10 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   // A close that waited on running work happens once the work is done; a
   // main chat switched on or off changes which conversation is the list's.
+  // Those are what run it again: the list itself is read fresh each time.
   const busyKey = state.tabs.filter(isBusy).map((t) => t.id).join(",");
   useEffect(() => {
     if (remoteRef.current) applyOpenListRef.current(remoteRef.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, [busyKey, options.mainChat, options.mainChatSessionId]);
 
   // Tell the Mac what changed here: a conversation that got its session id
@@ -1651,8 +1663,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       else tellMac.open(g.sid, g.title);
     }
     for (const sid of ch.cleared) tellMac.close(sid);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
-  }, [state.tabs]);
+  }, [state.tabs, mainSid, tellMac]);
 
   useEffect(() => {
     if (!restoredRef.current || !options.gatewayUrl) return; // never clobber before restore reads it
@@ -1694,24 +1705,25 @@ export function useSessionManager(options: SessionManagerOptions) {
   // history to load, asking for it subscribes it; otherwise it attaches now.)
   useEffect(() => {
     if (!options.gatewayUrl) return;
+    const { ensureTransport } = tabHelpersRef.current;
     for (const t of state.tabs) {
       if (!t.isMain || transportsRef.current[t.id]) continue;
       const transport = ensureTransport(t.id);
       if (!t.loading) transport.attach();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
   }, [state.tabs, options.gatewayUrl]);
   // ---- The main chat --------------------------------------------------------
   // Same as desktop: a pinned first tab carrying the one long conversation
   // (the id comes from the synced settings), and what Hyo opens to when
-  // nothing else is open. Off: it stays as an ordinary tab.
+  // nothing else is open. Off: it stays as an ordinary tab. Only the setting
+  // (or the Mac) changing runs this; a missing main tab is built from the
+  // options as they are now.
   useEffect(() => {
     if (!options.gatewayUrl) return;
-    let filled: { id: string; sid: string } | null = null;
+    const sid = optionsRef.current.mainChatSessionId || null;
     setState((prev) => {
       const enabled = !!options.mainChat;
       let tabs = withMainChat(prev.tabs, enabled, () => {
-        const sid = options.mainChatSessionId || null;
         const tab: TabSession = {
           id: genId(),
           cliSessionId: sid,
@@ -1726,7 +1738,6 @@ export function useSessionManager(options: SessionManagerOptions) {
           isMain: true,
           loading: !!sid,
         };
-        if (sid) filled = { id: tab.id, sid };
         return tab;
       });
       if (tabs === prev.tabs) return prev;
@@ -1740,9 +1751,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       return { tabs: mainFirst(tabs), activeTabId };
     });
     // Its history (if it has any) is fetched by the loader effect.
-    void filled;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
-  }, [options.mainChat, options.gatewayUrl]);
+  }, [options.mainChat, options.gatewayUrl, defaultMode]);
 
   const compact = useCallback(() => {
     sendMessage("/compact", { isCompaction: true });
@@ -1874,7 +1883,7 @@ export function useSessionManager(options: SessionManagerOptions) {
               : t
           ),
         }));
-        setTimeout(() => sendMessage(text, { displayText: prevUser!.displayText }), 0);
+        window.setTimeout(() => sendMessage(text, { displayText: prevUser.displayText }), 0);
       });
       return true;
     },
@@ -1934,8 +1943,7 @@ export function useSessionManager(options: SessionManagerOptions) {
   /** Tell the Mac which conversation this phone has on screen (read-state.ts). */
   const reportViewing = useCallback((sessionId: string | null) => {
     gateway()?.setViewing(sessionId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run only when the listed values change
-  }, []);
+  }, [gateway]);
 
   return {
     reportViewing,

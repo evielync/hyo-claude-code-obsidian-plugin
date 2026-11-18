@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { GatewayClient } from "../gateway-client";
 import { withBundledSkills } from "../../bundled-skills";
+import { isRecord } from "../../types/session-json";
 
 export interface Skill {
   name: string;
@@ -24,11 +25,16 @@ export function useSkills(gatewayUrl?: string): Skill[] {
         if (cancelled || !Array.isArray(list)) return;
         setSkills(
           withBundledSkills(
-            list.map((s: any) => ({
-              name: String(s.name || ""),
-              description: s.description || "",
-              content: "",
-            })).filter((s: Skill) => s.name)
+            list
+              .map((s: unknown): Skill => {
+                const r = isRecord(s) ? s : {};
+                return {
+                  name: typeof r.name === "string" ? r.name : "",
+                  description: typeof r.description === "string" ? r.description : "",
+                  content: "",
+                };
+              })
+              .filter((s) => s.name)
           )
         );
       })
