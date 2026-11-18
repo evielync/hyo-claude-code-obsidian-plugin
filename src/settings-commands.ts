@@ -1,4 +1,4 @@
-import { AbstractInputSuggest, Notice, requireApiVersion, setIcon, type App, type ButtonComponent, type Setting } from "obsidian";
+import { AbstractInputSuggest, Notice, setIcon, type App, type Setting } from "obsidian";
 import type { HyoCommand } from "./settings";
 import type { Skill } from "./hooks/useSkills";
 import type { Page, Row, Section } from "./settings-layout";
@@ -7,10 +7,10 @@ import type { Page, Row, Section } from "./settings-layout";
  * Settings → Hyo → Commands. Ported from the standalone AI Commands plugin: a
  * note's `type` frontmatter decides which header-button commands it shows.
  *
- * Everything is on the one page. Each configured note type is a group headed
- * with its name: its commands, a row to add another, and (behind a
- * confirmation) the place the type is removed. A row at the end adds a type,
- * whose group then appears just above it.
+ * Everything is on the one page. Adding a note type comes first; below it,
+ * each configured type is one row (its name, how many commands it has, and a
+ * button that removes them) that opens in place to show its commands and a
+ * link to add another.
  */
 
 export const COMMANDS_GUIDE_URL = "https://docs.gethyo.co/skills/note-commands/";
@@ -19,7 +19,7 @@ export const COMMANDS_GUIDE_URL = "https://docs.gethyo.co/skills/note-commands/"
 export interface CommandsHost {
   /** Obsidian, for the note-type suggestions. */
   app(): App;
-  /** Note type → its commands, in the order the groups are shown. */
+  /** Note type → its commands, in the order the rows are shown. */
   commands(): Record<string, HyoCommand[]>;
   /** Every `type` found on a note in the vault. */
   noteTypes(): string[];
@@ -30,7 +30,12 @@ export interface CommandsHost {
   save(): Promise<void>;
   /** Rows were added, removed or reordered: draw the page again where it is. */
   rebuild(): void;
-  /** Ask before something that can't be undone. */
+  /** Only which rows are shown changed: apply it without redrawing. */
+  refreshVisibility(): void;
+  /** Whether a note type is open, showing its commands. Survives redraws. */
+  isExpanded(type: string): boolean;
+  setExpanded(type: string, open: boolean): void;
+  /** Ask before removing something. */
   confirm(message: string, onConfirm: () => Promise<void>): void;
   openUrl(url: string): void;
 }
@@ -48,11 +53,30 @@ export function addCommand(commands: Record<string, HyoCommand[]>, type: string,
   commands[type]?.push({ skill: skills[0]?.name ?? "", label: "", extra: "" });
 }
 
-/** Style a button as destructive: `setDestructive` from 1.13, Obsidian's warning class before it. */
-function markDestructive(b: ButtonComponent): ButtonComponent {
-  if (requireApiVersion("1.13.0")) return b.setDestructive();
-  b.buttonEl.addClass("mod-warning");
-  return b;
+/** What a note type's row says about it: "2 commands", "1 command", "No commands yet". */
+export function commandCount(n: number): string {
+  if (n === 0) return "No commands yet";
+  return n === 1 ? "1 command" : `${n} commands`;
+}
+
+/**
+ * The Add box's Add (or Enter). A new type opens straight away, ready for its
+ * first command; one that's already there is opened instead.
+ */
+export async function submitNoteType(host: CommandsHost, draft: string): Promise<void> {
+  const type = draft.trim();
+  if (!type) {
+    new Notice("Type a note type first, or pick one from the list.");
+    return;
+  }
+  host.setExpanded(type, true);
+  if (!addNoteType(host.commands(), type)) {
+    new Notice(`"${type}" is already in the list. It's open below.`);
+    host.rebuild();
+    return;
+  }
+  await host.save();
+  host.rebuild();
 }
 
 /** The command row being dragged, so a drop only lands within its own note type. */
@@ -67,114 +91,132 @@ export function commandsPage(host: CommandsHost): Page {
   const getSkills = () => (skills ??= host.skills());
   const drag: DragState = { from: null };
 
-  const typeGroups: Section[] = Object.keys(commands).map((type) => typeGroup(host, type, commands[type], getSkills, drag));
+  const sections: Section[] = [
+    {
+      items: [
+        {
+          kind: "custom",
+          name: "How commands work",
+          desc: "Attach a skill to a note type in your vault and run it with one click. For example: a Summarise command on your meeting notes.",
+          build: (setting) => {
+            setting.addButton((b) => b.setButtonText("Open the guide").onClick(() => host.openUrl(COMMANDS_GUIDE_URL)));
+          },
+        },
+        {
+          kind: "custom",
+          name: "Add a note type",
+          desc: 'Note types come from the "type" property on your notes. Type one, or pick from the types found in your vault, then press Add.',
+          build: (setting) => buildAddNoteType(host, setting),
+        },
+      ],
+    },
+  ];
+  const types = Object.keys(commands);
+  if (types.length > 0) {
+    sections.push({
+      heading: "Note types",
+      items: types.flatMap((type) => typeRows(host, type, commands[type], getSkills, drag)),
+    });
+  }
 
   return {
     kind: "page",
     id: "commands",
     name: "Commands",
     desc: "One-click buttons in a note's header that run a skill, set up for each note type.",
-    sections: [
-      {
-        items: [
-          {
-            kind: "custom",
-            name: "How commands work",
-            desc: "Attach a skill to a note type in your vault and run it with one click. For example: a Summarise command on your meeting notes.",
-            build: (setting) => {
-              setting.addButton((b) => b.setButtonText("Open the guide").onClick(() => host.openUrl(COMMANDS_GUIDE_URL)));
-            },
-          },
-        ],
-      },
-      ...typeGroups,
-      {
-        items: [
-          {
-            kind: "custom",
-            name: "Add a note type",
-            desc: 'Note types come from the "type" property on your notes. Type one, or pick from the types found in your vault, then press Add.',
-            build: (setting) => buildAddNoteType(host, setting),
-          },
-        ],
-      },
-    ],
+    sections,
   };
 }
 
-function typeGroup(host: CommandsHost, type: string, list: HyoCommand[], getSkills: () => Skill[], drag: DragState): Section {
-  const rows: Row[] = [];
-  if (list.length > 0) {
-    // Column headers, sized exactly like the row controls below so the whole
-    // group reads as one table.
-    rows.push({
+/** A note type's row, then (while it's open) its commands and the link to add one. */
+function typeRows(host: CommandsHost, type: string, list: HyoCommand[], getSkills: () => Skill[], drag: DragState): Row[] {
+  const open = () => host.isExpanded(type);
+  const labels = list.map((c) => c.label).filter((l) => l.length > 0);
+  return [
+    {
       kind: "custom",
-      name: "Commands",
-      searchable: false,
-      build: (setting) => {
-        setting.settingEl.empty();
-        setting.settingEl.addClass("hyo-commands-columns");
-        setting.settingEl.createSpan({ cls: "hyo-commands-col-grip" });
-        setting.settingEl.createSpan({ text: "Name", cls: "hyo-commands-col-name" });
-        setting.settingEl.createSpan({ text: "Skill it runs", cls: "hyo-commands-col-skill" });
-        setting.settingEl.createSpan({ cls: "hyo-commands-col-action" });
-      },
-    });
-    list.forEach((cmd, i) =>
-      rows.push({
+      name: type,
+      desc: commandCount(list.length),
+      // A closed type's commands aren't searchable themselves, so the type's
+      // row answers for them.
+      aliases: labels.length > 0 ? labels : undefined,
+      build: (setting) => buildTypeRow(host, setting, type),
+    },
+    ...list.map(
+      (cmd, i): Row => ({
         kind: "custom",
         name: cmd.label || "Untitled command",
         desc: `Runs the ${cmd.skill || "(no skill)"} skill on "${type}" notes`,
+        visible: open,
         build: (setting) => buildCommandRow(host, setting, type, list, cmd, i, getSkills(), drag),
       })
-    );
-  }
-  rows.push({
-    kind: "custom",
-    name: "Add command",
-    desc:
-      list.length === 0
-        ? `No commands yet. Every "${type}" note will show the commands you add here in its header.`
-        : `Every "${type}" note shows these commands in its header.`,
-    build: (setting) => {
-      setting.addButton((b) =>
-        b
-          .setButtonText("Add command")
-          .setCta()
-          .onClick(async () => {
-            addCommand(host.commands(), type, getSkills());
-            await host.save();
-            host.rebuild();
-          })
-      );
+    ),
+    {
+      kind: "custom",
+      name: "Add command",
+      searchable: false,
+      visible: open,
+      build: (setting) => {
+        setting.settingEl.empty();
+        setting.settingEl.addClass("hyo-command-add-row");
+        const add = setting.settingEl.createEl("button", { text: "+ Add command", cls: "hyo-command-add" });
+        add.addEventListener("click", () => {
+          addCommand(host.commands(), type, getSkills());
+          host
+            .save()
+            .then(() => host.rebuild())
+            .catch((err: unknown) => console.error("[hyo] Couldn't add the command:", err));
+        });
+      },
     },
+  ];
+}
+
+/** The type's row: click (or Enter) opens and closes it; the bin removes its commands. */
+function buildTypeRow(host: CommandsHost, setting: Setting, type: string): void {
+  const el = setting.settingEl;
+  const chevron = el.createDiv({ cls: "hyo-command-type-chevron" });
+  setIcon(chevron, "chevron-right");
+  el.prepend(chevron);
+  el.addClass("hyo-command-type");
+  el.setAttribute("role", "button");
+  el.tabIndex = 0;
+  const show = (open: boolean) => {
+    el.toggleClass("is-expanded", open);
+    el.setAttribute("aria-expanded", String(open));
+  };
+  show(host.isExpanded(type));
+  const toggle = () => {
+    const open = !host.isExpanded(type);
+    host.setExpanded(type, open);
+    show(open);
+    host.refreshVisibility();
+  };
+  el.addEventListener("click", toggle);
+  el.addEventListener("keydown", (e: KeyboardEvent) => {
+    // Only the row itself: Enter on the bin is the bin's.
+    if (e.target !== el || (e.key !== "Enter" && e.key !== " ")) return;
+    e.preventDefault();
+    toggle();
   });
-  // Removing a type's commands takes all of them at once, never one stray
-  // click. The wording stays clearly about commands: nothing here touches the
+
+  // Removing a type's commands takes all of them at once, behind a question.
+  // The wording stays clearly about commands: nothing here touches the
   // user's notes or their type property.
-  rows.push({
-    kind: "custom",
-    name: "Remove these commands",
-    desc: `Stops showing command buttons on "${type}" notes. Your notes and their type stay exactly as they are.`,
-    build: (setting) => {
-      setting.addButton((b) =>
-        markDestructive(b)
-          .setButtonText("Remove")
-          .onClick(() => {
-            const what =
-              list.length === 0
-                ? `Remove "${type}" from this list?`
-                : `Remove ${list.length === 1 ? "the 1 command" : `all ${list.length} commands`} from "${type}" notes? This can't be undone.`;
-            host.confirm(what, async () => {
-              delete host.commands()[type];
-              await host.save();
-              host.rebuild();
-            });
-          })
-      );
-    },
+  setting.addExtraButton((b) => {
+    b.setIcon("trash-2")
+      .setTooltip("Remove these commands")
+      .onClick(() => {
+        host.confirm(`Remove the commands for "${type}"? Your notes and their type stay exactly as they are.`, async () => {
+          delete host.commands()[type];
+          host.setExpanded(type, false);
+          await host.save();
+          host.rebuild();
+        });
+      });
+    // The bin is inside the row, so its click mustn't also open or close it.
+    b.extraSettingsEl.addEventListener("click", (e) => e.stopPropagation());
   });
-  return { heading: type, items: rows };
 }
 
 /** Suggests the vault's note types that don't have commands yet. */
@@ -203,19 +245,7 @@ function buildAddNoteType(host: CommandsHost, setting: Setting): void {
   const commands = host.commands();
   const available = host.noteTypes().filter((t) => !Object.prototype.hasOwnProperty.call(commands, t));
   let draft = "";
-  const add = async () => {
-    const type = draft.trim();
-    if (!type) {
-      new Notice("Type a note type first, or pick one from the list.");
-      return;
-    }
-    if (!addNoteType(host.commands(), type)) {
-      new Notice(`"${type}" already has commands. They're in its group above.`);
-      return;
-    }
-    await host.save();
-    host.rebuild();
-  };
+  const add = () => submitNoteType(host, draft);
   setting
     .addText((t) => {
       t.setPlaceholder(available[0] ? `e.g. ${available[0]}` : "Note type").onChange((v) => (draft = v));

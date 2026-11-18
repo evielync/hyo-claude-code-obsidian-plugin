@@ -12,7 +12,8 @@ import {
   type Section,
   type TabParts,
 } from "../src/settings-layout";
-import { addCommand, addNoteType, commandsPage, type CommandsHost } from "../src/settings-commands";
+import { addCommand, addNoteType, commandCount, commandsPage, submitNoteType, type CommandsHost } from "../src/settings-commands";
+import { voicePage, type VoiceHost, type VoiceSettings } from "../src/settings-voice";
 import type { HyoCommand } from "../src/settings";
 import type { SettingDefinitionItem, SettingDefinitionPage, SettingGroupItem } from "obsidian";
 
@@ -157,9 +158,73 @@ test("every control row is found by its key, pages included", () => {
   assert.equal(rows.get("dock")?.binding.get(), true);
 });
 
+// ---- Voice ----------------------------------------------------------------------
+
+function voiceHost(settings: VoiceSettings): VoiceHost {
+  return {
+    settings: () => settings,
+    keyInput: () => {},
+    voicePicker: () => {},
+    customVoiceAdder: () => {},
+    removeCustomVoice: async () => {},
+    aboutYou: () => {},
+    stackedTextArea: () => {},
+    refreshVisibility: () => {},
+  };
+}
+
+function voiceSettings(): VoiceSettings {
+  return {
+    openAiApiKey: "",
+    gptLiveCustomVoices: [{ id: "voice_abc", name: "Chad", description: "A relaxed British man." }],
+    voiceAboutYouNote: "",
+    voicePersonality: "",
+    dictationProvider: "openai",
+    elevenLabsApiKey: "",
+  };
+}
+
+/** A page's groups as Obsidian gets them: [heading, the rows shown now]. */
+function pageOutline(p: Page): [string | undefined, string[]][] {
+  const def = toDefinitions({ sections: [{ items: [p] }] })[0];
+  assert.ok("items" in def && def.items);
+  const defPage = def.items[0];
+  assert.ok(isPage(defPage) && defPage.items);
+  return defPage.items.map((g) => {
+    assert.ok("type" in g && g.type === "group", "the page holds only groups");
+    assert.ok(!g.items?.some(isPage), "no row opens another page");
+    const shown = (g.items ?? []).filter((i) => typeof i.visible !== "function" || i.visible());
+    return [g.heading, names(shown)];
+  });
+}
+
+test("Voice has voice calls, then dictation, each in its own headed group", () => {
+  const s = voiceSettings();
+  s.dictationProvider = "elevenlabs";
+  assert.deepEqual(pageOutline(voicePage(voiceHost(s))), [
+    ["Voice calls (GPT-Live)", ["OpenAI API key", "Voice", "Chad", "Add a custom voice", "About you", "Personality"]],
+    ["Dictation", ["Dictation service", "ElevenLabs API key"]],
+  ]);
+});
+
+test("the ElevenLabs key shows only when ElevenLabs does the dictation", () => {
+  const s = voiceSettings();
+  assert.deepEqual(pageOutline(voicePage(voiceHost(s)))[1], ["Dictation", ["Dictation service"]]);
+  s.dictationProvider = "elevenlabs";
+  assert.deepEqual(pageOutline(voicePage(voiceHost(s)))[1], ["Dictation", ["Dictation service", "ElevenLabs API key"]]);
+});
+
+test("Personality is drawn by Hyo, like About you, with a one-line description", () => {
+  const personality = voicePage(voiceHost(voiceSettings())).sections[0].items.find((i) => i.name === "Personality");
+  // A custom row, so its box sits full width underneath (Obsidian's own
+  // textarea control would squeeze it into the right-hand column).
+  assert.ok(personality && personality.kind === "custom");
+  assert.equal(personality.desc, "How the voice talks to you: its character and tone.");
+});
+
 // ---- Commands -------------------------------------------------------------------
 
-function commandsHost(commands: Record<string, HyoCommand[]>): CommandsHost {
+function commandsHost(commands: Record<string, HyoCommand[]>, expanded = new Set<string>()): CommandsHost {
   return {
     app: () => {
       throw new Error("No Obsidian app in tests");
@@ -170,22 +235,15 @@ function commandsHost(commands: Record<string, HyoCommand[]>): CommandsHost {
     skillMissing: () => false,
     save: async () => {},
     rebuild: () => {},
+    refreshVisibility: () => {},
+    isExpanded: (type) => expanded.has(type),
+    setExpanded: (type, open) => {
+      if (open) expanded.add(type);
+      else expanded.delete(type);
+    },
     confirm: () => {},
     openUrl: () => {},
   };
-}
-
-/** Commands' groups as Obsidian gets them: [heading, row names]. */
-function commandsOutline(commands: Record<string, HyoCommand[]>): [string | undefined, string[]][] {
-  const def = toDefinitions({ sections: [{ items: [commandsPage(commandsHost(commands))] }] })[0];
-  assert.ok("items" in def && def.items);
-  const p = def.items[0];
-  assert.ok(isPage(p) && p.items);
-  return p.items.map((g) => {
-    assert.ok("type" in g && g.type === "group", "Commands holds only groups, no nested pages");
-    assert.ok(!g.items?.some(isPage), "no row in Commands opens another page");
-    return [g.heading, names(g.items)];
-  });
 }
 
 /** Every page anywhere under these sections. */
@@ -193,44 +251,82 @@ function nestedPages(sections: Section[]): Page[] {
   return sections.flatMap((s) => s.items.flatMap((i) => (i.kind === "page" ? [i, ...nestedPages(i.sections)] : [])));
 }
 
-test("Commands shows each note type's commands in place, under its name, with no nested pages", () => {
-  const commands: Record<string, HyoCommand[]> = {
-    meeting: [
-      { skill: "summarise", label: "Summarise" },
-      { skill: "actions", label: "Action items" },
-    ],
-    project: [{ skill: "status", label: "" }],
-  };
-  assert.equal(nestedPages(commandsPage(commandsHost(commands)).sections).length, 0);
-  assert.deepEqual(commandsOutline(commands), [
-    [undefined, ["How commands work"]],
-    ["meeting", ["Commands", "Summarise", "Action items", "Add command", "Remove these commands"]],
-    ["project", ["Commands", "Untitled command", "Add command", "Remove these commands"]],
-    [undefined, ["Add a note type"]],
+/** The note types' rows shown now, with each row's description. */
+function typeRowsShown(host: CommandsHost): [string, string | undefined][] {
+  const group = commandsPage(host).sections[1];
+  assert.equal(group.heading, "Note types");
+  return group.items
+    .filter((i): i is Row => i.kind !== "page" && (!i.visible || i.visible()))
+    .map((r) => [r.name, typeof r.desc === "string" ? r.desc : undefined]);
+}
+
+const threeTypes = (): Record<string, HyoCommand[]> => ({
+  meeting: [
+    { skill: "summarise", label: "Summarise" },
+    { skill: "actions", label: "Action items" },
+  ],
+  project: [{ skill: "status", label: "" }],
+  person: [],
+});
+
+test("Commands puts Add a note type first, then one closed row per note type with its count", () => {
+  const host = commandsHost(threeTypes());
+  assert.equal(nestedPages(commandsPage(host).sections).length, 0);
+  assert.deepEqual(pageOutline(commandsPage(host)), [
+    [undefined, ["How commands work", "Add a note type"]],
+    ["Note types", ["meeting", "project", "person"]],
+  ]);
+  assert.deepEqual(typeRowsShown(host), [
+    ["meeting", "2 commands"],
+    ["project", "1 command"],
+    ["person", "No commands yet"],
   ]);
 });
 
-test("adding a note type puts its group just above Add a note type, ready for its first command", () => {
+test("an open note type shows its commands and a link to add one, under its row", () => {
+  const expanded = new Set(["meeting"]);
+  const host = commandsHost(threeTypes(), expanded);
+  assert.deepEqual(pageOutline(commandsPage(host))[1], [
+    "Note types",
+    ["meeting", "Summarise", "Action items", "Add command", "project", "person"],
+  ]);
+  // Closing it again hides them: no redraw of the definitions needed.
+  const page = commandsPage(host);
+  expanded.delete("meeting");
+  assert.deepEqual(pageOutline(page)[1], ["Note types", ["meeting", "project", "person"]]);
+});
+
+test("there's no section for removing a type's commands: the type's row does that", () => {
+  const all = pageOutline(commandsPage(commandsHost(threeTypes(), new Set(["meeting", "project", "person"]))));
+  assert.equal(all.length, 2);
+  assert.ok(!JSON.stringify(all).includes("Remove"));
+});
+
+test("with no note types yet, the page is the guide and the Add box", () => {
+  assert.deepEqual(pageOutline(commandsPage(commandsHost({}))), [[undefined, ["How commands work", "Add a note type"]]]);
+});
+
+test("a newly added note type opens straight away, ready for its first command", async () => {
   const commands: Record<string, HyoCommand[]> = { meeting: [{ skill: "summarise", label: "Summarise" }] };
-  assert.equal(addNoteType(commands, "  project "), true);
+  const expanded = new Set<string>();
+  const host = commandsHost(commands, expanded);
+  await submitNoteType(host, "  project ");
+  assert.deepEqual(Object.keys(commands), ["meeting", "project"]);
+  assert.deepEqual(pageOutline(commandsPage(host))[1], ["Note types", ["meeting", "project", "Add command"]]);
   assert.equal(addNoteType(commands, "project"), false, "a type is only added once");
   assert.equal(addNoteType(commands, "   "), false, "a blank type isn't added");
-  const outline = commandsOutline(commands);
-  assert.deepEqual(outline.slice(-2), [
-    ["project", ["Add command", "Remove these commands"]],
-    [undefined, ["Add a note type"]],
-  ]);
 });
 
-test("adding a command adds its row to that type's group, running the first skill", () => {
+test("adding a command adds its row under that type, running the first skill", () => {
   const commands: Record<string, HyoCommand[]> = { meeting: [], project: [] };
   addCommand(commands, "project", [
     { name: "status", description: "", content: "" },
     { name: "other", description: "", content: "" },
   ]);
   assert.deepEqual(commands.project, [{ skill: "status", label: "", extra: "" }]);
-  assert.deepEqual(commandsOutline(commands).slice(1, 3), [
-    ["meeting", ["Add command", "Remove these commands"]],
-    ["project", ["Commands", "Untitled command", "Add command", "Remove these commands"]],
+  assert.deepEqual(pageOutline(commandsPage(commandsHost(commands, new Set(["project"]))))[1], [
+    "Note types",
+    ["meeting", "project", "Untitled command", "Add command"],
   ]);
+  assert.deepEqual([commandCount(0), commandCount(1), commandCount(2)], ["No commands yet", "1 command", "2 commands"]);
 });

@@ -1,5 +1,6 @@
 import {
   App,
+  ButtonComponent,
   FuzzySuggestModal,
   Modal,
   Notice,
@@ -12,6 +13,7 @@ import {
 } from "obsidian";
 import { FallbackRenderer, arrangeTab, controlRows, toDefinitions, type ControlRow, type Layout, type Page, type Row } from "./settings-layout";
 import { commandsPage } from "./settings-commands";
+import { voicePage } from "./settings-voice";
 import { MAIN_CHAT_AVAILABLE } from "./main-chat";
 // Node built-ins and Electron are desktop-only, loaded where they're used.
 import { electron, nodeFs, nodeOs, nodePath, type ElectronApi } from "./platform/node";
@@ -23,8 +25,7 @@ export { CUSTOM_VOICE_PREFIX, resolveLiveVoice, type CustomLiveVoice };
 import { MODEL_OPTIONS, EFFORT_OPTIONS, DEFAULT_EFFORT } from "./models";
 import { checkMobileAccess, mobileLogPath } from "./gateway-host";
 import { detectClaude, checkClaude, installClaude, signIn, type ClaudeStatus } from "./cli-probe";
-import { DEFAULT_VOICE_PERSONALITY } from "./voice/gpt-live";
-import { DICTATION_PROVIDERS, isDictationProvider, type DictationProvider } from "./voice/dictation";
+import type { DictationProvider } from "./voice/dictation";
 
 // A single command: which skill it fires, what its header-menu label reads,
 // and any extra instruction text appended after the skill invocation.
@@ -239,6 +240,11 @@ export class HyoSettingTab extends PluginSettingTab {
    * Install or Sign in.
    */
   private claudeCheck: { path: string; status: Promise<ClaudeStatus> } | null = null;
+  /**
+   * The note types open on the Commands page. Kept on the tab, not the page,
+   * so a type stays open through the redraws that follow each edit.
+   */
+  private expandedNoteTypes = new Set<string>();
 
   constructor(app: App, plugin: HyoPlugin) {
     super(app, plugin);
@@ -370,7 +376,13 @@ export class HyoSettingTab extends PluginSettingTab {
             skillMissing: (skill, skills) => this.plugin.commands.skillMissing(skill, skills),
             save: () => this.plugin.saveSettings(),
             rebuild: () => this.rebuild(),
-            confirm: (message, onConfirm) => new ConfirmDeleteModal(this.app, message, onConfirm).open(),
+            refreshVisibility: () => this.refreshVisibility(),
+            isExpanded: (type) => this.expandedNoteTypes.has(type),
+            setExpanded: (type, open) => {
+              if (open) this.expandedNoteTypes.add(type);
+              else this.expandedNoteTypes.delete(type);
+            },
+            confirm: (message, onConfirm) => new ConfirmRemoveModal(this.app, message, onConfirm).open(),
             openUrl,
           }),
         advanced: () => this.advancedPage(),
@@ -535,110 +547,22 @@ export class HyoSettingTab extends PluginSettingTab {
 
   // ---- Voice ----------------------------------------------------------------
   private voicePage(): Page {
-    const settings = () => this.plugin.settings;
-    const customVoices: Row[] = (settings().gptLiveCustomVoices || []).map((c) => ({
-      kind: "custom",
-      name: c.name || "Custom voice",
-      desc: `${c.id}${c.description ? ` · ${c.description.slice(0, 120)}${c.description.length > 120 ? "…" : ""}` : ""}`,
-      build: (setting: Setting) => {
-        setting.addButton((btn) =>
-          btn.setButtonText("Remove").onClick(async () => {
-            const st = this.plugin.settings;
-            st.gptLiveCustomVoices = (st.gptLiveCustomVoices || []).filter((v) => v.id !== c.id);
-            if (st.gptLiveVoice === `${CUSTOM_VOICE_PREFIX}${c.id}`) st.gptLiveVoice = "marin";
-            await this.plugin.saveSettings();
-            this.rebuild();
-          })
-        );
+    return voicePage({
+      settings: () => this.plugin.settings,
+      keyInput: (setting, placeholder, get, set) => this.buildKeyInput(setting, placeholder, get, set),
+      voicePicker: (setting) => this.buildVoicePicker(setting),
+      customVoiceAdder: (setting) => this.buildCustomVoiceAdder(setting),
+      removeCustomVoice: async (id) => {
+        const st = this.plugin.settings;
+        st.gptLiveCustomVoices = (st.gptLiveCustomVoices || []).filter((v) => v.id !== id);
+        if (st.gptLiveVoice === `${CUSTOM_VOICE_PREFIX}${id}`) st.gptLiveVoice = "marin";
+        await this.plugin.saveSettings();
+        this.rebuild();
       },
-    }));
-
-    const calls: Row[] = [
-      {
-        kind: "custom",
-        name: "OpenAI API key",
-        desc: "A voice call is a real back-and-forth with OpenAI's GPT-Live: it talks with you and hands anything that needs your files or real work to Claude. Get a key from platform.openai.com → API keys. Calls are billed to this key at OpenAI's per-minute rate. Calls from your phone use this key too, through your desktop. It can also transcribe dictation (below).",
-        aliases: ["voice call", "gpt-live"],
-        build: (setting) => this.buildKeyInput(setting, "sk-...", () => settings().openAiApiKey, (v) => (settings().openAiApiKey = v)),
-      },
-      {
-        kind: "custom",
-        name: "Voice",
-        desc: "One of OpenAI's built-in voices, or a custom voice you've added below. Takes effect on the next call. Play sample says one line in the chosen voice (about two seconds of call time).",
-        build: (setting) => this.buildVoicePicker(setting),
-      },
-      ...customVoices,
-      {
-        kind: "custom",
-        name: "Add a custom voice",
-        desc: "Paste a custom voice's id (it starts voice_) and the description it was made from. It joins the list above.",
-        build: (setting) => this.buildCustomVoiceAdder(setting),
-      },
-      {
-        kind: "custom",
-        name: "About you",
-        desc: () => {
-          const note = settings().voiceAboutYouNote || "";
-          const frag = createFragment();
-          frag.append(
-            note
-              ? `The voice reads your note "${note.replace(/\.md$/, "")}" fresh at the start of each call.`
-              : "A few lines the voice always knows: your name, what you do, how you like to be spoken to. Or use a note from your vault instead."
-          );
-          return frag;
-        },
-        build: (setting) => this.buildAboutYou(setting),
-      },
-      {
-        kind: "control",
-        key: "voicePersonality",
-        name: "Personality",
-        desc: "How the voice talks and who it's talking to: its character, your name, anything it should always know about you. A few sentences. Its name comes from the tab's agent file; with no agent it's simply your agent. Everything about your files and work still comes from Claude.",
-        binding: {
-          type: "textarea",
-          rows: 5,
-          placeholder: DEFAULT_VOICE_PERSONALITY,
-          get: () => settings().voicePersonality || "",
-          set: (v) => (settings().voicePersonality = v),
-        },
-      },
-    ];
-
-    const dictationOptions: Record<string, string> = {};
-    for (const p of DICTATION_PROVIDERS) dictationOptions[p.id] = p.label;
-    const dictation: Row[] = [
-      {
-        kind: "control",
-        key: "dictationProvider",
-        name: "Dictation service",
-        desc: "Who turns your words into text when you hold or tap the mic on your phone. OpenAI uses the key above; ElevenLabs needs a key of its own.",
-        aliases: ["speech to text", "transcription", "microphone"],
-        binding: {
-          type: "dropdown",
-          options: dictationOptions,
-          get: () => settings().dictationProvider,
-          set: (v) => {
-            if (isDictationProvider(v)) settings().dictationProvider = v;
-          },
-        },
-        after: () => this.refreshVisibility(),
-      },
-      {
-        kind: "custom",
-        name: "ElevenLabs API key",
-        desc: "For dictation. Get your API key from elevenlabs.io/app/settings/api-keys",
-        visible: () => settings().dictationProvider === "elevenlabs",
-        build: (setting) => this.buildKeyInput(setting, "xi_...", () => settings().elevenLabsApiKey, (v) => (settings().elevenLabsApiKey = v)),
-      },
-    ];
-
-    return {
-      kind: "page",
-      id: "voice",
-      name: "Voice",
-      desc: "Talk to your agent on a voice call, and choose who transcribes your dictation.",
-      sections: [{ items: calls }, { heading: "Dictation", items: dictation }],
-    };
+      aboutYou: (setting) => this.buildAboutYou(setting),
+      stackedTextArea: (setting, o) => this.buildStackedTextArea(setting, o),
+      refreshVisibility: () => this.refreshVisibility(),
+    });
   }
 
   /** A password box for an API key, trimmed and saved as it's typed. */
@@ -742,14 +666,24 @@ export class HyoSettingTab extends PluginSettingTab {
       );
       return;
     }
-    setting.settingEl.addClass("hyo-setting-stacked");
-    const area = setting.settingEl.createEl("textarea", {
-      attr: { rows: "3", placeholder: "I'm Sam. I run a small design studio. Keep it brief and skip the pleasantries." },
+    this.buildStackedTextArea(setting, {
+      placeholder: "I'm Sam. I run a small design studio. Keep it brief and skip the pleasantries.",
+      get: () => this.plugin.settings.voiceAboutYou || "",
+      set: (v) => (this.plugin.settings.voiceAboutYou = v),
     });
+  }
+
+  /**
+   * A full-width box under the row's name and description, saved as it's
+   * typed. About you and Personality share it, so the two boxes match.
+   */
+  private buildStackedTextArea(setting: Setting, o: { placeholder: string; get: () => string; set: (v: string) => void }): void {
+    setting.settingEl.addClass("hyo-setting-stacked");
+    const area = setting.settingEl.createEl("textarea", { attr: { rows: "4", placeholder: o.placeholder } });
     area.addClass("hyo-textarea-full");
-    area.value = this.plugin.settings.voiceAboutYou || "";
+    area.value = o.get();
     area.addEventListener("input", () => {
-      this.plugin.settings.voiceAboutYou = area.value;
+      o.set(area.value);
       this.save(setting.nameEl);
     });
   }
@@ -1155,28 +1089,30 @@ class NotePickerModal extends FuzzySuggestModal<TFile> {
   }
 }
 
-// Small yes/no gate for destructive actions. Cancel is the safe default.
-class ConfirmDeleteModal extends Modal {
-  private message: string;
-  private onConfirm: () => void | Promise<void>;
+/** Style a button as destructive: `setDestructive` from 1.13, Obsidian's warning class before it. */
+function markDestructive(b: ButtonComponent): ButtonComponent {
+  if (requireApiVersion("1.13.0")) return b.setDestructive();
+  b.buttonEl.addClass("mod-warning");
+  return b;
+}
 
-  constructor(app: App, message: string, onConfirm: () => void | Promise<void>) {
+// Small yes/no gate before removing something. Cancel is the safe default.
+class ConfirmRemoveModal extends Modal {
+  constructor(app: App, private message: string, private onConfirm: () => void | Promise<void>) {
     super(app);
-    this.message = message;
-    this.onConfirm = onConfirm;
   }
 
   onOpen(): void {
     this.contentEl.createEl("p", { text: this.message });
     const row = this.contentEl.createDiv({ cls: "hyo-confirm-buttons" });
-    const cancel = row.createEl("button", { text: "Cancel" });
-    cancel.addEventListener("click", () => this.close());
-    const del = row.createEl("button", { text: "Delete", cls: "mod-warning" });
-    del.addEventListener("click", () => {
-      this.close();
-      Promise.resolve(this.onConfirm()).catch((e: unknown) => console.error("[hyo] Couldn't finish removing:", e));
-    });
-    cancel.focus();
+    markDestructive(new ButtonComponent(row))
+      .setButtonText("Remove")
+      .onClick(() => {
+        this.close();
+        Promise.resolve(this.onConfirm()).catch((e: unknown) => console.error("[hyo] Couldn't finish removing:", e));
+      });
+    const cancel = new ButtonComponent(row).setButtonText("Cancel").onClick(() => this.close());
+    cancel.buttonEl.focus();
   }
 
   onClose(): void {

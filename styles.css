@@ -5122,12 +5122,23 @@ textarea.hyo-textarea-full, .setting-item-control textarea.hyo-textarea-full { w
 .setting-item.hyo-setting-stacked { flex-direction: column; align-items: stretch; }
 .setting-item.hyo-setting-stacked .setting-item-control { margin-top: 8px; }
 .setting-item.hyo-setting-stacked > textarea { margin-top: 8px; }
+.setting-item.hyo-setting-stacked .setting-item-control:empty { display: none; }
 
 /* Before Obsidian 1.13: a row that opens a page (Voice, Mobile, …) in place. */
 .setting-item.hyo-settings-page-row { cursor: pointer; }
 .setting-item.hyo-settings-page-row .setting-item-name { font-weight: 600; }
 
-.setting-item.hyo-command-row { position: relative; }
+/* Commands: one row per note type, opening in place to show its commands,
+   which sit indented under the type's name. */
+.setting-item.hyo-command-type { cursor: pointer; }
+.hyo-command-type-chevron { display: flex; align-items: center; flex-shrink: 0; margin-inline-end: 6px; color: var(--text-muted); --icon-size: var(--icon-s); transition: transform 120ms ease; }
+.setting-item.hyo-command-type.is-expanded .hyo-command-type-chevron { transform: rotate(90deg); }
+.setting-item.hyo-command-type:focus-visible { outline: 2px solid var(--background-modifier-border-focus); outline-offset: -2px; }
+.setting-item.hyo-command-row { position: relative; padding-top: 6px; padding-bottom: 6px; }
+.setting-item.hyo-command-row .hyo-command-grip { margin-inline-start: 22px; }
+.setting-item.hyo-command-add-row { padding-top: 4px; padding-bottom: 8px; }
+.setting-item button.hyo-command-add { margin-inline-start: 22px; padding: 2px 4px; height: auto; background: none; border: none; box-shadow: none; color: var(--text-muted); font-size: var(--font-ui-small); cursor: pointer; }
+.setting-item button.hyo-command-add:hover { background: none; color: var(--text-accent); }
 .setting-item.hyo-command-row.is-dragging { opacity: 0.5; }
 .setting-item.hyo-command-row .setting-item-control { flex: 1; justify-content: flex-start; }
 .hyo-command-grip { cursor: grab; color: var(--text-faint); display: flex; align-items: center; flex-shrink: 0; }
@@ -5165,9 +5176,4 @@ textarea.hyo-textarea-full, .setting-item-control textarea.hyo-textarea-full { w
 .hyo-status-text.is-bad { color: var(--color-red); }
 .hyo-status-text.is-muted { color: var(--text-muted); }
 .hyo-settings-back { cursor: pointer; color: var(--text-accent); margin: 0 0 14px; font-size: 0.95em; }
-.hyo-commands-columns { display: flex; gap: 8px; padding: 10px 0 4px; font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
-.hyo-commands-col-grip { width: 18px; flex-shrink: 0; }
-.hyo-commands-col-name { width: 170px; flex-shrink: 0; }
-.hyo-commands-col-skill { flex: 1; }
-.hyo-commands-col-action { width: 28px; flex-shrink: 0; }
 .hyo-confirm-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
