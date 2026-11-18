@@ -10,7 +10,7 @@ import { errorMessage, isObject } from "./types/json";
 import { HyoView, VIEW_TYPE_HYO } from "./HyoView";
 import { HyoSettingTab, HyoSettings, DEFAULT_SETTINGS, dispatchSettingsChanged } from "./settings";
 import { cleanupOldAttachments } from "./attachments";
-import { setDebug } from "./debug";
+import { debug, setDebug } from "./debug";
 import { probeCliCapabilities } from "./cli-capabilities";
 import { startGatewayHost, stopGatewayHost, GatewayStatus } from "./gateway-host";
 import { setSessionOwnerFactory, shutdownSessionOwners, fileLock, onTurnEnded } from "./session-owner";
@@ -95,6 +95,7 @@ export default class HyoPlugin extends Plugin {
 
   async onload() {
     await this.loadSettings();
+    this.app.workspace.onLayoutReady(() => void this.removeOldVoiceModels());
     // One Claude process per conversation, shared by every Hyo panel and the
     // phone (see session-owner.ts). The main chat is one of them. Desktop only.
     if (!Platform.isMobile) {
@@ -449,6 +450,20 @@ export default class HyoPlugin extends Plugin {
       stopGatewayHost();
     } catch (e) {
       console.error("[hyo] Failed to stop mobile gateway host:", e);
+    }
+  }
+
+  /**
+   * Versions before 0.9.5 downloaded speech-detection models (about 50 MB)
+   * into the plugin folder for the ElevenLabs voice mode, which has since
+   * been removed. Clear them out so they don't sit on disk unused.
+   */
+  private async removeOldVoiceModels(): Promise<void> {
+    const dir = `${this.manifest.dir ?? ""}/vad-assets`;
+    try {
+      if (await this.app.vault.adapter.exists(dir)) await this.app.vault.adapter.rmdir(dir, true);
+    } catch (e) {
+      debug("[hyo] Couldn't remove the old voice models:", e);
     }
   }
 
