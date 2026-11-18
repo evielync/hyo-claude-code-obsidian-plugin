@@ -24,6 +24,8 @@
  */
 
 import type { ToolCallData, OrderedBlock } from "./hooks/useChatEngine";
+import { asObject, str } from "./types/json";
+import { blockType, contentOf, isBlockList, readBlock, type UserRecord } from "./types/claude-session";
 
 export interface StreamState {
   toolCalls: ToolCallData[];
@@ -47,23 +49,25 @@ export function newStreamState(): StreamState {
 }
 
 /** A sub-agent's events carry these; its `result` doesn't end the main turn. */
-export function isSidechainEvent(event: any): boolean {
-  return !!(event?.isSidechain || event?.parent_tool_use_id);
+export function isSidechainEvent(event: unknown): boolean {
+  const e = asObject(event);
+  return !!(e?.isSidechain || e?.parent_tool_use_id);
 }
 
 /** An event that adds to the main reply: Claude's messages, tool results, streamed blocks. */
-function isMainChainContent(event: any): boolean {
-  if (!event || isSidechainEvent(event)) return false;
-  if (event.type === "assistant" || event.type === "user") return true;
-  if (event.type === "stream_event") {
-    const t = (event.event || event).type;
+function isMainChainContent(event: unknown): boolean {
+  const e = asObject(event);
+  if (!e || isSidechainEvent(e)) return false;
+  if (e.type === "assistant" || e.type === "user") return true;
+  if (e.type === "stream_event") {
+    const t = (asObject(e.event) ?? e).type;
     return t === "content_block_start" || t === "content_block_delta";
   }
   return false;
 }
 
 /** The main turn's result: from here on, content belongs to a turn Claude starts itself. */
-export function endTurn(ss: StreamState, event: any): void {
+export function endTurn(ss: StreamState, event: unknown): void {
   if (!isSidechainEvent(event)) ss.turnDone = true;
 }
 
@@ -71,7 +75,7 @@ export function endTurn(ss: StreamState, event: any): void {
  * Content arriving after the turn ended: Claude started a turn of its own.
  * Resets the stream state in place, so the caller's `ss` is the new turn's.
  */
-export function startsTurnOfItsOwn(ss: StreamState, event: any): boolean {
+export function startsTurnOfItsOwn(ss: StreamState, event: unknown): boolean {
   if (!ss.turnDone || !isMainChainContent(event)) return false;
   Object.assign(ss, newStreamState());
   return true;
@@ -88,12 +92,13 @@ export function openReply<M extends { role: string; streaming?: boolean; voice?:
  * Newer CLIs mark these `promptSource: "system"`; older ones only have the
  * notification text.
  */
-export function isSelfStartedPrompt(entry: any): boolean {
-  if (entry?.type !== "user") return false;
-  if (entry.promptSource === "system") return true;
-  if (entry.origin?.kind === "task-notification") return true;
-  const c = entry.message?.content;
-  const text = typeof c === "string" ? c : Array.isArray(c) ? c.find((b: any) => b?.type === "text")?.text || "" : "";
+export function isSelfStartedPrompt(entry: unknown): boolean {
+  const e = asObject(entry);
+  if (e?.type !== "user") return false;
+  if (e.promptSource === "system") return true;
+  if (asObject(e.origin)?.kind === "task-notification") return true;
+  const c = contentOf(e);
+  const text = typeof c === "string" ? c : isBlockList(c) ? str(asObject(c.find((b) => blockType(b) === "text"))?.text) || "" : "";
   return /^\s*<task-notification>/.test(text);
 }
 
@@ -106,8 +111,9 @@ export function isSelfStartedPrompt(entry: any): boolean {
  * `isSynthetic`. The "Used the … skill" line comes from the tool call, so
  * leaving these out loses nothing.
  */
-export function isInjectedContext(entry: any): boolean {
-  return entry?.type === "user" && (entry.isMeta === true || entry.isSynthetic === true);
+export function isInjectedContext(entry: unknown): boolean {
+  const e = asObject(entry);
+  return e?.type === "user" && (e.isMeta === true || e.isSynthetic === true);
 }
 
 /**
@@ -119,19 +125,29 @@ export function isInjectedContext(entry: any): boolean {
  * for anything else, including held prompts Claude added itself (a task
  * notification).
  */
-export function steerAsUserEntry(entry: any): any | null {
-  const a = entry?.type === "attachment" ? entry.attachment : null;
-  if (a?.type !== "queued_command") return null;
+export function steerAsUserEntry(entry: unknown): UserRecord | null {
+  const e = asObject(entry);
+  const a = e?.type === "attachment" ? asObject(e.attachment) : null;
+  if (!e || a?.type !== "queued_command") return null;
   if (a.commandMode && a.commandMode !== "prompt") return null;
-  if (entry.isMeta) return null;
-  const content = typeof a.prompt === "string" ? [{ type: "text", text: a.prompt }] : Array.isArray(a.prompt) ? a.prompt : null;
+  if (e.isMeta) return null;
+  const content: unknown[] | null =
+    typeof a.prompt === "string" ? [{ type: "text", text: a.prompt }] : isBlockList(a.prompt) ? a.prompt : null;
   if (!content || !content.length) return null;
-  const user = { type: "user", uuid: a.source_uuid || entry.uuid, message: { role: "user", content } };
+  const user: UserRecord = { type: "user", uuid: a.source_uuid || e.uuid, message: { role: "user", content } };
   return isSelfStartedPrompt(user) ? null : user;
 }
 
-export function processContentBlocks(contentArr: any[], ss: StreamState, source: "user" | "assistant") {
-  for (const block of contentArr) {
+/**
+ * Take a message's content blocks into the turn's stream state. `contentArr`
+ * is the message's content as it arrived; anything but a list of blocks adds
+ * nothing.
+ */
+export function processContentBlocks(contentArr: unknown, ss: StreamState, source: "user" | "assistant") {
+  if (!isBlockList(contentArr)) return;
+  for (const raw of contentArr) {
+    const block = readBlock(raw);
+    if (!block) continue;
     if (block.type === "text") {
       if (ss.toolResultSinceLastText && ss.orderedBlocks.length > 0)
         ss.turnIndex++;
@@ -139,7 +155,7 @@ export function processContentBlocks(contentArr: any[], ss: StreamState, source:
         (b) => b.type === "text" && b.turnIndex === ss.turnIndex
       );
       if (existing) {
-        existing.content = block.text || "";
+        existing.content = block.text;
         // When Claude's assistant event updates a previously suppressed block, unsuppress it
         if (source === "assistant") existing.isSkillOutput = false;
       } else {
@@ -148,7 +164,7 @@ export function processContentBlocks(contentArr: any[], ss: StreamState, source:
         ss.skillResultPending = false;
         ss.orderedBlocks.push({
           type: "text",
-          content: block.text || "",
+          content: block.text,
           turnIndex: ss.turnIndex,
           isSkillOutput,
         });
@@ -158,11 +174,11 @@ export function processContentBlocks(contentArr: any[], ss: StreamState, source:
       const existing = ss.orderedBlocks.find(
         (b) => b.type === "thinking" && b.turnIndex === ss.turnIndex
       );
-      if (existing) existing.content = block.thinking || "";
+      if (existing) existing.content = block.thinking;
       else
         ss.orderedBlocks.push({
           type: "thinking",
-          content: block.thinking || "",
+          content: block.thinking,
           turnIndex: ss.turnIndex,
         });
     } else if (block.type === "tool_use") {

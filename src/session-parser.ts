@@ -1,14 +1,14 @@
 import { debug } from "./debug";
-import { Platform } from "obsidian";
 import { isSelfStartedPrompt, isInjectedContext, steerAsUserEntry } from "./reply-stream";
 import { transcriptModel, resumeModel } from "./models";
 import { isTrivialOpener, historyFallbackTitle } from "./conversation-title";
 import { mergeStoredCalls, upsertCall, callOnlySessions, type VoiceCallRecord } from "./voice/voice-call";
 import type * as fsTypes from "fs"; // type-only (erased at build) for annotations
-// Node built-ins are desktop-only; deferred so this module loads on mobile.
-const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
-const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
-const os: typeof import("os") = Platform.isMobile ? (undefined as any) : require("os");
+// Node built-ins are desktop-only: each function loads what it uses, so this
+// module also loads on mobile (where only the pure parsing is used).
+import { nodeFs, nodeOs, nodePath } from "./platform/node";
+import { asObject, errorCode, isObject, str } from "./types/json";
+import { blockTexts, blockType, contentOf, isBlockList, messageOf, readBlocks, type TextBlock } from "./types/claude-session";
 
 export interface PastSession {
   id: string;
@@ -45,7 +45,7 @@ function hashProjectPath(p: string): string {
 // realpathSync (resolve symlinks) + NFC Unicode normalisation.
 function resolveProjectCwd(cwd: string): string {
   try {
-    return fs.realpathSync(cwd).normalize("NFC");
+    return nodeFs().realpathSync(cwd).normalize("NFC");
   } catch {
     return cwd.normalize("NFC");
   }
@@ -62,7 +62,8 @@ function stripTrailingSlash(p: string): string {
 // hash and a different directory name. We try several normalizations and
 // return unique candidates.
 function getCandidateProjectDirs(cwd: string): string[] {
-  const base = path.join(os.homedir(), ".claude", "projects");
+  const path = nodePath();
+  const base = path.join(nodeOs().homedir(), ".claude", "projects");
   const seen = new Set<string>();
   const dirs: string[] = [];
 
@@ -102,6 +103,7 @@ function getCandidateProjectDirs(cwd: string): string[] {
 // Tries multiple candidate paths and returns the first that exists on disk,
 // falling back to the primary (Claude Code algorithm) if none exist yet.
 export function getProjectDir(cwd: string): string {
+  const fs = nodeFs();
   const candidates = getCandidateProjectDirs(cwd);
   for (const dir of candidates) {
     try {
@@ -115,7 +117,7 @@ export function getProjectDir(cwd: string): string {
 }
 
 function getMetadataPath(cwd: string): string {
-  return path.join(getProjectDir(cwd), "session-metadata.json");
+  return nodePath().join(getProjectDir(cwd), "session-metadata.json");
 }
 
 // A spoken turn as 0.6.x saved it, one per line. Read back as calls; never
@@ -159,6 +161,8 @@ export function saveVoiceCall(cwd: string, sessionId: string, call: VoiceCallRec
 
 /** Claude has written this conversation (its transcript file exists). */
 export function hasTranscript(cwd: string, sessionId: string): boolean {
+  const fs = nodeFs();
+  const path = nodePath();
   return getCandidateProjectDirs(cwd).some((d) => {
     try {
       return fs.existsSync(path.join(d, `${sessionId}.jsonl`));
@@ -170,6 +174,8 @@ export function hasTranscript(cwd: string, sessionId: string): boolean {
 
 /** When Claude last wrote this conversation's transcript (epoch ms), or null if there's no transcript. */
 export function transcriptLastWrite(cwd: string, sessionId: string): number | null {
+  const fs = nodeFs();
+  const path = nodePath();
   for (const d of getCandidateProjectDirs(cwd)) {
     try {
       return Math.round(fs.statSync(path.join(d, `${sessionId}.jsonl`)).mtimeMs);
@@ -187,10 +193,16 @@ export function getVoiceCalls(cwd: string, sessionId: string): VoiceCallRecord[]
 }
 
 function loadMetadata(cwd: string): SessionMetadata {
+  const fs = nodeFs();
   const metaPath = getMetadataPath(cwd);
   try {
     if (fs.existsSync(metaPath)) {
-      return JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+      const parsed: unknown = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+      // Hyo's own file (the gateway writes it too): conversation id → its
+      // entry. Kept whole, fields Hyo doesn't know included, since it's
+      // written back as it was read.
+      if (isObject(parsed)) return parsed as SessionMetadata;
+      return {};
     }
   } catch (e) {
     console.error("[hyo] Failed to load metadata:", e);
@@ -201,7 +213,7 @@ function loadMetadata(cwd: string): SessionMetadata {
 function saveMetadata(cwd: string, metadata: SessionMetadata): void {
   const metaPath = getMetadataPath(cwd);
   try {
-    fs.writeFileSync(metaPath, JSON.stringify(metadata, null, 2), "utf-8");
+    nodeFs().writeFileSync(metaPath, JSON.stringify(metadata, null, 2), "utf-8");
   } catch (e) {
     console.error("[hyo] Failed to save metadata:", e);
   }
@@ -212,11 +224,6 @@ export function saveCustomTitle(cwd: string, sessionId: string, title: string): 
   if (!metadata[sessionId]) metadata[sessionId] = {};
   metadata[sessionId].customTitle = title;
   saveMetadata(cwd, metadata);
-}
-
-function getCustomTitle(cwd: string, sessionId: string): string | null {
-  const metadata = loadMetadata(cwd);
-  return metadata[sessionId]?.customTitle || null;
 }
 
 // Merge task state (pinned / closed / lastActive) for a conversation into the
@@ -257,6 +264,8 @@ export function listPinned(cwd: string): { id: string; title: string; order: str
 }
 
 function transcriptFile(cwd: string, id: string): string | undefined {
+  const fs = nodeFs();
+  const path = nodePath();
   return getCandidateProjectDirs(cwd)
     .map((d) => path.join(d, `${id}.jsonl`))
     .find((f) => {
@@ -309,6 +318,8 @@ export function newestPlusPinned<T>(rows: T[], isPinned: (row: T) => boolean, li
 }
 
 export function listPastSessions(cwd: string): PastSession[] {
+  const fs = nodeFs();
+  const path = nodePath();
   const candidates = getCandidateProjectDirs(cwd);
   const seenIds = new Set<string>();
   const allEntries: { name: string; fullPath: string; stat: fsTypes.Stats }[] = [];
@@ -366,7 +377,7 @@ export function listPastSessions(cwd: string): PastSession[] {
         return false;
       }
     });
-  const callOnly: PastSession[] = callOnlySessions(metadata as any, hasTranscript).map((c) => ({
+  const callOnly: PastSession[] = callOnlySessions(metadata, hasTranscript).map((c) => ({
     id: c.id,
     title: c.title,
     date: new Date(c.date),
@@ -410,6 +421,7 @@ function extractLastMessage(filePath: string): {
   snippet: string;
 } {
   try {
+    const fs = nodeFs();
     const stat = fs.statSync(filePath);
     const readLen = Math.min(stat.size, 16384);
     const fd = fs.openSync(filePath, "r");
@@ -419,17 +431,18 @@ function extractLastMessage(filePath: string): {
 
     const lines = buf.toString("utf8").split("\n").filter((l) => l.trim());
     for (let i = lines.length - 1; i >= 0; i--) {
-      let d: any;
+      let parsed: unknown;
       try {
-        d = JSON.parse(lines[i]);
+        parsed = JSON.parse(lines[i]);
       } catch {
         continue; // partial first line from the tail read
       }
-      const content = d?.message?.content;
+      const d = asObject(parsed);
+      const content = contentOf(d);
       const textOf = (): string => {
-        if (Array.isArray(content)) {
-          const t = content.find((c: any) => c.type === "text" && c.text?.trim());
-          return t ? String(t.text) : "";
+        if (isBlockList(content)) {
+          const t = readBlocks(content).find((c): c is TextBlock => c.type === "text" && !!c.text.trim());
+          return t ? t.text : "";
         }
         return typeof content === "string" ? content : "";
       };
@@ -438,8 +451,8 @@ function extractLastMessage(filePath: string): {
         if (txt.trim()) return { role: "assistant", snippet: snip(txt) };
       } else if (d?.type === "user") {
         const isToolResult =
-          Array.isArray(content) &&
-          content.every((c: any) => c.type === "tool_result");
+          isBlockList(content) &&
+          content.every((c) => blockType(c) === "tool_result");
         if (!isToolResult) {
           const txt = textOf().replace(/<file\s+name="[^"]+">[\s\S]*?<\/file>/g, "");
           if (txt.trim()) return { role: "user", snippet: snip(txt) };
@@ -468,6 +481,8 @@ export function searchSessionText(
   const needle = query.trim().toLowerCase();
   const hits: Record<string, string> = {};
   if (!needle) return hits;
+  const fs = nodeFs();
+  const path = nodePath();
   const dirs = getCandidateProjectDirs(cwd);
   for (const id of sessionIds) {
     for (const dir of dirs) {
@@ -487,6 +502,7 @@ export function searchSessionText(
 }
 
 function findInSessionFile(full: string, needle: string): string | null {
+  const fs = nodeFs();
   const st = fs.statSync(full);
   const len = Math.min(st.size, SEARCH_MAX_BYTES);
   const fd = fs.openSync(full, "r");
@@ -498,14 +514,15 @@ function findInSessionFile(full: string, needle: string): string | null {
   }
   for (const line of buf.toString("utf8").split("\n")) {
     if (!line.trim() || !line.toLowerCase().includes(needle)) continue;
-    let o: any;
+    let parsed: unknown;
     try {
-      o = JSON.parse(line);
+      parsed = JSON.parse(line);
     } catch {
       continue;
     }
+    const o = asObject(parsed);
     if (o?.type !== "user" && o?.type !== "assistant") continue;
-    const text = messageText(o.message?.content);
+    const text = messageText(contentOf(o));
     const flat = text.replace(/[#*`>_]/g, "").replace(/\s+/g, " ");
     const at = flat.toLowerCase().indexOf(needle);
     if (at === -1) continue;
@@ -518,14 +535,16 @@ function findInSessionFile(full: string, needle: string): string | null {
 
 // Plain text of a message: string content as-is, block content joined from its
 // text blocks only.
-function messageText(content: any): string {
+function messageText(content: unknown): string {
   const raw =
     typeof content === "string"
       ? content
-      : Array.isArray(content)
+      : isBlockList(content)
         ? content
-            .filter((c: any) => c?.type === "text" && typeof c.text === "string")
-            .map((c: any) => c.text)
+            .flatMap((v) => {
+              const c = asObject(v);
+              return c?.type === "text" && typeof c.text === "string" ? [c.text] : [];
+            })
             .join("\n")
         : "";
   return raw
@@ -550,8 +569,24 @@ export interface HistoryMessage {
   displayText?: string;
   attachments?: { type: string; name: string }[];
   thinking?: string;
-  toolCalls?: { id: string; name: string; input: any; result: string | null }[];
-  orderedBlocks?: { type: "text" | "thinking" | "tool"; content?: string; toolId?: string; turnIndex: number }[];
+  toolCalls?: HistoryToolCall[];
+  orderedBlocks?: HistoryBlock[];
+}
+
+export interface HistoryToolCall {
+  id: string;
+  name: string;
+  /** The tool's arguments, as Claude wrote them. */
+  input: unknown;
+  result: string | null;
+}
+
+/** Where a message's text, thinking and tool calls fall, in order. `turnIndex` numbers its API turns. */
+export interface HistoryBlock {
+  type: "text" | "thinking" | "tool";
+  content?: string;
+  toolId?: string;
+  turnIndex: number;
 }
 
 /**
@@ -561,14 +596,14 @@ export interface HistoryMessage {
  * caller falls back to the Settings default.
  */
 export function loadSessionModel(cwd: string, sessionId: string): string | null {
-  const filePath = path.join(getProjectDir(cwd), `${sessionId}.jsonl`);
+  const filePath = nodePath().join(getProjectDir(cwd), `${sessionId}.jsonl`);
   let text: string;
   try {
-    text = fs.readFileSync(filePath, "utf8");
+    text = nodeFs().readFileSync(filePath, "utf8");
   } catch {
     return null;
   }
-  const lines: any[] = [];
+  const lines: unknown[] = [];
   for (const line of text.split("\n")) {
     if (!line.includes('"model"')) continue;
     try {
@@ -589,19 +624,23 @@ export function loadSessionModel(cwd: string, sessionId: string): string | null 
  */
 export function transcriptLineCount(cwd: string, sessionId: string): number | null {
   try {
-    const buf: Buffer = fs.readFileSync(path.join(getProjectDir(cwd), `${sessionId}.jsonl`));
+    const buf: Buffer = nodeFs().readFileSync(nodePath().join(getProjectDir(cwd), `${sessionId}.jsonl`));
     let n = 0;
     for (let i = 0; i < buf.length; i++) if (buf[i] === 10) n++;
     return n;
-  } catch (e: any) {
-    return e?.code === "ENOENT" ? 0 : null;
+  } catch (e) {
+    return errorCode(e) === "ENOENT" ? 0 : null;
   }
 }
 
-/** The transcript's lines, parsed, up to (not including) line `untilLine` when given. */
-export function readTranscriptEntries(cwd: string, sessionId: string, untilLine?: number | null): any[] {
-  const filePath = path.join(getProjectDir(cwd), `${sessionId}.jsonl`);
-  const entries: any[] = [];
+/**
+ * The transcript's lines, parsed, up to (not including) line `untilLine` when
+ * given. Each is as Claude wrote it, unchecked.
+ */
+export function readTranscriptEntries(cwd: string, sessionId: string, untilLine?: number | null): unknown[] {
+  const fs = nodeFs();
+  const filePath = nodePath().join(getProjectDir(cwd), `${sessionId}.jsonl`);
+  const entries: unknown[] = [];
   let text: string;
   try {
     if (!fs.existsSync(filePath)) return [];
@@ -631,7 +670,7 @@ export function loadSessionHistory(cwd: string, sessionId: string, untilLine?: n
 }
 
 /** A session's parsed jsonl lines, as chat messages. */
-export function parseSessionEntries(entries: any[]): HistoryMessage[] {
+export function parseSessionEntries(entries: unknown[]): HistoryMessage[] {
   const messages: HistoryMessage[] = [];
   const pendingToolResults = new Map<string, string>();
   // Claude started the next turn itself: its reply is a message of its own.
@@ -641,7 +680,9 @@ export function parseSessionEntries(entries: any[]): HistoryMessage[] {
     for (const entry of entries) {
       if (!entry) continue;
       // A message sent mid-reply ("Send now") shows where Claude took it in.
-      const d = steerAsUserEntry(entry) || entry;
+      const d = steerAsUserEntry(entry) || asObject(entry);
+      // Not a record (a stray number or string): nothing to show.
+      if (!d) continue;
       try {
         if (isSelfStartedPrompt(d)) {
           replyBreak = true;
@@ -650,12 +691,12 @@ export function parseSessionEntries(entries: any[]): HistoryMessage[] {
         if (isInjectedContext(d)) continue;
 
         if (d.type === "user") {
-          const content = d.message?.content;
+          const content = contentOf(d);
           if (!content) continue;
 
           // Check if this is a tool_result message
-          if (Array.isArray(content) && content.some((c: any) => c.type === "tool_result")) {
-            for (const c of content) {
+          if (isBlockList(content) && content.some((c) => blockType(c) === "tool_result")) {
+            for (const c of readBlocks(content)) {
               if (c.type === "tool_result" && c.tool_use_id) {
                 const result = typeof c.content === "string" ? c.content : JSON.stringify(c.content);
                 pendingToolResults.set(c.tool_use_id, result);
@@ -679,18 +720,16 @@ export function parseSessionEntries(entries: any[]): HistoryMessage[] {
           let rawText = "";
           const attachments: { type: string; name: string }[] = [];
 
-          if (Array.isArray(content)) {
+          if (isBlockList(content)) {
             // Extract text blocks
-            rawText = content
-              .filter((c: any) => c.type === "text")
-              .map((c: any) => c.text || "")
+            rawText = blockTexts(content)
               .join("")
               .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
               .replace(/<ide_[^>]*>[\s\S]*?<\/ide_[^>]*>/g, "")
               .trim();
 
             // Extract file attachments from document blocks (Claude Code desktop format)
-            for (const c of content) {
+            for (const c of readBlocks(content)) {
               if (c.type === "document" && c.title) {
                 attachments.push({ type: "file", name: c.title });
               } else if (c.type === "image") {
@@ -753,40 +792,39 @@ export function parseSessionEntries(entries: any[]): HistoryMessage[] {
         }
 
         if (d.type === "assistant") {
-          const content = d.message?.content || [];
           const textParts: string[] = [];
           const thinkingParts: string[] = [];
-          const toolCalls: HistoryMessage["toolCalls"] = [];
-          const orderedBlocks: HistoryMessage["orderedBlocks"] = [];
+          const toolCalls: HistoryToolCall[] = [];
+          const orderedBlocks: HistoryBlock[] = [];
           let turnIndex = 0;
 
-          for (const block of content) {
+          for (const block of readBlocks(contentOf(d))) {
             if (block.type === "text" && block.text) {
               textParts.push(block.text);
-              orderedBlocks!.push({ type: "text", content: block.text, turnIndex });
+              orderedBlocks.push({ type: "text", content: block.text, turnIndex });
             } else if (block.type === "thinking" && block.thinking) {
               thinkingParts.push(block.thinking);
-              orderedBlocks!.push({ type: "thinking", content: block.thinking, turnIndex });
+              orderedBlocks.push({ type: "thinking", content: block.thinking, turnIndex });
             } else if (block.type === "tool_use") {
-              toolCalls!.push({
+              toolCalls.push({
                 id: block.id,
                 name: block.name,
                 input: block.input,
                 result: null,
               });
-              orderedBlocks!.push({ type: "tool", toolId: block.id, turnIndex });
+              orderedBlocks.push({ type: "tool", toolId: block.id, turnIndex });
             }
           }
 
           const text = textParts.join("");
-          if (text || toolCalls!.length > 0) {
+          if (text || toolCalls.length > 0) {
             pushAssistant(messages, {
               role: "assistant",
               content: text,
               thinking: thinkingParts.join(""),
               toolCalls,
               orderedBlocks,
-            }, d.message?.id, replyBreak);
+            }, str(messageOf(d)?.id), replyBreak);
             replyBreak = false;
           }
         }
@@ -812,6 +850,7 @@ function stripVoiceCallWrapping(text: string): string {
 
 function extractTitle(filePath: string): string | null {
   try {
+    const fs = nodeFs();
     const fd = fs.openSync(filePath, "r");
     // Scan deep, not just the head: a session can open with tens of KB of
     // hook output or pasted context before the first real user message, and
@@ -838,16 +877,16 @@ function extractTitle(filePath: string): string | null {
     for (const line of lines) {
       if (!line.trim()) continue;
       try {
-        const d = JSON.parse(line);
-        if (d.type === "user") {
-          const content = d.message?.content;
+        const d = asObject(JSON.parse(line));
+        if (d?.type === "user") {
+          const content = contentOf(d);
           let textTitle: string | null = null;
           let fileNames: string[] = [];
 
-          if (Array.isArray(content)) {
+          if (isBlockList(content)) {
             let rawText = "";
             // Extract text blocks
-            for (const c of content) {
+            for (const c of readBlocks(content)) {
               if (c.type === "text" && c.text) {
                 rawText = stripVoiceCallWrapping(
                   c.text
@@ -911,13 +950,13 @@ function extractTitle(filePath: string): string | null {
     for (const line of lines) {
       if (!line.trim()) continue;
       try {
-        const d = JSON.parse(line);
-        if (d.type === "assistant") {
-          const content = d.message?.content;
+        const d = asObject(JSON.parse(line));
+        if (d?.type === "assistant") {
+          const content = contentOf(d);
           let t = "";
-          if (Array.isArray(content)) {
-            const b = content.find((c: any) => c.type === "text" && c.text?.trim());
-            if (b) t = String(b.text);
+          if (isBlockList(content)) {
+            const b = readBlocks(content).find((c): c is TextBlock => c.type === "text" && !!c.text.trim());
+            if (b) t = b.text;
           } else if (typeof content === "string") {
             t = content;
           }

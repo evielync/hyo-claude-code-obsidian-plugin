@@ -10,6 +10,9 @@ import { GatewayClient } from "./gateway-client";
 import { isSelfStartedPrompt, isInjectedContext, steerAsUserEntry } from "../reply-stream";
 import type { VoiceCallRecord } from "../voice/voice-call";
 import { transcriptModel, resumeModel } from "../models";
+import type { HistoryBlock, HistoryToolCall } from "../session-parser";
+import { asObject, str } from "../types/json";
+import { blockTexts, blockType, contentOf, isBlockList, messageOf, readBlocks } from "../types/claude-session";
 
 export interface PastSession {
   id: string;
@@ -35,25 +38,34 @@ export interface HistoryMessage {
   displayText?: string;
   attachments?: { type: string; name: string }[];
   thinking?: string;
-  toolCalls?: { id: string; name: string; input: any; result: string | null }[];
-  orderedBlocks?: { type: "text" | "thinking" | "tool"; content?: string; toolId?: string; turnIndex: number }[];
+  toolCalls?: HistoryToolCall[];
+  orderedBlocks?: HistoryBlock[];
+}
+
+/** One row of the gateway's session list, checked (the desktop's PastSession, sent as JSON). */
+function toPastSession(row: unknown): PastSession {
+  const s = asObject(row) ?? {};
+  const date = s.date;
+  const lastRole = s.lastRole;
+  return {
+    id: str(s.id) ?? "",
+    title: str(s.title) || "Untitled",
+    date: new Date(typeof date === "string" || typeof date === "number" ? date : NaN),
+    size: typeof s.size === "number" ? s.size : 0,
+    lastRole: lastRole === "user" || lastRole === "assistant" ? lastRole : null,
+    lastSnippet: str(s.lastSnippet) || "",
+    pinned: !!s.pinned,
+    closed: !!s.closed,
+    lastActiveMeta: str(s.lastActive) || undefined,
+    callOnly: !!s.callOnly,
+  };
 }
 
 export async function listPastSessions(gatewayUrl: string): Promise<PastSession[]> {
   try {
-    const sessions = await GatewayClient.get(gatewayUrl).listSessions();
-    return (sessions || []).map((s: any) => ({
-      id: s.id,
-      title: s.title || "Untitled",
-      date: new Date(s.date),
-      size: s.size,
-      lastRole: s.lastRole ?? null,
-      lastSnippet: s.lastSnippet || "",
-      pinned: !!s.pinned,
-      closed: !!s.closed,
-      lastActiveMeta: s.lastActive || undefined,
-      callOnly: !!s.callOnly,
-    }));
+    // As the gateway sent it: a list, unless something went wrong there.
+    const sessions: unknown = await GatewayClient.get(gatewayUrl).listSessions();
+    return Array.isArray(sessions) ? sessions.map(toPastSession) : [];
   } catch (e) {
     console.error("[hyo] Failed to list past sessions:", e);
     return [];
@@ -125,7 +137,7 @@ export async function loadSessionHistory(
     return { messages: reply.messages as HistoryMessage[], model: reply.model ?? null, voiceCalls: reply.voiceCalls as VoiceCallRecord[], offset: reply.offset, total: reply.total };
   }
   // A Mac from before paging sends the whole transcript.
-  const lines = reply.lines || [];
+  const lines: unknown[] = reply.lines || [];
   const messages = parseSessionLines(lines);
   return { messages, model: extractSessionModel(lines), voiceCalls: reply.voiceCalls as VoiceCallRecord[], offset: 0, total: messages.length };
 }
@@ -133,7 +145,7 @@ export async function loadSessionHistory(
 /** The model the conversation last ran on, from its main thread (a
  *  sub-agent's replies are on their own, often smaller, model), with the
  *  long-context suffix back on if it grew past 200K. Null if none is found. */
-export function extractSessionModel(lines: any[]): string | null {
+export function extractSessionModel(lines: unknown[]): string | null {
   const { model, contextTokens } = transcriptModel(lines);
   return resumeModel(model, contextTokens);
 }
@@ -141,7 +153,7 @@ export function extractSessionModel(lines: any[]): string | null {
 // Pure reconstruction — unchanged from desktop Hyo's file-reading version,
 // just takes already-parsed jsonl objects (what the gateway's `history`
 // message carries) instead of reading and JSON.parse-ing them from disk.
-export function parseSessionLines(lines: any[]): HistoryMessage[] {
+export function parseSessionLines(lines: unknown[]): HistoryMessage[] {
   const messages: HistoryMessage[] = [];
   const pendingToolResults = new Map<string, string>();
 
@@ -151,7 +163,9 @@ export function parseSessionLines(lines: any[]): HistoryMessage[] {
   for (const line of lines) {
     if (!line) continue;
     // A message sent mid-reply ("Send now") shows where Claude took it in.
-    const d = steerAsUserEntry(line) || line;
+    const d = steerAsUserEntry(line) || asObject(line);
+    // Not a record (a stray number or string): nothing to show.
+    if (!d) continue;
     try {
       if (isSelfStartedPrompt(d)) {
         replyBreak = true;
@@ -160,12 +174,12 @@ export function parseSessionLines(lines: any[]): HistoryMessage[] {
       if (isInjectedContext(d)) continue;
 
       if (d.type === "user") {
-        const content = d.message?.content;
+        const content = contentOf(d);
         if (!content) continue;
 
         // Check if this is a tool_result message
-        if (Array.isArray(content) && content.some((c: any) => c.type === "tool_result")) {
-          for (const c of content) {
+        if (isBlockList(content) && content.some((c) => blockType(c) === "tool_result")) {
+          for (const c of readBlocks(content)) {
             if (c.type === "tool_result" && c.tool_use_id) {
               const result = typeof c.content === "string" ? c.content : JSON.stringify(c.content);
               pendingToolResults.set(c.tool_use_id, result);
@@ -189,16 +203,14 @@ export function parseSessionLines(lines: any[]): HistoryMessage[] {
         let rawText = "";
         const attachments: { type: string; name: string }[] = [];
 
-        if (Array.isArray(content)) {
-          rawText = content
-            .filter((c: any) => c.type === "text")
-            .map((c: any) => c.text || "")
+        if (isBlockList(content)) {
+          rawText = blockTexts(content)
             .join("")
             .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
             .replace(/<ide_[^>]*>[\s\S]*?<\/ide_[^>]*>/g, "")
             .trim();
 
-          for (const c of content) {
+          for (const c of readBlocks(content)) {
             if (c.type === "document" && c.title) {
               attachments.push({ type: "file", name: c.title });
             } else if (c.type === "image") {
@@ -249,40 +261,39 @@ export function parseSessionLines(lines: any[]): HistoryMessage[] {
       }
 
       if (d.type === "assistant") {
-        const content = d.message?.content || [];
         const textParts: string[] = [];
         const thinkingParts: string[] = [];
-        const toolCalls: HistoryMessage["toolCalls"] = [];
-        const orderedBlocks: HistoryMessage["orderedBlocks"] = [];
+        const toolCalls: HistoryToolCall[] = [];
+        const orderedBlocks: HistoryBlock[] = [];
         let turnIndex = 0;
 
-        for (const block of content) {
+        for (const block of readBlocks(contentOf(d))) {
           if (block.type === "text" && block.text) {
             textParts.push(block.text);
-            orderedBlocks!.push({ type: "text", content: block.text, turnIndex });
+            orderedBlocks.push({ type: "text", content: block.text, turnIndex });
           } else if (block.type === "thinking" && block.thinking) {
             thinkingParts.push(block.thinking);
-            orderedBlocks!.push({ type: "thinking", content: block.thinking, turnIndex });
+            orderedBlocks.push({ type: "thinking", content: block.thinking, turnIndex });
           } else if (block.type === "tool_use") {
-            toolCalls!.push({
+            toolCalls.push({
               id: block.id,
               name: block.name,
               input: block.input,
               result: null,
             });
-            orderedBlocks!.push({ type: "tool", toolId: block.id, turnIndex });
+            orderedBlocks.push({ type: "tool", toolId: block.id, turnIndex });
           }
         }
 
         const text = textParts.join("");
-        if (text || toolCalls!.length > 0) {
+        if (text || toolCalls.length > 0) {
           pushAssistant(messages, {
             role: "assistant",
             content: text,
             thinking: thinkingParts.join(""),
             toolCalls,
             orderedBlocks,
-          }, d.message?.id, replyBreak);
+          }, str(messageOf(d)?.id), replyBreak);
           replyBreak = false;
         }
       }
