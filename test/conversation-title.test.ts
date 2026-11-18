@@ -28,7 +28,9 @@ test("the title call runs in the system temp folder, with PATH joined by the pla
   // Windows: no Unix folders and no "/tmp"; the inherited PATH is untouched.
   const win = titleSpawnOptions("win32", { PATH: "C:\\Windows;C:\\Users\\f\\.local\\bin" }, "C:\\Users\\f");
   assert.equal(win.cwd, tmpdir());
-  assert.notEqual(win.cwd, "/tmp");
+  // On a host whose temp folder isn't /tmp (macOS, Windows), this also shows
+  // "/tmp" isn't hard-coded. On Linux the temp folder is /tmp, so it can't.
+  if (tmpdir() !== "/tmp") assert.notEqual(win.cwd, "/tmp");
   assert.equal(win.env.PATH, "C:\\Windows;C:\\Users\\f\\.local\\bin");
 });
 

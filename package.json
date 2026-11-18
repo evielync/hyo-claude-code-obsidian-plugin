@@ -32,5 +32,8 @@
     "obsidian": "^1.14.4",
     "typescript": "^5.8.0",
     "typescript-eslint": "^8.73.0"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
