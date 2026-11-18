@@ -5,7 +5,7 @@ import { Plugin, WorkspaceLeaf, Platform, Notice, TFile } from "obsidian";
 // every use site is guarded by `!Platform.isMobile` (see platform/node.ts).
 import { nodeFs, nodeOs, nodePath } from "./platform/node";
 import { openPluginSettings, vaultAppId, vaultBasePath } from "./obsidian-internals";
-import { errorMessage, isRecord } from "./json-guards";
+import { errorMessage, isObject } from "./types/json";
 import { HyoView, VIEW_TYPE_HYO } from "./HyoView";
 import { HyoSettingTab, HyoSettings, DEFAULT_SETTINGS, dispatchSettingsChanged } from "./settings";
 import { cleanupOldAttachments } from "./attachments";
@@ -48,12 +48,12 @@ declare global {
 // entry again; this only turns the parsed file into entries, or null when
 // there's no list in it.
 function savedOpenEntries(raw: unknown): OpenEntry[] | null {
-  const entries = isRecord(raw) ? raw.entries : undefined;
+  const entries = isObject(raw) ? raw.entries : undefined;
   if (entries === undefined || entries === null) return null;
   if (!Array.isArray(entries)) return [];
   const out: OpenEntry[] = [];
   for (const e of entries) {
-    if (!isRecord(e) || typeof e.id !== "string") continue;
+    if (!isObject(e) || typeof e.id !== "string") continue;
     out.push({ id: e.id, title: typeof e.title === "string" ? e.title : "", ...(e.pinned === true ? { pinned: true } : {}) });
   }
   return out;
@@ -61,7 +61,7 @@ function savedOpenEntries(raw: unknown): OpenEntry[] | null {
 
 // The saved unread list (unread.json): its ids, or null when there are none saved.
 function savedUnreadIds(raw: unknown): string[] | null {
-  const ids = isRecord(raw) ? raw.unread : undefined;
+  const ids = isObject(raw) ? raw.unread : undefined;
   return Array.isArray(ids) ? ids.filter((x): x is string => typeof x === "string") : null;
 }
 
@@ -487,7 +487,7 @@ export default class HyoPlugin extends Plugin {
 
   async loadSettings() {
     const saved: unknown = await this.loadData();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, isRecord(saved) ? saved : {});
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, isObject(saved) ? saved : {});
     // The voice engine is GPT-Live (or the older ElevenLabs loop). A build
     // that tried OpenAI Realtime saved "realtime" here; that runs as GPT-Live.
     if (this.settings.voiceEngine !== "elevenlabs" && this.settings.voiceEngine !== "gpt-live") {

@@ -12,7 +12,7 @@
 import { debug } from "./debug";
 import { parseEntries, type OpenEntry } from "../open-conversations";
 import type { PromptContentBlock } from "../types/content-blocks";
-import { isRecord, str } from "../types/gateway-json";
+import { isRecord, str } from "../types/json";
 
 export type ConnectionStatus =
   | "connecting"

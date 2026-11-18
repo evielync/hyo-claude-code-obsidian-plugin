@@ -5,7 +5,7 @@ import type { Skill } from "./hooks/useSkills";
 import { withBundledSkills } from "./bundled-skills";
 import { hasNode, nodeFs, nodeOs, nodePath } from "./platform/node";
 import { isPluginEnabled, loadedPlugin, vaultBasePath } from "./obsidian-internals";
-import { isRecord } from "./json-guards";
+import { isObject } from "./types/json";
 
 const ICON = "sparkles";
 
@@ -276,9 +276,9 @@ export class CommandsManager {
 
       if (fs.existsSync(dataPath)) {
         const parsed: unknown = JSON.parse(fs.readFileSync(dataPath, "utf8"));
-        const commands = isRecord(parsed) ? parsed.commands : undefined;
+        const commands = isObject(parsed) ? parsed.commands : undefined;
         let migratedTypes = 0;
-        if (isRecord(commands)) {
+        if (isObject(commands)) {
           for (const [type, cmds] of Object.entries(commands)) {
             if (Array.isArray(cmds) && !this.plugin.settings.commands[type]) {
               this.plugin.settings.commands[type] = cmds as HyoCommand[];

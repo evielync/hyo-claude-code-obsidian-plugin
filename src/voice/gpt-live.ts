@@ -6,6 +6,7 @@ import type { Message } from "../hooks/useChatEngine";
 import { nodeFs, nodeOs, nodePath } from "../platform/node";
 import { parseVoiceResponse } from "./voice-persona";
 import { plainForVoice, type VoiceCallRecord } from "./voice-call";
+import { isRecord } from "../types/json";
 
 /**
  * GPT-Live engine — a full-duplex call with OpenAI's `gpt-live-1` voice model,
@@ -166,9 +167,6 @@ async function addMicWorklet(ctx: AudioContext): Promise<void> {
   }
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
-}
 
 /**
  * A parsed message from the Live session. The server is the authority on

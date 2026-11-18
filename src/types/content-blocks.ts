@@ -26,3 +26,19 @@ export interface DocumentContentBlock {
 }
 
 export type PromptContentBlock = TextContentBlock | ImageContentBlock | DocumentContentBlock;
+
+/** A message to Claude: plain text, or blocks when files go with it. */
+export type UserContent = string | PromptContentBlock[];
+
+/**
+ * The block for an attached image or PDF, or null when the file hasn't been
+ * read (no media type or data), so a half-read file is never sent.
+ */
+export function fileBlock(
+  type: "image" | "document",
+  mediaType: string | undefined,
+  data: string | undefined,
+): ImageContentBlock | DocumentContentBlock | null {
+  if (!mediaType || !data) return null;
+  return { type, source: { type: "base64", media_type: mediaType, data } };
+}

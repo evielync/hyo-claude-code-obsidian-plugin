@@ -8,27 +8,7 @@
  */
 
 import type { VoiceCallRecord } from "../voice/voice-call";
-
-/** A parsed JSON object (or array): something whose properties can be read. */
-export function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
-}
-
-/** `v[key]` when `v` is an object, otherwise undefined (like `v?.[key]` on parsed JSON). */
-export function field(v: unknown, key: string): unknown {
-  return isRecord(v) ? v[key] : undefined;
-}
-
-/** The value when it's a string, otherwise undefined. */
-export function str(v: unknown): string | undefined {
-  return typeof v === "string" ? v : undefined;
-}
-
-/** An error's message, when it has one (anything thrown can arrive here). */
-export function errorMessage(e: unknown): string | undefined {
-  const m = field(e, "message");
-  return typeof m === "string" ? m : undefined;
-}
+import { isRecord } from "./json";
 
 /**
  * A voice call record as the phone sends it to be saved (built by

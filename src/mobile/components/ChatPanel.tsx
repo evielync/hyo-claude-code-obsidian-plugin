@@ -43,6 +43,7 @@ import { ReleaseNotes } from "../../components/ReleaseNotes";
 import { audioContextClass, openPluginSettings } from "./platform-internals";
 import { inputString } from "../../components/tool-input";
 import { cellText } from "../../components/excel-cell";
+import { fileBlock, type PromptContentBlock, type UserContent } from "../../types/content-blocks";
 
 interface AttachedFile {
   name: string;
@@ -53,11 +54,6 @@ interface AttachedFile {
   vaultPath?: string;     // vault-relative path (only set for "Attach current file")
 }
 
-/** What goes to Claude: plain text, or content blocks when files ride along. */
-type OutgoingBlock =
-  | { type: "text"; text: string }
-  | { type: "image" | "document"; source: { type: "base64"; media_type: string | undefined; data: string | undefined } };
-type OutgoingContent = string | OutgoingBlock[];
 
 interface ChatPanelProps {
   sessionManager: ReturnType<typeof useSessionManager>;
@@ -377,7 +373,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
   const shownErrorsRef = useRef(new ShownErrors());
   const currentCallRef = useRef<() => VoiceCallRecord | null>(() => null);
   const sendToClaude = useCallback(
-    (content: OutgoingContent, meta?: { displayText?: string; attachedFileNames?: string[]; handoff?: boolean }) => {
+    (content: UserContent, meta?: { displayText?: string; attachedFileNames?: string[]; handoff?: boolean }) => {
       const tabId = activeTabIdRef.current;
       const current = callTabIdRef.current === tabId ? currentCallRef.current() : null;
       const { turns, advanced } = takeUnseenTurns(activeMessagesRef.current, current);
@@ -1040,13 +1036,15 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
     setAttachedFilesMap((prev) => ({ ...prev, [activeTabId]: [] }));
 
     if (imageFiles.length > 0 || pdfFiles.length > 0) {
-      const blocks: OutgoingBlock[] = [];
+      const blocks: PromptContentBlock[] = [];
       if (messageText) blocks.push({ type: "text", text: messageText });
       for (const img of imageFiles) {
-        blocks.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
+        const block = fileBlock("image", img.mediaType, img.data);
+        if (block) blocks.push(block);
       }
       for (const pdf of pdfFiles) {
-        blocks.push({ type: "document", source: { type: "base64", media_type: pdf.mediaType, data: pdf.data } });
+        const block = fileBlock("document", pdf.mediaType, pdf.data);
+        if (block) blocks.push(block);
       }
       sendMessage(blocks, meta);
     } else {

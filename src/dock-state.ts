@@ -10,7 +10,7 @@ import type { TabSession } from "./hooks/useSessionManager";
 import type { ToolCallData } from "./hooks/useChatEngine";
 import { deriveTaskState, hasPendingAttention, type TaskState } from "./task-state";
 import { jobList } from "./background-jobs";
-import { isRecord } from "./json-guards";
+import { isObject } from "./types/json";
 
 export type DockTone = 0 | 1 | 2 | 3 | 4;
 
@@ -128,7 +128,7 @@ export function stepWords(name: string, input: unknown): string {
   const file = (p: unknown) => (typeof p === "string" ? p.split(/[\\/]/).pop() || p : "");
   // A tool's input is whatever Claude sent; only its string fields are read.
   const text = (key: string): string => {
-    const v = isRecord(input) ? input[key] : undefined;
+    const v = isObject(input) ? input[key] : undefined;
     return typeof v === "string" ? v : "";
   };
   const i = { file_path: text("file_path"), description: text("description"), skill: text("skill"), name: text("name") };

@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import { GatewayClient } from "../gateway-client";
 import { withBundledSkills } from "../../bundled-skills";
-import { isRecord } from "../../types/session-json";
+import { isObject } from "../../types/json";
 
 export interface Skill {
   name: string;
@@ -27,7 +27,7 @@ export function useSkills(gatewayUrl?: string): Skill[] {
           withBundledSkills(
             list
               .map((s: unknown): Skill => {
-                const r = isRecord(s) ? s : {};
+                const r = isObject(s) ? s : {};
                 return {
                   name: typeof r.name === "string" ? r.name : "",
                   description: typeof r.description === "string" ? r.description : "",

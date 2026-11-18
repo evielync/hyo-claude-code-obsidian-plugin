@@ -3,7 +3,7 @@ import { MAIN_CHAT_AVAILABLE } from "./main-chat";
 // Node built-ins and Electron are desktop-only, loaded where they're used.
 import { electron, nodeFs, nodeOs, nodePath, type ElectronApi } from "./platform/node";
 import { vaultBasePath } from "./obsidian-internals";
-import { errorMessage } from "./json-guards";
+import { errorMessage } from "./types/json";
 import type HyoPlugin from "./main";
 import { CUSTOM_VOICE_PREFIX, resolveLiveVoice, type CustomLiveVoice } from "./voice/live-voice";
 export { CUSTOM_VOICE_PREFIX, resolveLiveVoice, type CustomLiveVoice };

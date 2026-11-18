@@ -6,19 +6,9 @@ import type { ChildProcess } from "child_process";
 import { nodeChildProcess, nodeCrypto, nodeFs, nodePath } from "./platform/node";
 import { isNative1M, baseModelId } from "./models";
 import { supportsEffortFlag, supportsReplayFlag, probeCliCapabilities } from "./cli-capabilities";
+import type { PromptContentBlock } from "./types/content-blocks";
+import { isRecord } from "./types/json";
 
-/**
- * A content block in a user message (text, image, document…), passed through
- * to the CLI's stream-json input as the Anthropic Messages API shapes it.
- */
-export interface UserContentBlock {
-  type: string;
-  [key: string]: unknown;
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
-}
 
 // Current models run 1M context natively and don't accept a "[1m]" suffix —
 // the API doesn't recognize it as a valid variant and silently falls back to
@@ -277,7 +267,7 @@ export class ClaudeTransport {
    * its command_lifecycle events), so a message sent mid-reply can be
    * followed to the moment Claude takes it in.
    */
-  sendUserMessage(content: string | UserContentBlock[], opts: { uuid?: string } = {}): void {
+  sendUserMessage(content: string | PromptContentBlock[], opts: { uuid?: string } = {}): void {
     if (!this.proc?.stdin?.writable) return;
 
     const messageContent =

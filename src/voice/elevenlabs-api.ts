@@ -1,4 +1,5 @@
 import { requestUrl } from "obsidian";
+import { isRecord } from "../types/json";
 
 const TTS_MODEL = "eleven_flash_v2_5";
 const STT_MODEL = "scribe_v2";
@@ -12,9 +13,6 @@ export interface ElevenLabsVoice {
   preview_url?: string;
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
-}
 
 /** A voice from GET /v1/voices: the fields Hyo relies on are present. */
 function isVoice(v: unknown): v is ElevenLabsVoice {

@@ -3,7 +3,7 @@
  * "desk"): which conversations were open, and the one in view.
  */
 
-import { isRecord } from "./session-json";
+import { isObject } from "./json";
 
 export interface SavedDesk {
   sessions: { id: string; title: string }[];
@@ -18,10 +18,10 @@ export function parseSavedDesk(stored: string | null): SavedDesk | null {
   } catch {
     return null;
   }
-  if (!isRecord(raw)) return null;
+  if (!isObject(raw)) return null;
   const sessions = Array.isArray(raw.sessions)
     ? raw.sessions.flatMap((s: unknown) =>
-        isRecord(s) && typeof s.id === "string" && s.id ? [{ id: s.id, title: typeof s.title === "string" ? s.title : "" }] : []
+        isObject(s) && typeof s.id === "string" && s.id ? [{ id: s.id, title: typeof s.title === "string" ? s.title : "" }] : []
       )
     : [];
   const activeId = typeof raw.activeId === "string" ? raw.activeId : null;

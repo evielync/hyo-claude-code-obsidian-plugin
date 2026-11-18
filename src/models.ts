@@ -7,6 +7,7 @@
 // superseded by them. Anyone who wants a specific or older model can add it
 // via the picker's "Custom model ID" field, which persists it into the user's
 // own list (managed under Settings → Custom models).
+import { isRecord } from "./types/json";
 export interface ModelOption {
   id: string;
   name: string;
@@ -244,9 +245,6 @@ export function transcriptModel(lines: unknown[]): { model: string | null; conte
   return { model: null, contextTokens: 0 };
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
-}
 
 /** A usage count from a transcript line; absent (or not a number) counts as none. */
 function tokens(v: unknown): number {

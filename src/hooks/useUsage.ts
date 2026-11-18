@@ -2,7 +2,7 @@ import { debug } from "../debug";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Platform, requestUrl } from "obsidian";
 import { nodeChildProcess, nodeFs, nodeOs, nodePath, nodeUtil } from "../platform/node";
-import { errorText, isRecord } from "../types/session-json";
+import { errorText, isObject } from "../types/json";
 
 // Type definitions for the usage API response
 export interface UsageData {
@@ -75,8 +75,8 @@ interface OAuthCreds {
 
 /** Claude Code's stored login: the `claudeAiOauth` entry, if it has a token. */
 function credsFrom(stored: unknown): OAuthCreds | null {
-  const oauth = isRecord(stored) ? stored.claudeAiOauth : null;
-  if (!isRecord(oauth) || typeof oauth.accessToken !== "string" || !oauth.accessToken) return null;
+  const oauth = isObject(stored) ? stored.claudeAiOauth : null;
+  if (!isObject(oauth) || typeof oauth.accessToken !== "string" || !oauth.accessToken) return null;
   return {
     accessToken: oauth.accessToken,
     ...(typeof oauth.refreshToken === "string" ? { refreshToken: oauth.refreshToken } : {}),
@@ -170,7 +170,7 @@ async function refreshOAuthToken(
       return null;
     }
     const body: unknown = res.json;
-    return isRecord(body) && typeof body.access_token === "string" && body.access_token ? body.access_token : null;
+    return isObject(body) && typeof body.access_token === "string" && body.access_token ? body.access_token : null;
   } catch (e) {
     console.warn("[hyo][usage] Token refresh error:", errorText(e));
     return null;
@@ -199,7 +199,7 @@ async function fetchUsageWithToken(
     }
     const body: unknown = res.json;
     // The usage endpoint's own shape: every field is optional and read as such.
-    return { status: 200, data: isRecord(body) ? body : null };
+    return { status: 200, data: isObject(body) ? body : null };
   } catch (e) {
     console.warn("[hyo][usage] API request error:", errorText(e));
     return { status: 0, data: null };

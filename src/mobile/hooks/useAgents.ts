@@ -3,7 +3,7 @@
 // list_agents RPC. Falls back to a single default entry until the list loads.
 import { useEffect, useState } from "react";
 import { GatewayClient } from "../gateway-client";
-import { isRecord } from "../../types/session-json";
+import { isObject } from "../../types/json";
 
 export interface Agent {
   name: string;
@@ -26,7 +26,7 @@ export function useAgents(gatewayUrl?: string): Agent[] {
         if (cancelled || !Array.isArray(list) || list.length === 0) return;
         setAgents(
           list.map((a: unknown) => {
-            const r = isRecord(a) ? a : {};
+            const r = isObject(a) ? a : {};
             return {
               name: typeof r.name === "string" ? r.name : "",
               description: typeof r.description === "string" ? r.description : "",

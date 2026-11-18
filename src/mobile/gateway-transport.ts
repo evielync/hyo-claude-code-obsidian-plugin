@@ -12,7 +12,7 @@
 import { debug } from "./debug";
 import { GatewayClient } from "./gateway-client";
 import type { PromptContentBlock } from "../types/content-blocks";
-import { field, str } from "../types/gateway-json";
+import { field, str } from "../types/json";
 
 // The Sonnet 5 family runs 1M context natively and doesn't accept a "[1m]"
 // suffix. Stale saved data could still carry one, so strip it and keep the

@@ -1,5 +1,6 @@
 import { requestUrl } from "obsidian";
 import { liveLog, type LiveSessionConfig } from "./gpt-live";
+import { isRecord } from "../types/json";
 
 /**
  * The desktop's WebRTC SDP exchange for a GPT-Live call. The plugin holds the
@@ -13,9 +14,6 @@ import { liveLog, type LiveSessionConfig } from "./gpt-live";
 
 const LIVE_HTTP_URL = "https://api.openai.com/v1/live/sessions";
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
-}
 
 /** The parts of the POST /v1/live/sessions (WebRTC) response that Hyo reads. */
 function sdpAnswerOf(body: unknown): { sdp: string; sessionId?: string } | null {

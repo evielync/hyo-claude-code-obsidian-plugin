@@ -11,7 +11,7 @@
  * never acted on, so they stay out.
  */
 
-import { isRecord } from "./session-json";
+import { isObject } from "./json";
 
 /**
  * A tool's input: always a JSON object. The fields named here are the ones
@@ -32,20 +32,8 @@ export interface ToolInput {
 
 // ---- What the person sends -------------------------------------------------
 
-/** A file sent inline with a message: an image or a PDF. */
-export interface Base64Source {
-  type: "base64";
-  media_type: string;
-  data: string;
-}
-
-export type UserContentBlock =
-  | { type: "text"; text: string }
-  | { type: "image"; source: Base64Source }
-  | { type: "document"; source: Base64Source };
-
-/** A message to Claude: plain text, or blocks when files go with it. */
-export type UserContent = string | UserContentBlock[];
+// The blocks themselves are defined once, in content-blocks.ts.
+export type { PromptContentBlock as UserContentBlock, UserContent } from "./content-blocks";
 
 // ---- Claude Code's stream-json ---------------------------------------------
 
@@ -260,7 +248,7 @@ const EVENT_TYPES: ReadonlySet<string> = new Set<SessionEvent["type"]>([
 
 /** The line's `type`, if it has one (for logging lines that aren't let in). */
 export function eventType(x: unknown): string {
-  return isRecord(x) && typeof x.type === "string" ? x.type : "";
+  return isObject(x) && typeof x.type === "string" ? x.type : "";
 }
 
 /** An event of a type the session managers handle. */
@@ -291,7 +279,7 @@ export interface AskQuestion {
 }
 
 function isAskQuestion(x: unknown): x is AskQuestion {
-  return isRecord(x) && typeof x.question === "string";
+  return isObject(x) && typeof x.question === "string";
 }
 
 /** AskUserQuestion's questions, or null when its input has none (yet). */
@@ -304,7 +292,7 @@ export function askedQuestions(input: ToolInput | undefined): AskQuestion[] | nu
 export function allowedPrompts(input: ToolInput | undefined): { tool: string; prompt: string }[] {
   const a = input?.allowedPrompts;
   if (!Array.isArray(a)) return [];
-  return a.filter((p): p is { tool: string; prompt: string } => isRecord(p) && typeof p.tool === "string" && typeof p.prompt === "string");
+  return a.filter((p): p is { tool: string; prompt: string } => isObject(p) && typeof p.tool === "string" && typeof p.prompt === "string");
 }
 
 /** The fields of ToolInput that Hyo shows, and so must really be strings. */
@@ -316,7 +304,7 @@ const SHOWN_TEXT_FIELDS = ["file_path", "pattern", "command", "description", "co
  * the type's promise holds; every other field is kept as it came.
  */
 export function toToolInput(raw: unknown): ToolInput {
-  if (!isRecord(raw) || Array.isArray(raw)) return {};
+  if (!isObject(raw) || Array.isArray(raw)) return {};
   const input: ToolInput = { ...raw };
   for (const key of SHOWN_TEXT_FIELDS) {
     if (key in input && typeof input[key] !== "string") delete input[key];

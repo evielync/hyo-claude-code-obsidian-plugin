@@ -49,7 +49,8 @@
 import { Platform, Notice, requestUrl } from "obsidian";
 import { debug } from "./debug";
 import { nodeChildProcess, nodeCrypto, nodeFs, nodeNet, nodeOs, nodePath } from "./platform/node";
-import { errorMessage, field, isRecord, isVoiceCallRecord, str } from "./types/gateway-json";
+import { field, isRecord, messageOf, str } from "./types/json";
+import { isVoiceCallRecord } from "./types/gateway-json";
 import type { ToolInput } from "./types/session-events";
 import type { RepairResult } from "./session-repair";
 import type { MetaEntry } from "./voice/voice-call";
@@ -938,7 +939,7 @@ function runTailscale(
             } catch (e) {
               // The queue must keep moving, but a throw here also means the
               // startup chain stopped partway. Say so rather than going quiet.
-              failStartup(`mobile setup failed after '${label}': ${errorMessage(e) || String(e)}`);
+              failStartup(`mobile setup failed after '${label}': ${messageOf(e) || String(e)}`);
             }
           };
           let child: ChildProcess;
@@ -952,7 +953,7 @@ function runTailscale(
               child = spawn(tsBin, args, { stdio: ["ignore", "pipe", "pipe"] });
             }
           } catch (e) {
-            done(-1, "", errorMessage(e) || String(e));
+            done(-1, "", messageOf(e) || String(e));
             return;
           }
           let out = "";
@@ -1293,7 +1294,7 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
               if (result.success) owner?.restart();
             }
           } catch (e) {
-            result = { success: false, linesRemoved: 0, capturedUserText: null, reason: errorMessage(e) || String(e) };
+            result = { success: false, linesRemoved: 0, capturedUserText: null, reason: messageOf(e) || String(e) };
           }
           send({ type: "repair_result", requestId: str(m.requestId), result });
           break;
@@ -1405,7 +1406,7 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
               }
               send({ type: "live_sdp_answer", requestId, sdp, sessionId: field(field(data, "session"), "id") });
             } catch (e) {
-              send({ type: "live_sdp_error", requestId, message: errorMessage(e) || "Couldn't reach OpenAI" });
+              send({ type: "live_sdp_error", requestId, message: messageOf(e) || "Couldn't reach OpenAI" });
             }
           })();
           break;
@@ -1429,7 +1430,7 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
               if (r.ok) restartIdleOwners();
               send({ type: "claude_update", requestId, phase: "done", ok: r.ok, error: r.error });
             } catch (e) {
-              send({ type: "claude_update", requestId, phase: "done", ok: false, error: errorMessage(e) || String(e) });
+              send({ type: "claude_update", requestId, phase: "done", ok: false, error: messageOf(e) || String(e) });
             }
           })();
           break;
@@ -1439,8 +1440,8 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
           break;
       }
     } catch (e) {
-      debug(`[hyo][gateway] [${cid}] handler error on ${String(m.type)}: ${errorMessage(e)}`);
-      send({ type: "gateway", subtype: "error", error: errorMessage(e) });
+      debug(`[hyo][gateway] [${cid}] handler error on ${String(m.type)}: ${messageOf(e)}`);
+      send({ type: "gateway", subtype: "error", error: messageOf(e) });
     }
   };
   // Each message is handled on its own; every failure is answered inside.
@@ -1574,7 +1575,7 @@ export function startGatewayHost(config: GatewayHostConfig): void {
     } catch (e) {
       // Everything after the first await used to land here as an unhandled
       // rejection, leaving the indicator on "starting" with nothing said.
-      failStartup(`mobile access couldn't start: ${errorMessage(e) || String(e)}`);
+      failStartup(`mobile access couldn't start: ${messageOf(e) || String(e)}`);
     }
   })();
 }

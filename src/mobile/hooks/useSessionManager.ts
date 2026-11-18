@@ -9,7 +9,7 @@ import { MAIN_CHAT_WIRE_ID, unexpectedExitNotice } from "../../session-owner";
 import { VOICE_PERSONA } from "../voice/voice-persona";
 import type { Message, ToolCallData } from "./useChatEngine";
 import { allowedPrompts, askedQuestions, blocksOf, eventSubtype, eventType, inputText, isSessionEvent, type UserContent } from "../../types/session-events";
-import { errorMessage, isRecord } from "../../types/session-json";
+import { errorMessage, isObject } from "../../types/json";
 import { listPastSessions, loadSessionHistory, saveCustomTitle, setTaskMeta as persistTaskMeta, saveVoiceCall, type PastSession, type HistoryMessage } from "../session-parser";
 import { LIVE_BACKEND_PERSONA } from "../../voice/voice-persona";
 import { handoffRequestText, HANDOFF_MARKER, threadCalls, insertCallLine, sessionSpawn, callHome, type VoiceCallRecord } from "../../voice/voice-call";
@@ -768,7 +768,7 @@ export function useSessionManager(options: SessionManagerOptions) {
               lastTool._inputJson += evt.delta.partial_json || "";
               try {
                 const parsed: unknown = JSON.parse(lastTool._inputJson);
-                if (isRecord(parsed)) lastTool.input = parsed;
+                if (isObject(parsed)) lastTool.input = parsed;
               } catch {
                 // Not whole JSON yet: the next delta completes it.
               }

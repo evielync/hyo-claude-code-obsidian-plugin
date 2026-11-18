@@ -13,7 +13,7 @@ type TabProc = OwnerTransport;
 import { VOICE_PERSONA, LIVE_BACKEND_PERSONA, HANDOFF_MARKER } from "../voice/voice-persona";
 import type { Message, ToolCallData } from "./useChatEngine";
 import { allowedPrompts, askedQuestions, blocksOf, eventSubtype, eventType, inputText, isSessionEvent, type UserContent } from "../types/session-events";
-import { isRecord } from "../types/session-json";
+import { isObject } from "../types/json";
 import { listPastSessions, loadSessionHistory, loadSessionModel, saveCustomTitle, setTaskMeta as persistTaskMeta, type PastSession, getProjectDir, saveVoiceCall, getVoiceCalls, hasTranscript } from "../session-parser";
 import { handoffRequestText, threadCalls, insertCallLine, callHome, type VoiceCallRecord } from "../voice/voice-call";
 import { repairSession, isThinkingBlockApiError, type RepairResult } from "../session-repair";
@@ -803,7 +803,7 @@ export function useSessionManager(options: SessionManagerOptions) {
               lastTool._inputJson += evt.delta.partial_json || "";
               try {
                 const parsed: unknown = JSON.parse(lastTool._inputJson);
-                if (isRecord(parsed)) lastTool.input = parsed;
+                if (isObject(parsed)) lastTool.input = parsed;
               } catch {
                 // Not whole JSON yet: the next delta completes it.
               }
