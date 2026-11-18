@@ -12,9 +12,7 @@
   },
   "dependencies": {
     "@ricky0123/vad-web": "^0.0.30",
-    "exceljs": "^4.4.0",
     "fflate": "^0.8.3",
-    "jszip": "^3.10.1",
     "onnxruntime-web": "^1.27.0",
     "openai": "^7.15.0",
     "react": "^18.3.1",
@@ -30,6 +28,7 @@
     "esbuild": "^0.25.0",
     "eslint": "^9.39.5",
     "eslint-plugin-obsidianmd": "^0.6.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
     "obsidian": "latest",
     "typescript": "^5.8.0",
     "typescript-eslint": "^8.73.0"

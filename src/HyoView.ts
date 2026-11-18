@@ -10,6 +10,8 @@ export const VIEW_TYPE_HYO = "hyo-plugin-view";
 export class HyoView extends ItemView {
   private root: Root | null = null;
   private plugin: HyoPlugin;
+  /** The mobile drawer this view sits in, marked for styles.css's seam fix. */
+  private hostDrawer: HTMLElement | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: HyoPlugin) {
     super(leaf);
@@ -41,6 +43,14 @@ export class HyoView extends ItemView {
     container.empty();
     container.addClass("hyo-plugin");
 
+    // On a phone or tablet the view lives in a drawer whose chrome Obsidian
+    // paints white; styles.css repaints the drawer marked here to match the
+    // chat. A leaf can be moved, so the mark follows it on layout changes.
+    if (Platform.isMobile) {
+      this.markHostDrawer();
+      this.registerEvent(this.app.workspace.on("layout-change", () => this.markHostDrawer()));
+    }
+
     const props = { app: this.app, plugin: this.plugin, isShown: () => this.isOnScreen() };
     this.root = createRoot(container);
     this.root.render(Platform.isMobile ? createElement(MobileHyoApp, props) : createElement(HyoApp, props));
@@ -55,7 +65,17 @@ export class HyoView extends ItemView {
     return this.containerEl.isShown();
   }
 
+  private markHostDrawer(): void {
+    const drawer = this.containerEl.closest<HTMLElement>(".workspace-drawer");
+    if (drawer === this.hostDrawer) return;
+    this.hostDrawer?.removeClass("hyo-drawer-host");
+    drawer?.addClass("hyo-drawer-host");
+    this.hostDrawer = drawer;
+  }
+
   async onClose() {
+    this.hostDrawer?.removeClass("hyo-drawer-host");
+    this.hostDrawer = null;
     if (this.root) {
       this.root.unmount();
       this.root = null;

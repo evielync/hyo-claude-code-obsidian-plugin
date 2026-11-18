@@ -46,7 +46,6 @@ import {
 } from "../attachments";
 import { nodePath } from "../platform/node";
 import { audioContextClass, openPluginSettings, vaultBasePath } from "./platform-internals";
-import { cellText } from "./excel-cell";
 import { inputString } from "./tool-input";
 import { fileBlock, type PromptContentBlock, type UserContent } from "../types/content-blocks";
 
@@ -847,26 +846,14 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
       return;
     }
 
-    // Excel — parse to CSV text via exceljs
+    // Excel — every sheet as CSV-style text (see xlsx.ts)
     if (ext === ".xlsx" || ext === ".xls" || ext === ".xlsm") {
       const reader = new FileReader();
       reader.onload = async (ev) => {
         try {
           const buf = ev.target?.result as ArrayBuffer;
-          const ExcelJS = await import("exceljs");
-          const workbook = new ExcelJS.Workbook();
-          await workbook.xlsx.load(buf);
-          const parts: string[] = [];
-          workbook.eachSheet((sheet) => {
-            parts.push(`# Sheet: ${sheet.name}`);
-            sheet.eachRow({ includeEmpty: false }, (row) => {
-              const cells = Array.isArray(row.values) ? row.values.slice(1) : Object.values(row.values);
-              const values = cells.map(cellText);
-              parts.push(values.join(","));
-            });
-            parts.push("");
-          });
-          addFile({ name: file.name, fileType: "text", content: parts.join("\n") });
+          const { xlsxToText } = await import("../xlsx");
+          addFile({ name: file.name, fileType: "text", content: xlsxToText(buf) });
         } catch (err) {
           console.error("[hyo] Failed to parse Excel file:", err);
           new Notice(`Could not read "${file.name}" — file may be corrupt or password-protected`);
