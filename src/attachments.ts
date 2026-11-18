@@ -23,6 +23,15 @@ export function shouldInline(content: string): boolean {
   return estimateTokens(content) < INLINE_THRESHOLD_TOKENS;
 }
 
+// Word and Excel attachments arrive here as their extracted text (docx.ts,
+// xlsx.ts). Saved under the original name, Claude's Read tool sees ".docx"
+// and refuses the file as a binary document, so the text gets ".md".
+const CONVERTED_EXTENSIONS = /\.(docx|xlsx|xlsm|xls)$/i;
+
+export function textFileName(filename: string): string {
+  return CONVERTED_EXTENSIONS.test(filename) ? `${filename}.md` : filename;
+}
+
 export function writeAttachmentToDisk(
   attachmentsDir: string,
   filename: string,
@@ -32,7 +41,7 @@ export function writeAttachmentToDisk(
   const path = nodePath();
   fs.mkdirSync(attachmentsDir, { recursive: true });
   const timestamp = Date.now();
-  const safeName = filename.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+  const safeName = textFileName(filename).replace(/[^a-zA-Z0-9.\-_]/g, "_");
   const filePath = path.join(attachmentsDir, `${timestamp}-${safeName}`);
   fs.writeFileSync(filePath, content, "utf-8");
   return filePath;
