@@ -50,8 +50,12 @@ export interface ControlRow extends RowBase {
  */
 export type CustomRow = RowBase & {
   kind: "custom";
-  /** Fills in the row. Name and description are already set. */
-  build: (setting: Setting) => void;
+  /**
+   * Fills in the row. Name and description are already set. Listeners on the
+   * row's own element must be added with `scope.signal`, so a redraw removes
+   * them (see fillCustom).
+   */
+  build: (setting: Setting, scope: RowScope) => void;
 } & ({ desc: Desc; searchable?: true } | { desc?: Desc; searchable: false });
 
 export type Row = ControlRow | CustomRow;
@@ -117,12 +121,36 @@ function descOf(desc: Desc | undefined): string | DocumentFragment | undefined {
   return typeof desc === "function" ? desc() : desc;
 }
 
-/** Name, description, then whatever the row adds: the same on both renderers. */
-function fillCustom(setting: Setting, row: CustomRow): void {
+/** What a custom row's build gets besides the Setting. */
+export interface RowScope {
+  /** Aborted before the row is drawn again: pass it to addEventListener. */
+  signal: AbortSignal;
+}
+
+/**
+ * Name, description, then whatever the row adds: the same on both renderers.
+ *
+ * Returns the row's clean-up. On a redraw, Obsidian 1.13+ keeps a row whose
+ * key is unchanged, runs this clean-up, clears the Setting's own name,
+ * description and controls, and draws the row again on the same element.
+ * Anything a build added to the row element itself (an icon, a text box, a
+ * drop line, classes, listeners) would otherwise be added a second time, so
+ * the clean-up puts the element back exactly as the build found it.
+ */
+export function fillCustom(setting: Setting, row: CustomRow): () => void {
+  const el = setting.settingEl;
+  const children = Array.from(el.childNodes);
+  const className = el.className;
+  const controller = new AbortController();
   setting.setName(row.name);
   const desc = descOf(row.desc);
   if (desc !== undefined) setting.setDesc(desc);
-  row.build(setting);
+  row.build(setting, { signal: controller.signal });
+  return () => {
+    controller.abort();
+    el.replaceChildren(...children);
+    el.className = className;
+  };
 }
 
 /** Every control row in a layout, by key. */

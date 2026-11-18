@@ -1,7 +1,7 @@
 import { AbstractInputSuggest, Notice, setIcon, type App, type Setting } from "obsidian";
 import type { HyoCommand } from "./settings";
 import type { Skill } from "./hooks/useSkills";
-import type { Page, Row, Section } from "./settings-layout";
+import type { Page, Row, RowScope, Section } from "./settings-layout";
 
 /**
  * Settings → Hyo → Commands. Ported from the standalone AI Commands plugin: a
@@ -140,7 +140,7 @@ function typeRows(host: CommandsHost, type: string, list: HyoCommand[], getSkill
       // A closed type's commands aren't searchable themselves, so the type's
       // row answers for them.
       aliases: labels.length > 0 ? labels : undefined,
-      build: (setting) => buildTypeRow(host, setting, type),
+      build: (setting, scope) => buildTypeRow(host, setting, type, scope),
     },
     ...list.map(
       (cmd, i): Row => ({
@@ -148,7 +148,7 @@ function typeRows(host: CommandsHost, type: string, list: HyoCommand[], getSkill
         name: cmd.label || "Untitled command",
         desc: `Runs the ${cmd.skill || "(no skill)"} skill on "${type}" notes`,
         visible: open,
-        build: (setting) => buildCommandRow(host, setting, type, list, cmd, i, getSkills(), drag),
+        build: (setting, scope) => buildCommandRow(host, setting, type, list, cmd, i, getSkills(), drag, scope),
       })
     ),
     {
@@ -173,7 +173,7 @@ function typeRows(host: CommandsHost, type: string, list: HyoCommand[], getSkill
 }
 
 /** The type's row: click (or Enter) opens and closes it; the bin removes its commands. */
-function buildTypeRow(host: CommandsHost, setting: Setting, type: string): void {
+function buildTypeRow(host: CommandsHost, setting: Setting, type: string, { signal }: RowScope): void {
   const el = setting.settingEl;
   const chevron = el.createDiv({ cls: "hyo-command-type-chevron" });
   setIcon(chevron, "chevron-right");
@@ -192,13 +192,13 @@ function buildTypeRow(host: CommandsHost, setting: Setting, type: string): void 
     show(open);
     host.refreshVisibility();
   };
-  el.addEventListener("click", toggle);
+  el.addEventListener("click", toggle, { signal });
   el.addEventListener("keydown", (e: KeyboardEvent) => {
     // Only the row itself: Enter on the bin is the bin's.
     if (e.target !== el || (e.key !== "Enter" && e.key !== " ")) return;
     e.preventDefault();
     toggle();
-  });
+  }, { signal });
 
   // Removing a type's commands takes all of them at once, behind a question.
   // The wording stays clearly about commands: nothing here touches the
@@ -268,7 +268,8 @@ function buildCommandRow(
   cmd: HyoCommand,
   i: number,
   skills: Skill[],
-  drag: DragState
+  drag: DragState,
+  { signal }: RowScope
 ): void {
   // The row's built-in name column would only duplicate the label input, and
   // crush it to a couple of characters. Remove it and give the whole row to
@@ -290,7 +291,7 @@ function buildCommandRow(
     e.dataTransfer?.setData("text/plain", String(i));
     if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
     row.settingEl.addClass("is-dragging");
-  });
+  }, { signal });
   // The drop indicator is its own element laid over the row's top edge; a
   // shadow or border would follow the card's rounded corners and read as a
   // curve rather than a line.
@@ -300,16 +301,16 @@ function buildCommandRow(
     row.settingEl.draggable = false;
     row.settingEl.removeClass("is-dragging");
     dropLine.removeClass("is-active");
-  });
+  }, { signal });
   row.settingEl.addEventListener("dragover", (e: DragEvent) => {
     if (!sameType()) return;
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
     dropLine.addClass("is-active");
-  });
+  }, { signal });
   row.settingEl.addEventListener("dragleave", () => {
     dropLine.removeClass("is-active");
-  });
+  }, { signal });
   row.settingEl.addEventListener("drop", (e: DragEvent) => {
     e.preventDefault();
     dropLine.removeClass("is-active");
@@ -323,7 +324,7 @@ function buildCommandRow(
       .save()
       .then(() => host.rebuild())
       .catch((err: unknown) => console.error("[hyo] Couldn't save the new command order:", err));
-  });
+  }, { signal });
 
   row.addText((text) => {
     text
