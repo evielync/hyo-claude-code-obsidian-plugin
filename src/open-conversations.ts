@@ -25,6 +25,8 @@
  * the desktop's file IO is passed in (see main.ts).
  */
 
+import { asObject, type JsonObject } from "./types/json";
+
 export interface OpenEntry {
   /** The conversation's Claude session id. */
   id: string;
@@ -49,12 +51,23 @@ export interface PinnedEntry {
 
 // ---- List operations ----------------------------------------------------------
 
+/** Each item of a list that's an object, or nothing if it isn't a list. */
+function objectsIn(list: unknown): JsonObject[] {
+  if (!Array.isArray(list)) return [];
+  const items: unknown[] = list;
+  const out: JsonObject[] = [];
+  for (const v of items) {
+    const o = asObject(v);
+    if (o) out.push(o);
+  }
+  return out;
+}
+
 function clean(entries: unknown): OpenEntry[] {
-  if (!Array.isArray(entries)) return [];
   const seen = new Set<string>();
   const out: OpenEntry[] = [];
-  for (const e of entries as any[]) {
-    if (!e || typeof e.id !== "string" || !e.id || seen.has(e.id)) continue;
+  for (const e of objectsIn(entries)) {
+    if (typeof e.id !== "string" || !e.id || seen.has(e.id)) continue;
     seen.add(e.id);
     out.push({ id: e.id, title: typeof e.title === "string" && e.title ? e.title : "Untitled", ...(e.pinned === true ? { pinned: true } : {}) });
   }
@@ -63,8 +76,8 @@ function clean(entries: unknown): OpenEntry[] {
 
 /** An open list as it arrives over the wire, checked (with the Mac's peek and last-active time). */
 export function parseEntries(raw: unknown): OpenEntry[] {
-  const byId = new Map<string, any>();
-  if (Array.isArray(raw)) for (const e of raw as any[]) if (e && typeof e.id === "string") byId.set(e.id, e);
+  const byId = new Map<string, JsonObject>();
+  for (const e of objectsIn(raw)) if (typeof e.id === "string") byId.set(e.id, e);
   return clean(raw).map((e) => {
     const r = byId.get(e.id);
     return {
@@ -279,8 +292,8 @@ export function openConversations(cwd: string): OpenConversationsStore | null {
 /** The desktop's open tabs as they were kept before this list was shared. */
 export function legacyDesk(raw: string | null): OpenEntry[] {
   try {
-    const saved = JSON.parse(raw || "null");
-    return clean(saved?.sessions);
+    const saved: unknown = JSON.parse(raw || "null");
+    return clean(asObject(saved)?.sessions);
   } catch {
     return [];
   }
@@ -516,6 +529,12 @@ export interface OpenListSink {
   send: (obj: unknown) => void;
 }
 
+/** A change a phone made: its socket, and the number it gave the change. */
+interface PhoneOrigin {
+  ws: object;
+  opId: number | undefined;
+}
+
 /** Each phone socket's subscription to the store, and a way to send it the list again. */
 const phoneSubs = new Map<object, { off: () => void; push: () => void }>();
 
@@ -527,14 +546,15 @@ const phoneSubs = new Map<object, { off: () => void; push: () => void }>();
  */
 export function gatewayOpenList(
   store: OpenConversationsStore,
-  m: any,
+  message: unknown,
   ws: object,
   sink: OpenListSink,
   // What the phone's rows show besides the title (its last line, when it was last active).
   decorate: (entries: OpenEntry[]) => OpenEntry[] = (e) => e
 ): boolean {
+  const m = asObject(message);
   const type = m?.type;
-  if (typeof type !== "string" || !type.startsWith("open_")) return false;
+  if (!m || typeof type !== "string" || !type.startsWith("open_")) return false;
   const shown = (entries: OpenEntry[]): OpenEntry[] => {
     try {
       return decorate(entries);
@@ -544,16 +564,18 @@ export function gatewayOpenList(
     }
   };
   if (!phoneSubs.has(ws)) {
-    const off = store.subscribe((entries, origin: any) => {
+    const off = store.subscribe((entries, origin) => {
+      const from = asObject(origin);
       sink.send({
         type: "open_list",
         entries: shown(entries),
-        ...(origin && origin.ws === ws && typeof origin.opId === "number" ? { ack: origin.opId } : {}),
+        ...(from && from.ws === ws && typeof from.opId === "number" ? { ack: from.opId } : {}),
       });
     });
     phoneSubs.set(ws, { off, push: () => sink.send({ type: "open_list", entries: shown(store.list()) }) });
   }
-  const origin = { ws, opId: typeof m.opId === "number" ? m.opId : undefined };
+  // Handed back to the listener above, which acknowledges the change to this phone.
+  const origin: PhoneOrigin = { ws, opId: typeof m.opId === "number" ? m.opId : undefined };
   const title = typeof m.title === "string" ? m.title : "";
   switch (type) {
     case "open_list":

@@ -1,6 +1,6 @@
-import { Platform } from "obsidian";
-// Node built-in; deferred so this module loads on mobile.
-const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
+import { nodeFs } from "./platform/node";
+import { asObject, errorMessage, type JsonObject } from "./types/json";
+import { blockType, contentOf, isBlockList } from "./types/claude-session";
 
 // Detects and repairs the "thinking block poisoning" failure mode.
 //
@@ -27,42 +27,42 @@ export interface RepairResult {
   reason?: string;
 }
 
-interface JsonlEntry {
-  type?: string;
-  uuid?: string;
-  parentUuid?: string;
-  message?: {
-    id?: string;
-    role?: string;
-    content?: any;
-  };
-}
+/** A transcript line, parsed. Its fields are read as they're used (see types/claude-session.ts). */
+type JsonlEntry = JsonObject;
 
+/**
+ * A line as a record, or null if it isn't one. A line that parses to
+ * something other than an object (a stray number, a bare string) counts as a
+ * record with no fields, as it always has: it's kept, and it isn't a message.
+ */
 function parseLine(line: string): JsonlEntry | null {
+  let v: unknown;
   try {
-    return JSON.parse(line);
+    v = JSON.parse(line);
   } catch {
     return null;
   }
+  return v ? (asObject(v) ?? {}) : null;
+}
+
+/** The first text block's text. */
+function firstText(content: unknown): string {
+  if (!isBlockList(content)) return "";
+  for (const v of content) {
+    const b = asObject(v);
+    if (b?.type === "text" && typeof b.text === "string") return b.text;
+  }
+  return "";
 }
 
 function getAssistantText(d: JsonlEntry): string {
-  const content = d.message?.content;
-  if (!Array.isArray(content)) return "";
-  for (const b of content) {
-    if (b && b.type === "text" && typeof b.text === "string") return b.text;
-  }
-  return "";
+  return firstText(contentOf(d));
 }
 
 function getUserText(d: JsonlEntry): string {
-  const content = d.message?.content;
+  const content = contentOf(d);
   if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  for (const b of content) {
-    if (b && b.type === "text" && typeof b.text === "string") return b.text;
-  }
-  return "";
+  return firstText(content);
 }
 
 function isCapError(d: JsonlEntry): boolean {
@@ -80,9 +80,9 @@ function isOrphanedThinking(d: JsonlEntry): boolean {
   // turn, thinking is always followed by text or tool_use blocks before the
   // turn ends. A standalone thinking line is the residue of a truncated turn.
   if (d.type !== "assistant") return false;
-  const content = d.message?.content;
-  if (!Array.isArray(content) || content.length !== 1) return false;
-  return content[0]?.type === "thinking";
+  const content = contentOf(d);
+  if (!isBlockList(content) || content.length !== 1) return false;
+  return blockType(content[0]) === "thinking";
 }
 
 function stripUserMessageNoise(text: string): string {
@@ -108,6 +108,7 @@ export function analyzeJsonl(jsonlPath: string):
       hasCorruption: boolean;
     }
   | null {
+  const fs = nodeFs();
   if (!fs.existsSync(jsonlPath)) return null;
 
   const lines = fs.readFileSync(jsonlPath, "utf8").split("\n");
@@ -203,11 +204,12 @@ export function repairSession(jsonlPath: string): RepairResult {
   }
 
   // Backup before modifying
+  const fs = nodeFs();
   const backupPath = `${jsonlPath}.bak-${Date.now()}`;
   try {
     fs.copyFileSync(jsonlPath, backupPath);
-  } catch (e: any) {
-    return { success: false, linesRemoved: 0, capturedUserText: null, reason: `Backup failed: ${e.message}` };
+  } catch (e) {
+    return { success: false, linesRemoved: 0, capturedUserText: null, reason: `Backup failed: ${errorMessage(e)}` };
   }
 
   const lines = fs.readFileSync(jsonlPath, "utf8").split("\n");
@@ -220,7 +222,9 @@ export function repairSession(jsonlPath: string): RepairResult {
     kept.push({ idx: i, line: lines[i], entry: parseLine(lines[i]) });
   }
 
-  const survivingUuids = new Set<string>();
+  // Uuids are compared as written, whatever they hold: a line is only
+  // rewritten when its parent is truly gone.
+  const survivingUuids = new Set<unknown>();
   for (const k of kept) {
     if (k.entry?.uuid) survivingUuids.add(k.entry.uuid);
   }
@@ -228,7 +232,7 @@ export function repairSession(jsonlPath: string): RepairResult {
   // Repair parent linkage: any kept entry whose parentUuid points to a removed
   // line gets repointed to the previous kept line's uuid.
   const repaired: string[] = [];
-  let prevUuid: string | undefined;
+  let prevUuid: unknown;
   for (const k of kept) {
     let line = k.line;
     if (k.entry) {
@@ -244,12 +248,12 @@ export function repairSession(jsonlPath: string): RepairResult {
 
   try {
     fs.writeFileSync(jsonlPath, repaired.join("\n") + "\n", "utf8");
-  } catch (e: any) {
+  } catch (e) {
     return {
       success: false,
       linesRemoved: 0,
       capturedUserText: null,
-      reason: `Write failed: ${e.message}`,
+      reason: `Write failed: ${errorMessage(e)}`,
     };
   }
 

@@ -48,9 +48,25 @@
  */
 
 import { applyJobEvent, hasRunningJobs, jobList, type JobMap } from "./background-jobs";
+import { nodeFs, nodePath } from "./platform/node";
+import { asObject, errorCode, isObject, str, type JsonObject } from "./types/json";
+import { blockTexts, isBlockList } from "./types/claude-session";
 
 /** The id the phone uses for the main chat on the wire. */
 export const MAIN_CHAT_WIRE_ID = "hyo-main-chat";
+
+/** A message for Claude: plain text, or content blocks (text, images, files) as the CLI takes them. */
+export type UserContent = string | unknown[];
+
+/** How a permission, question or plan was answered. */
+export type PermissionBehavior = "allow" | "allow_always" | "deny";
+
+/** What a process reports to whoever started it: Claude's stream-json events (unchecked), its errors, its exit. */
+export type ProcEvents = {
+  onMessage: (e: unknown) => void;
+  onError: (e: string) => void;
+  onClose: (code: number | null) => void;
+};
 
 export interface OwnerSpec {
   cliPath: string;
@@ -78,10 +94,10 @@ export interface OwnerSpec {
 export interface ProcLike {
   spawn(): void;
   /** `uuid` comes back on Claude's echo of the message (see `canSteer`); a view's transport takes its own send options. */
-  sendUserMessage(content: string | any[], opts?: { uuid?: string; qid?: string; silent?: boolean }): void;
+  sendUserMessage(content: UserContent, opts?: { uuid?: string; qid?: string; silent?: boolean }): void;
   sendPermissionResponse(
     requestId: string,
-    behavior: "allow" | "allow_always" | "deny",
+    behavior: PermissionBehavior,
     toolName?: string,
     updatedInput?: Record<string, unknown>,
     destination?: string
@@ -124,13 +140,34 @@ export function unexpectedExitNotice(code: number | null, wasGenerating: boolean
   return `_Claude process exited unexpectedly (code ${code}). Send your message again to carry on, or start a new conversation._`;
 }
 
-export type MakeProc = (
-  spec: OwnerSpec,
-  on: { onMessage: (e: any) => void; onError: (e: string) => void; onClose: (code: number | null) => void }
-) => ProcLike;
+export type MakeProc = (spec: OwnerSpec, on: ProcEvents) => ProcLike;
+
+/** What the owner itself tells every view, alongside Claude's events. */
+export type OwnerNotice =
+  | ({ type: "hyo_session_info" } & SessionInfo)
+  | { type: "hyo_queued"; qid: string; text: string; steerable: boolean }
+  | { type: "hyo_steering"; qid: string }
+  | { type: "hyo_steered"; qid: string; text: string }
+  | { type: "hyo_user_message"; qid: string; text: string; silent?: true }
+  | { type: "hyo_queue_dropped"; qids: string[]; reason: "refused" | "stopped" }
+  | { type: "hyo_owner_refused" }
+  | { type: "hyo_permission_answered"; requestId: string; behavior: PermissionBehavior }
+  | { type: "hyo_asks_open"; ids: string[]; turnOver?: true }
+  | ReplayNotice;
+
+/** Someone opening the conversation mid-turn is caught up with this. */
+export interface ReplayNotice {
+  type: "hyo_replay";
+  turn: { qid?: string; text?: string; selfStarted: boolean; events: unknown[] } | null;
+  /** Sent with "Send now" and on their way first, then the ones still waiting. */
+  queued: ({ qid: string; text: string; steering: true } | { qid: string; text: string; steerable: boolean })[];
+  /** Questions still waiting on an answer that the turn's events don't already carry. */
+  asks: JsonObject[];
+}
 
 export interface Subscriber {
-  onEvent: (event: any) => void;
+  /** Claude's events (unchecked) and the owner's own notices. */
+  onEvent: (event: unknown) => void;
   onClose?: (code: number | null) => void;
   onError?: (error: string) => void;
 }
@@ -166,7 +203,8 @@ interface TurnRecord {
   text?: string;
   selfStarted?: boolean;
   startLine: number | null;
-  events: any[];
+  /** Claude's events and the owner's notices, as every view was sent them. */
+  events: unknown[];
 }
 
 interface QueuedSend {
@@ -175,7 +213,7 @@ interface QueuedSend {
   silent?: boolean;
   from: string;
   spec: OwnerSpec;
-  content: string | any[];
+  content: UserContent;
   text: string;
 }
 
@@ -199,15 +237,17 @@ function specKey(s: OwnerSpec): string {
   return JSON.stringify([s.appendSystemPrompt || "", s.agent || "", s.model, s.cliPath]);
 }
 
-function isSidechain(e: any): boolean {
+function isSidechain(event: unknown): boolean {
+  const e = asObject(event);
   return !!(e?.isSidechain || e?.parent_tool_use_id);
 }
 
-function isMainContent(e: any): boolean {
+function isMainContent(event: unknown): boolean {
+  const e = asObject(event);
   if (!e || isSidechain(e)) return false;
   if (e.type === "assistant") return true;
   if (e.type === "stream_event") {
-    const t = (e.event || e).type;
+    const t = (asObject(e.event) ?? e).type;
     return t === "content_block_start" || t === "content_block_delta";
   }
   return false;
@@ -219,7 +259,8 @@ function genQid(): string {
 
 /** A v4 UUID: Claude only takes a real one as a message's uuid. */
 function genUuid(): string {
-  const c: any = (globalThis as any).crypto;
+  // Web Crypto has randomUUID only in a secure context.
+  const c: Partial<Pick<Crypto, "randomUUID">> | undefined = window.crypto;
   if (c?.randomUUID) return c.randomUUID();
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (ch) => {
     const r = (Math.random() * 16) | 0;
@@ -228,25 +269,24 @@ function genUuid(): string {
 }
 
 /** The person's words from a message: text blocks, without the hidden reminders. */
-export function displayText(content: string | any[]): string {
-  const raw =
-    typeof content === "string"
-      ? content
-      : (content || [])
-          .filter((b: any) => b?.type === "text")
-          .map((b: any) => b.text || "")
-          .join("\n");
+export function displayText(content: UserContent): string {
+  const raw = typeof content === "string" ? content : blockTexts(content).join("\n");
   return raw.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
 }
 
-const unref = <T>(t: T): T => {
-  try {
-    (t as any)?.unref?.();
-  } catch {
-    /* timers without unref (the browser) */
-  }
-  return t;
-};
+/**
+ * Let a timer not hold the process open. In Node (the tests) a timer is an
+ * object with `unref`; the browser's is a number, with nothing to do.
+ */
+function unref(id: number): number {
+  const t: unknown = id;
+  if (isUnrefable(t)) t.unref();
+  return id;
+}
+
+function isUnrefable(t: unknown): t is { unref(): void } {
+  return isObject(t) && typeof t.unref === "function";
+}
 
 export class SessionOwner {
   private proc: ProcLike | null = null;
@@ -265,10 +305,10 @@ export class SessionOwner {
   private steers: SteerSend[] = [];
   private turn: TurnRecord | null = null;
   // Asks Claude is waiting on (permissions, questions, plans), by request id.
-  private openAsks = new Map<string, any>();
+  private openAsks = new Map<string, JsonObject>();
   private answered = new Set<string>();
-  private graceTimer: ReturnType<typeof setTimeout> | null = null;
-  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private graceTimer: number | null = null;
+  private idleTimer: number | null = null;
   private released = false;
   private _seq = 0;
   // The permission mode the conversation runs in (what Claude last reported,
@@ -349,7 +389,7 @@ export class SessionOwner {
     const key = JSON.stringify(info);
     if (key === this.lastInfo) return;
     this.lastInfo = key;
-    this.broadcast({ type: "hyo_session_info", ...info });
+    this.broadcast({ type: "hyo_session_info", ...info } satisfies OwnerNotice);
   }
 
   /**
@@ -421,7 +461,7 @@ export class SessionOwner {
       });
     }
     const info = this.info;
-    if (info) sub.onEvent({ type: "hyo_session_info", ...info });
+    if (info) sub.onEvent({ type: "hyo_session_info", ...info } satisfies OwnerNotice);
     const replay = this.replay();
     if (replay) sub.onEvent(replay);
     sub.onEvent(this.asksOpen(!this.turn));
@@ -429,10 +469,15 @@ export class SessionOwner {
   }
 
   /** What someone opening the conversation now needs to see, or null if nothing's going on. */
-  private replay(): any | null {
+  private replay(): ReplayNotice | null {
     const t = this.turn;
-    const inTurn = new Set<string>();
-    if (t) for (const e of t.events) if (e?.type === "control_request" && e.request_id) inTurn.add(e.request_id);
+    const inTurn = new Set<unknown>();
+    if (t) {
+      for (const event of t.events) {
+        const e = asObject(event);
+        if (e?.type === "control_request" && e.request_id) inTurn.add(e.request_id);
+      }
+    }
     const asks = [...this.openAsks.entries()].filter(([id]) => !inTurn.has(id)).map(([, e]) => e);
     const steering = this.steers.filter((s) => !s.turnStarted);
     if (!t && !this.queue.length && !steering.length && !asks.length) return null;
@@ -442,7 +487,7 @@ export class SessionOwner {
       turn: t ? { qid: t.qid, text: t.text, selfStarted: !!t.selfStarted, events: [...t.events] } : null,
       // Sent with "Send now" and on their way first, then the ones still waiting.
       queued: [
-        ...steering.map((s) => ({ qid: s.qid, text: s.text, steering: true })),
+        ...steering.map((s) => ({ qid: s.qid, text: s.text, steering: true as const })),
         ...this.queue.filter((q) => !q.silent).map((q) => ({ qid: q.qid, text: q.text, steerable })),
       ],
       asks,
@@ -455,7 +500,7 @@ export class SessionOwner {
     this.maybeRelease();
   }
 
-  private broadcast(e: any, except?: string): void {
+  private broadcast(e: unknown, except?: string): void {
     for (const [id, s] of [...this.subs]) {
       if (id === except) continue;
       try {
@@ -467,7 +512,7 @@ export class SessionOwner {
   }
 
   /** The asks still waiting on an answer, so every view can drop any it shows that aren't. */
-  private asksOpen(turnOver = false): any {
+  private asksOpen(turnOver = false): OwnerNotice {
     return { type: "hyo_asks_open", ids: [...this.openAsks.keys()], ...(turnOver ? { turnOver: true } : {}) };
   }
 
@@ -484,12 +529,12 @@ export class SessionOwner {
    * never interleave. Every view is told what was said (or that it's
    * waiting). `qid` is the sender's id for this message.
    */
-  send(from: string, spec: OwnerSpec, content: string | any[], qid?: string, opts: { silent?: boolean } = {}): string {
+  send(from: string, spec: OwnerSpec, content: UserContent, qid?: string, opts: { silent?: boolean } = {}): string {
     const item: QueuedSend = { qid: qid || genQid(), from, spec, content, text: displayText(content), ...(opts.silent ? { silent: true } : {}) };
     this.cancelGrace();
     if (this.generating) {
       this.queue.push(item);
-      if (!item.silent) this.broadcast({ type: "hyo_queued", qid: item.qid, text: item.text, steerable: this.canSteer });
+      if (!item.silent) this.broadcast({ type: "hyo_queued", qid: item.qid, text: item.text, steerable: this.canSteer } satisfies OwnerNotice);
       return item.qid;
     }
     this.dispatch(item);
@@ -509,7 +554,7 @@ export class SessionOwner {
     const [item] = this.queue.splice(at, 1);
     const steer: SteerSend = { ...item, uuid: genUuid() };
     this.steers.push(steer);
-    this.broadcast({ type: "hyo_steering", qid: item.qid });
+    this.broadcast({ type: "hyo_steering", qid: item.qid } satisfies OwnerNotice);
     this.proc!.sendUserMessage(item.content, { uuid: steer.uuid });
     return true;
   }
@@ -529,7 +574,7 @@ export class SessionOwner {
       this.beginTurn(s);
       return;
     }
-    const told = { type: "hyo_steered", qid: s.qid, text: s.text };
+    const told: OwnerNotice = { type: "hyo_steered", qid: s.qid, text: s.text };
     this.record(told);
     this.broadcast(told);
   }
@@ -551,7 +596,7 @@ export class SessionOwner {
       this.turn = null;
       this._seq++;
     }
-    this.broadcast({ type: "hyo_queued", qid: item.qid, text: item.text, steerable: this.canSteer });
+    this.broadcast({ type: "hyo_queued", qid: item.qid, text: item.text, steerable: this.canSteer } satisfies OwnerNotice);
     if (ownTurn) {
       const next = this.queue.shift();
       if (next) this.dispatch(next);
@@ -560,10 +605,10 @@ export class SessionOwner {
 
   private returnSteers(): void {
     if (!this.steers.length) return;
-    const back = this.steers.map(({ uuid: _u, turnStarted: _t, ...item }) => item as QueuedSend);
+    const back: QueuedSend[] = this.steers.map(({ uuid: _u, turnStarted: _t, ...item }) => item);
     this.steers = [];
     this.queue.unshift(...back);
-    for (const item of back) this.broadcast({ type: "hyo_queued", qid: item.qid, text: item.text, steerable: false });
+    for (const item of back) this.broadcast({ type: "hyo_queued", qid: item.qid, text: item.text, steerable: false } satisfies OwnerNotice);
   }
 
   private dispatch(item: QueuedSend): void {
@@ -597,7 +642,7 @@ export class SessionOwner {
     this.generating = true;
     this._seq++;
     this.turn = { qid: item.qid, text: item.text, startLine: this.lines(), events: [] };
-    this.broadcast({ type: "hyo_user_message", qid: item.qid, text: item.text, ...(item.silent ? { silent: true } : {}) });
+    this.broadcast({ type: "hyo_user_message", qid: item.qid, text: item.text, ...(item.silent ? { silent: true as const } : {}) } satisfies OwnerNotice);
   }
 
   private lines(): number | null {
@@ -612,14 +657,14 @@ export class SessionOwner {
   /** Messages that will never go: everyone stops showing them as waiting. */
   private drop(items: QueuedSend[], reason: "refused" | "stopped"): void {
     if (!items.length) return;
-    this.broadcast({ type: "hyo_queue_dropped", qids: items.map((i) => i.qid), reason });
+    this.broadcast({ type: "hyo_queue_dropped", qids: items.map((i) => i.qid), reason } satisfies OwnerNotice);
   }
 
   private start(spec: OwnerSpec): boolean {
     if (this.opts.lock && !this.opts.lock.acquire()) {
       for (const s of this.subs.values()) {
         s.onError?.("The main chat is already running in another copy of Obsidian on this computer. Use that one, or quit it and try again.");
-        s.onEvent({ type: "hyo_owner_refused" });
+        s.onEvent({ type: "hyo_owner_refused" } satisfies OwnerNotice);
       }
       return false;
     }
@@ -676,8 +721,10 @@ export class SessionOwner {
     this.maybeRelease();
   }
 
-  private onMessage(proc: ProcLike, e: any): void {
+  private onMessage(proc: ProcLike, event: unknown): void {
     if (this.proc !== proc) return;
+    // Read from as it's checked; passed on to every view as it came.
+    const e = asObject(event);
     // Claude's echo of a message written to it (--replay-user-messages). Every
     // view already shows the message from the owner's own announcements, so
     // the echo itself never reaches a view: it only says when Claude took in
@@ -693,9 +740,10 @@ export class SessionOwner {
       else if (e.state === "cancelled") this.steerCancelled(e.command_uuid);
     }
     if (e?.type === "system") {
-      if (e.subtype === "init" && e.session_id && e.session_id !== this._sessionId) {
-        this._sessionId = e.session_id;
-        this.opts.onSessionId?.(this, e.session_id);
+      const sid = str(e.session_id);
+      if (e.subtype === "init" && sid && sid !== this._sessionId) {
+        this._sessionId = sid;
+        this.opts.onSessionId?.(this, sid);
       }
       const next = applyJobEvent(this.jobs, e);
       if (next) this.jobs = next;
@@ -709,19 +757,21 @@ export class SessionOwner {
         if (this.lastSpec) this.lastSpec = { ...this.lastSpec, permissionMode: reported };
       }
     }
-    if (e?.type === "control_response" && this.modeRequest && e.response?.request_id === this.modeRequest.id) {
+    const response = asObject(e?.response);
+    if (e?.type === "control_response" && this.modeRequest && response?.request_id === this.modeRequest.id) {
       const asked = this.modeRequest.mode;
       this.modeRequest = null;
       // Claude can't switch to it in place: start a fresh process in it.
-      if (e.response?.subtype === "error") this.relaunch();
+      if (response.subtype === "error") this.relaunch();
       else this.mode = asked;
     }
-    if (e?.type === "control_request" && e.request_id && e.request?.subtype === "can_use_tool") {
-      this.openAsks.set(e.request_id, e);
-      this.answered.delete(e.request_id);
+    const requestId = str(e?.request_id);
+    if (e?.type === "control_request" && requestId && asObject(e.request)?.subtype === "can_use_tool") {
+      this.openAsks.set(requestId, e);
+      this.answered.delete(requestId);
     }
     // Claude withdrew an ask (the turn was stopped while it waited).
-    const withdrawn = e?.type === "control_cancel_request" && !!e.request_id && this.openAsks.delete(e.request_id);
+    const withdrawn = e?.type === "control_cancel_request" && !!requestId && this.openAsks.delete(requestId);
     // A turn Claude starts itself (a job finished) is a turn under way too.
     if (!this.generating && isMainContent(e)) {
       this.generating = true;
@@ -729,8 +779,8 @@ export class SessionOwner {
       this.cancelIdle();
       this.turn = { selfStarted: true, startLine: this.lines(), events: [] };
     }
-    this.record(e);
-    this.broadcast(e);
+    this.record(event);
+    this.broadcast(event);
     if (e?.type === "system" || e?.type === "control_response") this.announceInfo();
     if (withdrawn) this.announceAsks();
     if (e?.type === "result" && !isSidechain(e)) {
@@ -740,7 +790,7 @@ export class SessionOwner {
       // Once the turn is over, nothing of its own can still be waiting on an
       // answer (it was stopped, or Claude moved on). A background job's ask
       // lives on until it's answered or the job ends.
-      for (const [id, ask] of this.openAsks) if (!ask?.request?.agent_id) this.openAsks.delete(id);
+      for (const [id, ask] of this.openAsks) if (!asObject(ask.request)?.agent_id) this.openAsks.delete(id);
       this.announceAsks(true);
       try {
         this.opts.onTurnEnd?.(this);
@@ -767,23 +817,24 @@ export class SessionOwner {
   }
 
   /** Keep the turn's events for a newcomer, without every streamed fragment of a finished message. */
-  private record(e: any): void {
+  private record(e: unknown): void {
     const t = this.turn;
     if (!t) return;
-    if (e?.type === "assistant" && !isSidechain(e)) {
+    const typeOf = (x: unknown): unknown => asObject(x)?.type;
+    if (typeOf(e) === "assistant" && !isSidechain(e)) {
       // The complete message carries everything its fragments did.
       let i = t.events.length - 1;
       while (i >= 0) {
         const x = t.events[i];
-        if (!isSidechain(x) && (x?.type === "assistant" || x?.type === "user")) break;
+        if (!isSidechain(x) && (typeOf(x) === "assistant" || typeOf(x) === "user")) break;
         i--;
       }
-      const tail = t.events.slice(i + 1).filter((x) => !(x?.type === "stream_event" && !isSidechain(x)));
+      const tail = t.events.slice(i + 1).filter((x) => !(typeOf(x) === "stream_event" && !isSidechain(x)));
       t.events = [...t.events.slice(0, i + 1), ...tail];
     }
     t.events.push(e);
     if (t.events.length > MAX_REPLAY_EVENTS) {
-      const at = t.events.findIndex((x) => x?.type === "stream_event");
+      const at = t.events.findIndex((x) => typeOf(x) === "stream_event");
       t.events.splice(at >= 0 ? at : 0, 1);
     }
   }
@@ -794,7 +845,7 @@ export class SessionOwner {
   permission(
     from: string,
     requestId: string,
-    behavior: "allow" | "allow_always" | "deny",
+    behavior: PermissionBehavior,
     toolName?: string,
     updatedInput?: Record<string, unknown>,
     destination?: string
@@ -803,7 +854,7 @@ export class SessionOwner {
     this.answered.add(requestId);
     this.openAsks.delete(requestId);
     this.proc?.sendPermissionResponse(requestId, behavior, toolName, updatedInput, destination);
-    const told = { type: "hyo_permission_answered", requestId, behavior };
+    const told: OwnerNotice = { type: "hyo_permission_answered", requestId, behavior };
     this.record(told);
     this.broadcast(told, from);
     return true;
@@ -865,7 +916,7 @@ export class SessionOwner {
     const idleMs = this.opts.procIdleMs ?? DEFAULT_PROC_IDLE_MS;
     if (!this.opts.keep && idleMs > 0 && this.proc && !this.idleTimer) {
       this.idleTimer = unref(
-        setTimeout(() => {
+        window.setTimeout(() => {
           this.idleTimer = null;
           if (!this.busy && !this.queue.length && !this.openAsks.size) this.stopProc();
         }, idleMs)
@@ -883,7 +934,7 @@ export class SessionOwner {
       this.release();
     };
     if (ms <= 0) go();
-    else this.graceTimer = unref(setTimeout(go, ms));
+    else this.graceTimer = unref(window.setTimeout(go, ms));
   }
 
   private release(): void {
@@ -898,12 +949,12 @@ export class SessionOwner {
   }
 
   private cancelGrace(): void {
-    if (this.graceTimer) clearTimeout(this.graceTimer);
+    if (this.graceTimer) window.clearTimeout(this.graceTimer);
     this.graceTimer = null;
   }
 
   private cancelIdle(): void {
-    if (this.idleTimer) clearTimeout(this.idleTimer);
+    if (this.idleTimer) window.clearTimeout(this.idleTimer);
     this.idleTimer = null;
   }
 }
@@ -928,21 +979,26 @@ export function lockHeldByOther(rec: LockRecord | null, myPid: number, alive: (p
 
 /** A lock file next to Hyo's other per-machine state (~/.hyo). Desktop only. */
 export function fileLock(file: string, pid: number = process.pid): LockOps {
-  const fs = require("fs");
-  const path = require("path");
+  const fs = nodeFs();
+  const path = nodePath();
   const alive = (p: number) => {
     try {
       process.kill(p, 0);
       return true;
-    } catch (e: any) {
-      return e?.code === "EPERM";
+    } catch (e) {
+      return errorCode(e) === "EPERM";
     }
+  };
+  // The lock file as written: `{ "pid": … }`. Anything else holds no lock.
+  const read = (): LockRecord | null => {
+    const rec = asObject(JSON.parse(fs.readFileSync(file, "utf8")));
+    return rec && typeof rec.pid === "number" ? { pid: rec.pid } : null;
   };
   return {
     acquire() {
       let rec: LockRecord | null = null;
       try {
-        rec = JSON.parse(fs.readFileSync(file, "utf8"));
+        rec = read();
       } catch {
         /* no lock */
       }
@@ -957,7 +1013,7 @@ export function fileLock(file: string, pid: number = process.pid): LockOps {
     },
     release() {
       try {
-        const rec = JSON.parse(fs.readFileSync(file, "utf8"));
+        const rec = read();
         if (rec?.pid === pid) fs.unlinkSync(file);
       } catch {
         /* already gone */
@@ -1084,7 +1140,7 @@ export class OwnerTransport implements ProcLike {
   constructor(
     readonly owner: SessionOwner,
     spec: OwnerSpec | (() => OwnerSpec),
-    private on: { onMessage: (e: any) => void; onError: (e: string) => void; onClose: (code: number | null) => void }
+    private on: ProcEvents
   ) {
     this.specFor = typeof spec === "function" ? spec : () => spec;
   }
@@ -1098,12 +1154,12 @@ export class OwnerTransport implements ProcLike {
     });
   }
 
-  sendUserMessage(content: string | any[], opts: { qid?: string; silent?: boolean } = {}): void {
+  sendUserMessage(content: UserContent, opts: { qid?: string; silent?: boolean } = {}): void {
     if (!this.sub) this.spawn();
     this.owner.send(this.sub!, this.specFor(), content, opts.qid, { silent: opts.silent });
   }
 
-  sendPermissionResponse(requestId: string, behavior: "allow" | "allow_always" | "deny", toolName?: string, updatedInput?: Record<string, unknown>): void {
+  sendPermissionResponse(requestId: string, behavior: PermissionBehavior, toolName?: string, updatedInput?: Record<string, unknown>): void {
     if (!this.sub) this.spawn();
     this.owner.permission(this.sub!, requestId, behavior, toolName, updatedInput);
   }
@@ -1158,10 +1214,38 @@ export interface GatewayClientSink {
   isOpen?: () => boolean;
 }
 
+/** What a phone's prompt asks its conversation to run with, as read from the message. */
+export interface PhonePrompt {
+  model?: string;
+  effort?: string;
+  /** The mode the phone has for this conversation ("" if it sent none). */
+  permissionMode: string;
+  agent?: string;
+  appendSystemPrompt?: string;
+  /** Older phones send only this: Ask first on or off. */
+  askFirst?: boolean;
+}
+
+function phonePrompt(m: JsonObject): PhonePrompt {
+  return {
+    model: str(m.model),
+    effort: str(m.effort),
+    permissionMode: str(m.permissionMode) ?? "",
+    agent: str(m.agent),
+    appendSystemPrompt: str(m.appendSystemPrompt),
+    askFirst: typeof m.askFirst === "boolean" ? m.askFirst : undefined,
+  };
+}
+
+/** An answer from the phone; anything it doesn't recognise allows once, as the CLI transport treats it. */
+function permissionBehavior(v: unknown): PermissionBehavior {
+  return v === "deny" || v === "allow_always" ? v : "allow";
+}
+
 export interface GatewaySessionContext {
   cwd: string;
   /** The spec a phone message asks for (its model, agent, ask-first and persona). */
-  specFor: (m: any, sessionId: string | null) => OwnerSpec;
+  specFor: (m: PhonePrompt, sessionId: string | null) => OwnerSpec;
   /** A fresh conversation id, for a phone that didn't send one. */
   mintId: () => string;
   /** "Always allow" on the phone also goes on the phone's own allowlist. */
@@ -1176,7 +1260,7 @@ interface PhoneTab {
   ws: object | null;
   sink: GatewayClientSink | null;
   outbox: unknown[];
-  grace: ReturnType<typeof setTimeout> | null;
+  grace: number | null;
 }
 
 export const PHONE_GRACE_MS = 3 * 60_000;
@@ -1199,7 +1283,7 @@ function phoneEmit(pt: PhoneTab, obj: unknown): void {
 function bindPhone(pt: PhoneTab, ws: object, sink: GatewayClientSink): void {
   pt.ws = ws;
   pt.sink = sink;
-  if (pt.grace) clearTimeout(pt.grace);
+  if (pt.grace) window.clearTimeout(pt.grace);
   pt.grace = null;
   const held = pt.outbox;
   pt.outbox = [];
@@ -1209,7 +1293,7 @@ function bindPhone(pt: PhoneTab, ws: object, sink: GatewayClientSink): void {
 function dropPhoneTab(tabId: string): void {
   const pt = phoneTabs.get(tabId);
   if (!pt) return;
-  if (pt.grace) clearTimeout(pt.grace);
+  if (pt.grace) window.clearTimeout(pt.grace);
   phoneTabs.delete(tabId);
   pt.owner.detach(pt.sub);
 }
@@ -1252,11 +1336,17 @@ export function gatewayAttach(ctx: GatewaySessionContext, tabId: string, session
  * of its own, and its `stop` only detaches. Returns false for a message
  * that isn't about a conversation. `reattach` is answered here in full.
  */
-export function gatewaySession(m: any, ws: object, sink: GatewayClientSink, ctx: GatewaySessionContext): boolean {
-  const tabId: string | undefined = typeof m?.tabId === "string" ? m.tabId : undefined;
-  switch (m?.type) {
+export function gatewaySession(message: unknown, ws: object, sink: GatewayClientSink, ctx: GatewaySessionContext): boolean {
+  const m = asObject(message);
+  if (!m) return false;
+  const tabId: string | undefined = typeof m.tabId === "string" ? m.tabId : undefined;
+  switch (m.type) {
     case "reattach": {
-      const ids: string[] = Array.isArray(m.tabIds) ? m.tabIds : tabId ? [tabId] : [];
+      const ids: string[] = Array.isArray(m.tabIds)
+        ? (m.tabIds as unknown[]).filter((id): id is string => typeof id === "string")
+        : tabId
+          ? [tabId]
+          : [];
       const attached: string[] = [];
       const gone: string[] = [];
       for (const id of ids) {
@@ -1292,17 +1382,20 @@ export function gatewaySession(m: any, ws: object, sink: GatewayClientSink, ctx:
         return true;
       }
       const pt = phoneTabFor(tabId, owner, ws, sink);
-      const content = Array.isArray(m.content) && m.content.length ? m.content : [{ type: "text", text: m.text }];
-      owner.send(pt.sub, ctx.specFor(m, tabId === MAIN_CHAT_WIRE_ID ? m.sessionId || null : sid), content, typeof m.qid === "string" ? m.qid : undefined, { silent: m.silent === true });
+      const content: unknown[] = isBlockList(m.content) && m.content.length ? m.content : [{ type: "text", text: m.text }];
+      const specSid = tabId === MAIN_CHAT_WIRE_ID ? str(m.sessionId) || null : sid;
+      owner.send(pt.sub, ctx.specFor(phonePrompt(m), specSid), content, typeof m.qid === "string" ? m.qid : undefined, { silent: m.silent === true });
       return true;
     }
     case "permission_response": {
       const pt = tabId ? phoneTabs.get(tabId) : undefined;
-      if (!pt) return true;
+      if (!pt || typeof m.requestId !== "string") return true;
+      const toolName = str(m.toolName);
+      const behavior = permissionBehavior(m.behavior);
       // "Always allow" from the phone lasts for this process and goes on the
       // phone's own list, never into the desktop's rules.
-      if (m.behavior === "allow_always" && m.toolName) ctx.allowOnPhone?.(m.toolName);
-      pt.owner.permission(pt.sub, m.requestId, m.behavior, m.toolName, m.updatedInput, "session");
+      if (behavior === "allow_always" && toolName) ctx.allowOnPhone?.(toolName);
+      pt.owner.permission(pt.sub, m.requestId, behavior, toolName, asObject(m.updatedInput) ?? undefined, "session");
       return true;
     }
     case "interrupt":
@@ -1354,7 +1447,7 @@ export function gatewaySessionGone(ws: object, graceMs: number = PHONE_GRACE_MS)
     pt.sink = null;
     if (!pt.grace) {
       const id = pt.tabId;
-      pt.grace = unref(setTimeout(() => dropPhoneTab(id), graceMs));
+      pt.grace = unref(window.setTimeout(() => dropPhoneTab(id), graceMs));
     }
   }
 }
