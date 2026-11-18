@@ -144,19 +144,22 @@ function genId(): string {
 
 export function useSessionManager(options: SessionManagerOptions) {
   // A fresh conversation on the defaults from Settings.
-  const blankTab = (): TabSession => ({
-    id: genId(),
-    cliSessionId: null,
-    title: "New conversation",
-    messages: [],
-    generating: false,
-    model: options.model,
-    effort: options.effort,
-    permissionMode: options.permissionMode,
-    agent: options.defaultAgent,
-    inputTokens: 0,
-    voiceMode: false,
-  });
+  const blankTab = useCallback(
+    (): TabSession => ({
+      id: genId(),
+      cliSessionId: null,
+      title: "New conversation",
+      messages: [],
+      generating: false,
+      model: options.model,
+      effort: options.effort,
+      permissionMode: options.permissionMode,
+      agent: options.defaultAgent,
+      inputTokens: 0,
+      voiceMode: false,
+    }),
+    [options.model, options.effort, options.permissionMode, options.defaultAgent]
+  );
   const [state, setState] = useState<SessionState>(() => {
     const tab = blankTab();
     return { tabs: [tab], activeTabId: tab.id };
@@ -171,14 +174,18 @@ export function useSessionManager(options: SessionManagerOptions) {
   // Work that has to restart a tab's process, held until its background
   // jobs finish (restarting would stop them).
   const gatesRef = useRef<Record<string, IdleGate>>({});
-  const gate = (tabId: string) => (gatesRef.current[tabId] ||= new IdleGate());
+  // These read only refs and setState, so they never change.
+  const gate = useCallback((tabId: string) => (gatesRef.current[tabId] ||= new IdleGate()), []);
   const jobsRunning = (tabId: string) => hasRunningJobs(jobsRef.current[tabId]);
-  const whenIdle = (tabId: string, fn: () => void) => {
-    const g = gate(tabId);
-    g.update(jobsRef.current[tabId]);
-    g.whenIdle(fn);
-  };
-  const setJobs = (tabId: string, jobs: JobMap) => {
+  const whenIdle = useCallback(
+    (tabId: string, fn: () => void) => {
+      const g = gate(tabId);
+      g.update(jobsRef.current[tabId]);
+      g.whenIdle(fn);
+    },
+    [gate]
+  );
+  const setJobs = useCallback((tabId: string, jobs: JobMap) => {
     // A job that ended takes its unanswered asks with it.
     const ended = endedJobs(jobsRef.current[tabId], jobs);
     jobsRef.current[tabId] = jobs;
@@ -188,7 +195,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     }));
     // Out of this event's handling first, so a restart never runs inside it.
     window.setTimeout(() => gate(tabId).update(jobsRef.current[tabId]), 0);
-  };
+  }, [gate]);
   // An auto-compaction that ended the turn without carrying on (older CLIs).
   // Newer ones continue by themselves, and a nudge would start a second turn.
   const compactNudgeRef = useRef<Record<string, boolean>>({});
@@ -246,13 +253,19 @@ export function useSessionManager(options: SessionManagerOptions) {
     []
   );
   const [openList, setOpenList] = useState<OpenEntry[] | null>(() => openConversations(options.cwd)?.list() ?? null);
-  const isPinned = (sid: string | null | undefined) => !!sid && !!openStore()?.list().some((e) => e.id === sid && e.pinned);
+  const isPinned = useCallback(
+    (sid: string | null | undefined) => !!sid && !!openStore()?.list().some((e) => e.id === sid && e.pinned),
+    [openStore]
+  );
 
-  // Cleanup transports on unmount
+  // Cleanup transports on unmount. The ref always holds the same record (it's
+  // only ever added to and deleted from), so this is every transport still
+  // open at unmount.
   useEffect(() => {
+    const transports = transportsRef.current;
     return () => {
-      for (const id of Object.keys(transportsRef.current)) {
-        transportsRef.current[id]?.stop();
+      for (const id of Object.keys(transports)) {
+        transports[id]?.stop();
       }
     };
   }, []);
@@ -416,7 +429,7 @@ export function useSessionManager(options: SessionManagerOptions) {
             if (t?.isMain && sessionId !== optionsRef.current.mainChatSessionId) {
               optionsRef.current.onMainChatSession?.(sessionId);
               // Named in History too, wherever it's opened.
-              saveCustomTitle(options.cwd, sessionId, MAIN_CHAT_TITLE);
+              saveCustomTitle(optionsRef.current.cwd, sessionId, MAIN_CHAT_TITLE);
             }
             setState((prev) => ({
               ...prev,
@@ -534,7 +547,7 @@ export function useSessionManager(options: SessionManagerOptions) {
               planContent = written[written.length - 1];
             }
             if (!planContent) {
-              planContent = readPlanFile(options.cwd);
+              planContent = readPlanFile(optionsRef.current.cwd);
             }
 
             updateTabLastAssistant(tabId, () => ({
@@ -626,7 +639,7 @@ export function useSessionManager(options: SessionManagerOptions) {
 
           // Auto-generate title after first response
           // Named once, by the view whose message started the conversation.
-          if (options.autoGenerateTitles && ownTurnRef.current[tabId]) {
+          if (optionsRef.current.autoGenerateTitles && ownTurnRef.current[tabId]) {
             const currentTab = stateRef.current.tabs.find((t) => t.id === tabId);
             if (currentTab && !currentTab.isMain && currentTab.messages.length >= 2) {
               // Titled from the first message with real substance, so a
@@ -638,7 +651,7 @@ export function useSessionManager(options: SessionManagerOptions) {
                 const titleBeforeGeneration = currentTab.title;
                 debug("[hyo][title] Generating for tab", tabId);
                 generateConversationTitle({
-                  cliPath: options.cliPath,
+                  cliPath: optionsRef.current.cliPath,
                   userMessage: req.userText,
                   assistantMessage: req.assistantText,
                 }).then((generatedTitle) => {
@@ -649,7 +662,7 @@ export function useSessionManager(options: SessionManagerOptions) {
                   const tab = stateRef.current.tabs.find((t) => t.id === tabId);
                   if (!tab || tab.title !== titleBeforeGeneration) return;
                   debug("[hyo][title] Renamed:", generatedTitle);
-                  renameTab(tabId, generatedTitle);
+                  renameTabRef.current(tabId, generatedTitle);
                 }).catch((err) => {
                   console.error("[hyo][title] Error:", err);
                 });
@@ -858,7 +871,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       };
       return handle;
     },
-    [updateTabLastAssistant]
+    [updateTabLastAssistant, setJobs]
   );
 
   // ------- tab management -------
@@ -868,7 +881,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     // tab you're in, nothing else.
     const tab = blankTab();
     setState((prev) => ({ tabs: [...prev.tabs, tab], activeTabId: tab.id }));
-  }, [options.model, options.effort, options.permissionMode]);
+  }, [blankTab]);
 
   const closeTab = useCallback((tabIdToClose: string) => {
     // The main chat stays: it's the one conversation that's always there.
@@ -903,7 +916,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     });
     // Closed everywhere else too.
     if (sid) openStore()?.close(sid);
-  }, []);
+  }, [blankTab, isPinned, mainSid, openStore]);
 
   const switchTab = useCallback((id: string) => {
     setState((prev) => ({
@@ -916,6 +929,16 @@ export function useSessionManager(options: SessionManagerOptions) {
     }));
     scrollRef.current.nearBottom = true;
   }, []);
+
+  // History's list, read again after anything that changes a title or a pin.
+  const refreshPastSessions = useCallback(() => {
+    try {
+      const sessions = listPastSessions(options.cwd);
+      setPastSessions(sessions);
+    } catch (e) {
+      console.error("[hyo] Failed to list past sessions:", e);
+    }
+  }, [options.cwd]);
 
   const renameTab = useCallback((id: string, title: string) => {
     // The other devices' tabs take the new title too. Told first, so a list
@@ -939,7 +962,11 @@ export function useSessionManager(options: SessionManagerOptions) {
         ),
       };
     });
-  }, [options.cwd]); // refreshPastSessions intentionally omitted — declared later, referenced via closure
+  }, [options.cwd, openStore, refreshPastSessions]);
+  // For the title namer in makeProcessEvent, which outlives the render it
+  // was made in (each tab's process keeps the handler it started with).
+  const renameTabRef = useRef(renameTab);
+  renameTabRef.current = renameTab;
 
   // Rename a conversation that isn't open as a tab (from the task list). Writes
   // the custom title to the on-disk metadata and refreshes the list. If it does
@@ -954,7 +981,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       ),
     }));
     window.setTimeout(() => refreshPastSessions(), 0);
-  }, [options.cwd]);
+  }, [options.cwd, openStore, refreshPastSessions]);
 
   // Persist task state (pinned / closed) to the shared session metadata, then
   // refresh so the list reflects it. Keyed by cliSessionId — a brand-new tab
@@ -976,7 +1003,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       if (patch.pinned !== undefined) openStore()?.pinsChanged();
       window.setTimeout(() => refreshPastSessions(), 0);
     },
-    [options.cwd]
+    [options.cwd, openStore, refreshPastSessions]
   );
 
   // ---- Voice calls -----------------------------------------------------------
@@ -1167,6 +1194,10 @@ export function useSessionManager(options: SessionManagerOptions) {
     transport.spawn();
     return transport;
   }
+  // This render's openTransport (it reads the options), for sendMessage,
+  // which keeps one identity.
+  const openTransportRef = useRef(openTransport);
+  openTransportRef.current = openTransport;
 
   // ------- messaging -------
 
@@ -1249,12 +1280,12 @@ export function useSessionManager(options: SessionManagerOptions) {
       }));
       scrollRef.current.nearBottom = true;
 
-      const transport = transportsRef.current[tabId] || openTransport(tabId, tab.cliSessionId);
+      const transport = transportsRef.current[tabId] || openTransportRef.current(tabId, tab.cliSessionId);
       if (!transport) return;
       // The main chat's reminder rides on every message (never shown).
       transport.sendUserMessage(tab.isMain && !meta?.isCompaction ? withMainChatReminder(content) : content, { qid });
     },
-    [options, makeProcessEvent, updateTabLastAssistant]
+    [mainSid, openStore]
   );
 
   const sendPermissionResponse = useCallback(
@@ -1435,40 +1466,16 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   // ------- past sessions -------
 
-  const refreshPastSessions = useCallback(() => {
-    try {
-      const sessions = listPastSessions(options.cwd);
-      setPastSessions(sessions);
-    } catch (e) {
-      console.error("[hyo] Failed to list past sessions:", e);
-    }
-  }, [options.cwd]);
-
   useEffect(() => {
     refreshPastSessions();
   }, [refreshPastSessions]);
-
-  const openPastSession = useCallback((pastSession: PastSession) => {
-    const existing = stateRef.current.tabs.find(
-      (t) => t.cliSessionId === pastSession.id
-    );
-    if (existing) {
-      setState((prev) => ({ ...prev, activeTabId: existing.id }));
-      return;
-    }
-
-    const tab = sessionTab(pastSession);
-    setState((prev) => ({ tabs: [...prev.tabs, tab], activeTabId: tab.id }));
-    // Opened on the phone and any other panel too (not the main chat).
-    if (tab.cliSessionId && tab.cliSessionId !== mainSid()) openStore()?.open({ id: tab.cliSessionId, title: tab.title });
-  }, [options.cwd, options.model, options.effort, options.permissionMode, options.defaultAgent]);
 
   /**
    * A conversation's history read back from disk, as chat messages. If a turn
    * is under way in it, history stops where that turn began: the turn is
    * caught up live when the tab subscribes (session-owner.ts).
    */
-  function readHistory(sessionId: string, isMain?: boolean): { messages: Message[]; seq: number } {
+  const readHistory = useCallback((sessionId: string, isMain?: boolean): { messages: Message[]; seq: number } => {
     const owner = isMain ? mainChatOwner(options.cwd) : findSessionOwner(options.cwd, sessionId);
     const live = owner && (!isMain || owner.sessionId === sessionId) ? owner : null;
     const history = loadSessionHistory(options.cwd, sessionId, live?.turnStartLine ?? null);
@@ -1495,10 +1502,10 @@ export function useSessionManager(options: SessionManagerOptions) {
       voiceCall: call,
     }));
     return { messages, seq: live?.seq ?? 0 };
-  }
+  }, [options.cwd]);
 
   /** A tab holding a saved conversation, its history read back from disk. */
-  function sessionTab(pastSession: Pick<PastSession, "id" | "title" | "callOnly">, isMain?: boolean): TabSession {
+  const sessionTab = useCallback((pastSession: Pick<PastSession, "id" | "title" | "callOnly">, isMain?: boolean): TabSession => {
     const { messages, seq } = readHistory(pastSession.id, isMain);
     const sessionModel = loadSessionModel(options.cwd, pastSession.id);
     return {
@@ -1519,7 +1526,22 @@ export function useSessionManager(options: SessionManagerOptions) {
       inputTokens: 0,
       voiceMode: false,
     };
-  }
+  }, [readHistory, options.cwd, options.model, options.effort, options.permissionMode, options.defaultAgent]);
+
+  const openPastSession = useCallback((pastSession: PastSession) => {
+    const existing = stateRef.current.tabs.find(
+      (t) => t.cliSessionId === pastSession.id
+    );
+    if (existing) {
+      setState((prev) => ({ ...prev, activeTabId: existing.id }));
+      return;
+    }
+
+    const tab = sessionTab(pastSession);
+    setState((prev) => ({ tabs: [...prev.tabs, tab], activeTabId: tab.id }));
+    // Opened on the phone and any other panel too (not the main chat).
+    if (tab.cliSessionId && tab.cliSessionId !== mainSid()) openStore()?.open({ id: tab.cliSessionId, title: tab.title });
+  }, [sessionTab, mainSid, openStore]);
 
   /** The main chat's tab: its conversation if it has one on disk, else a fresh one. */
   const mainTab = (): TabSession => {
@@ -1882,7 +1904,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       whenIdle(tabId, finish);
       return canResend;
     },
-    [sendMessage]
+    [sendMessage, whenIdle]
   );
   const retryAfterClaudeUpdate = useCallback(
     (tabId: string, cliPath?: string) => retryFailedTurn(tabId, "claudeUpdate", cliPath),
@@ -1914,7 +1936,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       const store = openStore();
       if (store && restoredRef.current) applyOpenListRef.current(store.list());
     }
-  }, []);
+  }, [openStore]);
 
   // The conversation in view was closed on another device, and stays here
   // only because there's text in its box.

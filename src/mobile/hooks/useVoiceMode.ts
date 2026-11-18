@@ -623,6 +623,17 @@ export function useVoiceMode({
     if (store) void offerLeftover();
   }, [store, offerLeftover]);
 
+  // Stops whatever is playing (the record button does this while speaking).
+  const stopAudio = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current = null;
+    }
+    setVoiceState("idle");
+    setIsPaused(false);
+  }, []);
+
   // --- Record button handler ---
 
   const handleRecordClick = useCallback(() => {
@@ -650,7 +661,7 @@ export function useVoiceMode({
       // startRecording reports its own failures (a Notice), so nothing to wait for here.
       void startRecording();
     }
-  }, [voiceState, stopRecording, startRecording, pump]);
+  }, [voiceState, stopAudio, stopRecording, startRecording, pump]);
 
   // Discard a failed recording and return to a clean idle state — the escape
   // hatch when the user wants to start a fresh note instead of retrying.
@@ -699,16 +710,6 @@ export function useVoiceMode({
   );
 
   // --- Audio controls ---
-
-  const stopAudio = useCallback(() => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-      audioRef.current = null;
-    }
-    setVoiceState("idle");
-    setIsPaused(false);
-  }, []);
 
   const togglePause = useCallback(() => {
     if (!audioRef.current) return;

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import { renderToolBlock, useShowAllToolCalls } from "./ToolCallRun";
 import { AskQuestion } from "./AskQuestion";
 import { PlanReview } from "./PlanReview";
@@ -160,8 +160,8 @@ function AssistantMessage({ app, message, onRecover, onPermissionResponse, onQue
   onClaudeSignIn?: ClaudeSignInRunner;
   isLast?: boolean;
 }) {
-  const blocks = message.orderedBlocks || [];
-  const toolCalls = message.toolCalls || [];
+  const blocks = useMemo(() => message.orderedBlocks || [], [message.orderedBlocks]);
+  const toolCalls = useMemo(() => message.toolCalls || [], [message.toolCalls]);
   const showAllTools = useShowAllToolCalls();
   const wrapClass = "hyo-message hyo-message-assistant";
 
@@ -204,10 +204,14 @@ function AssistantMessage({ app, message, onRecover, onPermissionResponse, onQue
   ) : null;
 
   // Any text block at the same turn index as a Skill tool call is skill content — hide it.
-  const skillTurnIndices = new Set(
-    blocks
-      .filter((b) => b.type === "tool" && toolCalls.find((t) => t.id === b.toolId)?.name === "Skill")
-      .map((b) => b.turnIndex)
+  const skillTurnIndices = useMemo(
+    () =>
+      new Set(
+        blocks
+          .filter((b) => b.type === "tool" && toolCalls.find((t) => t.id === b.toolId)?.name === "Skill")
+          .map((b) => b.turnIndex)
+      ),
+    [blocks, toolCalls]
   );
 
   const getTextContent = useCallback(() => {
@@ -216,7 +220,7 @@ function AssistantMessage({ app, message, onRecover, onPermissionResponse, onQue
       .filter((b) => b.type === "text" && !skillTurnIndices.has(b.turnIndex))
       .map((b) => stripInlineThinkingTags(b.content || ""))
       .join("\n\n");
-  }, [blocks, message.content]);
+  }, [blocks, message.content, skillTurnIndices]);
 
   if (blocks.length === 0 && message.content) {
     return (

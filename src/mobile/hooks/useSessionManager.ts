@@ -151,13 +151,17 @@ export function useSessionManager(options: SessionManagerOptions) {
   const jobsRunning = (tabId: string) => hasRunningJobs(jobsRef.current[tabId]);
   // Work that has to restart a tab's process waits for its background jobs.
   const gatesRef = useRef<Record<string, IdleGate>>({});
-  const gate = (tabId: string) => (gatesRef.current[tabId] ||= new IdleGate());
-  const whenIdle = (tabId: string, fn: () => void) => {
-    const g = gate(tabId);
-    g.update(jobsRef.current[tabId]);
-    g.whenIdle(fn);
-  };
-  const setJobs = (tabId: string, jobs: JobMap) => {
+  // These read only refs and setState, so they never change.
+  const gate = useCallback((tabId: string) => (gatesRef.current[tabId] ||= new IdleGate()), []);
+  const whenIdle = useCallback(
+    (tabId: string, fn: () => void) => {
+      const g = gate(tabId);
+      g.update(jobsRef.current[tabId]);
+      g.whenIdle(fn);
+    },
+    [gate]
+  );
+  const setJobs = useCallback((tabId: string, jobs: JobMap) => {
     // A job that ended takes its unanswered asks with it.
     const ended = endedJobs(jobsRef.current[tabId], jobs);
     jobsRef.current[tabId] = jobs;
@@ -166,7 +170,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       tabs: prev.tabs.map((t) => (t.id === tabId ? { ...t, jobs, ...(ended.size ? { messages: asksEnded(t.messages, ended) } : {}) } : t)),
     }));
     window.setTimeout(() => gate(tabId).update(jobsRef.current[tabId]), 0);
-  };
+  }, [gate]);
   // An auto-compaction that ended the turn without carrying on (older CLIs).
   const compactNudgeRef = useRef<Record<string, boolean>>({});
   const optionsRef = useRef(options);
@@ -207,8 +211,10 @@ export function useSessionManager(options: SessionManagerOptions) {
   const personaFor = (voiceMode: boolean | undefined): string | undefined =>
     voiceMode ? (voiceEngineRef.current === "gpt-live" ? LIVE_BACKEND_PERSONA : VOICE_PERSONA) : undefined;
   // The main chat's instructions (main chat only), then the voice persona.
-  const promptFor = (tab: TabSession | undefined): string | undefined =>
-    appendedPrompt(tab?.isMain, personaFor(tab?.voiceMode));
+  const promptFor = useCallback(
+    (tab: TabSession | undefined): string | undefined => appendedPrompt(tab?.isMain, personaFor(tab?.voiceMode)),
+    []
+  );
   // The persona each tab's process was started with; a change swaps the
   // process on the next send between turns (never mid-turn — a hand-off
   // carries on after hang-up).
@@ -249,11 +255,14 @@ export function useSessionManager(options: SessionManagerOptions) {
   );
   const isPinned = (sid: string | null | undefined) => !!sid && !!remoteRef.current?.some((e) => e.id === sid && e.pinned);
 
-  // Cleanup transports on unmount
+  // Cleanup transports on unmount. The ref always holds the same record (it's
+  // only ever added to and deleted from), so this is every transport still
+  // open at unmount.
   useEffect(() => {
+    const transports = transportsRef.current;
     return () => {
-      for (const id of Object.keys(transportsRef.current)) {
-        transportsRef.current[id]?.stop();
+      for (const id of Object.keys(transports)) {
+        transports[id]?.stop();
       }
     };
   }, []);
@@ -600,7 +609,7 @@ export function useSessionManager(options: SessionManagerOptions) {
 
           // Auto-generate title after first response
           // Named once, by the view whose message started the conversation.
-          if (options.autoGenerateTitles && ownTurnRef.current[tabId]) {
+          if (optionsRef.current.autoGenerateTitles && ownTurnRef.current[tabId]) {
             const currentTab = stateRef.current.tabs.find((t) => t.id === tabId);
             if (currentTab && !currentTab.isMain && currentTab.messages.length >= 2) {
               // Same rule as the desktop: titled from the first message with
@@ -611,7 +620,7 @@ export function useSessionManager(options: SessionManagerOptions) {
                 const titleBeforeGeneration = currentTab.title;
                 debug("[hyo][title] Generating for tab", tabId);
                 generateConversationTitle({
-                  gatewayUrl: options.gatewayUrl,
+                  gatewayUrl: optionsRef.current.gatewayUrl,
                   userMessage: req.userText,
                   assistantMessage: req.assistantText,
                 }).then((generatedTitle) => {
@@ -622,7 +631,7 @@ export function useSessionManager(options: SessionManagerOptions) {
                   const tab = stateRef.current.tabs.find((t) => t.id === tabId);
                   if (!tab || tab.title !== titleBeforeGeneration) return;
                   debug("[hyo][title] Renamed:", generatedTitle);
-                  renameTab(tabId, generatedTitle);
+                  renameTabRef.current(tabId, generatedTitle);
                 }).catch((err) => {
                   console.error("[hyo][title] Error:", err);
                 });
@@ -816,7 +825,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       };
       return handle;
     },
-    [updateTabLastAssistant]
+    [updateTabLastAssistant, setJobs]
   );
 
   // ------- tab management -------
@@ -844,7 +853,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         activeTabId: id,
       };
     });
-  }, []);
+  }, [defaultMode]);
 
   const closeTab = useCallback((tabIdToClose: string) => {
     // The main chat stays: it's the one conversation that's always there.
@@ -893,7 +902,7 @@ export function useSessionManager(options: SessionManagerOptions) {
 
       return { tabs: remaining, activeTabId };
     });
-  }, []);
+  }, [defaultMode, mainSid, tellMac]);
 
   const switchTab = useCallback((id: string) => {
     setState((prev) => ({
@@ -905,6 +914,13 @@ export function useSessionManager(options: SessionManagerOptions) {
     }));
     scrollRef.current.nearBottom = true;
   }, []);
+
+  // History's list, read again after anything that changes a title or a pin.
+  const refreshPastSessions = useCallback(() => {
+    listPastSessions(options.gatewayUrl)
+      .then(setPastSessions)
+      .catch((e) => console.error("[hyo] Failed to list past sessions:", e));
+  }, [options.gatewayUrl]);
 
   const renameTab = useCallback((id: string, title: string) => {
     // The Mac's list (and so its tabs) takes the new title too.
@@ -927,7 +943,11 @@ export function useSessionManager(options: SessionManagerOptions) {
         ),
       };
     });
-  }, [options.gatewayUrl]); // refreshPastSessions intentionally omitted — declared later, referenced via closure
+  }, [options.gatewayUrl, refreshPastSessions, tellMac]);
+  // For the title namer in makeProcessEvent, which outlives the render it
+  // was made in (each tab's process keeps the handler it started with).
+  const renameTabRef = useRef(renameTab);
+  renameTabRef.current = renameTab;
 
   // Rename a conversation from the task list (open tab or not). Saves the custom
   // title via the gateway and refreshes; updates the tab title too if it's open.
@@ -942,7 +962,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         t.cliSessionId === sessionId ? { ...t, title } : t
       ),
     }));
-  }, [options.gatewayUrl]);
+  }, [options.gatewayUrl, refreshPastSessions, tellMac]);
 
   // Persist pinned / closed to the shared metadata via the gateway, then refresh
   // so the list reflects it. WebSocket messages are ordered, so the write lands
@@ -960,7 +980,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       persistTaskMeta(options.gatewayUrl, sessionId, patch);
       window.setTimeout(() => refreshPastSessions(), 0);
     },
-    [options.gatewayUrl]
+    [options.gatewayUrl, refreshPastSessions, tellMac]
   );
 
   // ------- messaging -------
@@ -1016,7 +1036,7 @@ export function useSessionManager(options: SessionManagerOptions) {
    * Registered before anything is asked for, so nothing the Mac sends for
    * the tab is missed.
    */
-  function ensureTransport(tabId: string): GatewayTransport {
+  const ensureTransport = useCallback((tabId: string): GatewayTransport => {
     const have = transportsRef.current[tabId];
     const currentTab = stateRef.current.tabs.find((t) => t.id === tabId);
     if (have) {
@@ -1073,7 +1093,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     transport.spawn();
     transportsRef.current[tabId] = transport;
     return transport;
-  }
+  }, [promptFor, makeProcessEvent, setJobs, updateTabLastAssistant]);
 
   const sendMessage = useCallback(
     (
@@ -1164,7 +1184,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       const mode = tab.permissionMode || defaultMode();
       transport.sendUserMessage(tab.isMain && !meta?.isCompaction ? withMainChatReminder(content) : content, mode !== "bypassPermissions", { qid, permissionMode: mode, ...(tab.effort ? { effort: tab.effort } : {}), ...(tab.model ? { model: tab.model } : {}) });
     },
-    [options, makeProcessEvent, updateTabLastAssistant]
+    [defaultMode, ensureTransport, mainSid, promptFor, tellMac]
   );
 
   const sendPermissionResponse = useCallback(
@@ -1287,7 +1307,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       ...prev,
       tabs: prev.tabs.map((tab) => (tab.id === prev.activeTabId ? { ...tab, effort } : tab)),
     }));
-  }, []);
+  }, [ensureTransport]);
 
   const setTabModel = useCallback((model: string) => {
     const t = stateRef.current.tabs.find((x) => x.id === stateRef.current.activeTabId);
@@ -1296,7 +1316,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       ...prev,
       tabs: prev.tabs.map((tab) => (tab.id === prev.activeTabId ? { ...tab, model } : tab)),
     }));
-  }, []);
+  }, [ensureTransport]);
 
   /**
    * A different agent, as on the desktop: a new conversation with it in
@@ -1327,7 +1347,7 @@ export function useSessionManager(options: SessionManagerOptions) {
         tab.id === prev.activeTabId ? { ...tab, permissionMode } : tab
       ),
     }));
-  }, []);
+  }, [ensureTransport]);
 
   const toggleVoiceMode = useCallback(() => {
     // The persona is a spawn-time argument; the next send swaps the process
@@ -1346,31 +1366,28 @@ export function useSessionManager(options: SessionManagerOptions) {
 
   // ------- past sessions -------
 
-  const refreshPastSessions = useCallback(() => {
-    listPastSessions(options.gatewayUrl)
-      .then(setPastSessions)
-      .catch((e) => console.error("[hyo] Failed to list past sessions:", e));
-  }, [options.gatewayUrl]);
-
   useEffect(() => {
     refreshPastSessions();
   }, [refreshPastSessions]);
 
   /** A tab for a saved conversation: open at once, its history on its way. */
-  const sessionTabFor = (pastSession: Pick<PastSession, "id" | "title" | "callOnly">, like?: TabSession): TabSession => ({
-    id: genId(),
-    cliSessionId: pastSession.id,
-    sessionPending: !!pastSession.callOnly,
-    title: pastSession.title || "Untitled",
-    messages: [],
-    generating: false,
-    model: like?.model || LOCKED_MODEL,
-    permissionMode: defaultMode(),
-    agent: optionsRef.current.agent || LOCKED_AGENT,
-    inputTokens: 0,
-    voiceMode: false,
-    loading: true,
-  });
+  const sessionTabFor = useCallback(
+    (pastSession: Pick<PastSession, "id" | "title" | "callOnly">, like?: TabSession): TabSession => ({
+      id: genId(),
+      cliSessionId: pastSession.id,
+      sessionPending: !!pastSession.callOnly,
+      title: pastSession.title || "Untitled",
+      messages: [],
+      generating: false,
+      model: like?.model || LOCKED_MODEL,
+      permissionMode: defaultMode(),
+      agent: optionsRef.current.agent || LOCKED_AGENT,
+      inputTokens: 0,
+      voiceMode: false,
+      loading: true,
+    }),
+    [defaultMode]
+  );
 
   const openPastSession = useCallback((pastSession: PastSession) => {
     const existing = stateRef.current.tabs.find(
@@ -1389,7 +1406,7 @@ export function useSessionManager(options: SessionManagerOptions) {
     // Opened on the Mac too (not the main chat, which is always there).
     if (pastSession.id !== mainSid()) tellMac.open(pastSession.id, tab.title);
     // Its history is fetched by the loader below, once the tab exists.
-  }, [options.gatewayUrl]);
+  }, [mainSid, sessionTabFor, tellMac]);
 
   /** History messages from the Mac, as chat messages. */
   const toChat = (history: { messages: HistoryMessage[] }): Message[] =>
@@ -1448,7 +1465,7 @@ export function useSessionManager(options: SessionManagerOptions) {
    * reached, or doesn't answer in time, it says so with a retry instead. It
    * always settles: the client's own timeout, and a second one here.
    */
-  function backfill(id: string, sessionId: string) {
+  const backfill = useCallback((id: string, sessionId: string) => {
     const url = optionsRef.current.gatewayUrl;
     if (!url) return;
     requestedRef.current.add(id);
@@ -1490,13 +1507,13 @@ export function useSessionManager(options: SessionManagerOptions) {
         }));
       })
       .finally(() => requestedRef.current.delete(id));
-  }
+  }, [ensureTransport]);
 
   /** Try loading a conversation's history again (after it failed). */
   const retryLoad = useCallback((tabId: string) => {
     const t = stateRef.current.tabs.find((x) => x.id === tabId);
     if (t?.cliSessionId && !requestedRef.current.has(tabId)) backfill(t.id, t.cliSessionId);
-  }, []);
+  }, [backfill]);
 
   /** Scrolled to the top: load the page of messages before the ones shown. */
   const loadOlder = useCallback((tabId: string) => {
@@ -1887,7 +1904,7 @@ export function useSessionManager(options: SessionManagerOptions) {
       });
       return true;
     },
-    [sendMessage]
+    [sendMessage, whenIdle]
   );
 
   // ------- return -------

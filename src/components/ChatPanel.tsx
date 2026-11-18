@@ -83,6 +83,10 @@ interface ChatPanelProps {
   variant?: "panel" | "popup";
 }
 
+// Slash commands that need no argument. /goal takes one, so it prefills the
+// input and waits for the user instead of firing immediately.
+const SEND_DIRECTLY = ["context", "usage", "cost"];
+
 // A short two-note chime so a permission ask is noticeable when she's not
 // looking at the screen. Synthesised (no asset to ship).
 function playPermissionChime() {
@@ -301,7 +305,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   }, [inputValues, setDraft]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [attachedFilesMap, setAttachedFilesMap] = useState<Record<string, AttachedFile[]>>({});
-  const attachedFiles = attachedFilesMap[activeTabId] ?? [];
+  const attachedFiles = useMemo(() => attachedFilesMap[activeTabId] ?? [], [attachedFilesMap, activeTabId]);
   const [attachPopupOpen, setAttachPopupOpen] = useState(false);
   const attachBtnRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -608,7 +612,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   // partly as a completed message that REPLACES the content.
   const spokenSoFarRef = useRef("");
   const speakTurnRef = useRef(-1);
-  const { enqueueSpeech, stopAudio, finishReply } = voiceMode;
+  const { enqueueSpeech, stopAudio, finishReply, isLive, recordTurn } = voiceMode;
   useEffect(() => {
     const tabChanged = prevTabIdRef.current !== activeTabId;
     const startedGenerating = !prevGeneratingRef.current && activeGenerating;
@@ -628,7 +632,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     }
     if (idx === -1) return;
 
-    if (voiceMode.isLive) {
+    if (isLive) {
       if (finishedGenerating && speakTurnRef.current !== idx) {
         speakTurnRef.current = idx;
         finishReply(activeMessages[idx].content || "", !!activeMessages[idx].selfStarted);
@@ -660,7 +664,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
       if (chunk) enqueueSpeech(chunk);
       spokenSoFarRef.current = spoken.slice(0, base + cut);
     }
-    if (finishedGenerating && spoken.trim()) voiceMode.recordTurn("agent", spoken);
+    if (finishedGenerating && spoken.trim()) recordTurn("agent", spoken);
   }, [
     activeGenerating,
     activeVoiceMode,
@@ -670,13 +674,16 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     stopAudio,
     finishReply,
     plugin.settings.voiceAutoSpeak,
-    voiceMode.isLive,
-    voiceMode.recordTurn,
+    isLive,
+    recordTurn,
   ]);
 
-  // Stop audio when switching or closing tabs
+  // Stop audio when switching or closing tabs: only that runs it, so the
+  // stopper is read through a ref rather than listed.
+  const stopAudioRef = useRef(stopAudio);
+  stopAudioRef.current = stopAudio;
   useEffect(() => {
-    voiceMode.stopAudio();
+    stopAudioRef.current();
   }, [activeTabId]);
 
   // Slash command state (checks both .claude/skills and skills/)
@@ -964,10 +971,6 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
       files.forEach(readAndAddFile);
     }
   }, [readAndAddFile]);
-
-  // Commands that need no argument. /goal takes one, so it prefills the input
-  // and waits for the user instead of firing immediately.
-  const SEND_DIRECTLY = ["context", "usage", "cost"];
 
   const selectSlashItem = useCallback(
     (item: { name: string; builtin?: boolean }) => {
