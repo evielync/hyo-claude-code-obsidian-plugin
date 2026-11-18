@@ -11,6 +11,8 @@ export default defineConfig([
     rules: {
       "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "warn",
+      // The store scanner runs the standard rule as well as Obsidian's own.
+      "@typescript-eslint/no-misused-promises": "error",
     },
   },
   {

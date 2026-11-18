@@ -1,7 +1,7 @@
 import { resolveLiveVoice } from "./voice/live-voice";
 import { aboutYouFromNote } from "./voice/voice-call";
 import { migrateVoiceSettings } from "./voice/dictation";
-import { Plugin, WorkspaceLeaf, Platform, Notice, TFile } from "obsidian";
+import { Plugin, WorkspaceLeaf, Platform, Notice, TFile, requireApiVersion } from "obsidian";
 // Node built-ins are desktop-only, so they're loaded where they're used, and
 // every use site is guarded by `!Platform.isMobile` (see platform/node.ts).
 import { nodeFs, nodeOs, nodePath } from "./platform/node";
@@ -324,7 +324,7 @@ export default class HyoPlugin extends Plugin {
   // window.localStorage fallback for older versions.
   private readLocal(key: string): unknown {
     try {
-      if (typeof this.app.loadLocalStorage === "function") {
+      if (requireApiVersion("1.8.7")) {
         const stored: unknown = this.app.loadLocalStorage(key);
         return stored;
       }
@@ -338,7 +338,7 @@ export default class HyoPlugin extends Plugin {
 
   private writeLocal(key: string, value: unknown) {
     try {
-      if (typeof this.app.saveLocalStorage === "function") this.app.saveLocalStorage(key, value);
+      if (requireApiVersion("1.8.7")) this.app.saveLocalStorage(key, value);
       else window.localStorage.setItem(`${this.localKeyPrefix()}-${key}`, JSON.stringify(value));
     } catch (e) {
       console.error("[hyo] Couldn't save a device setting:", e);

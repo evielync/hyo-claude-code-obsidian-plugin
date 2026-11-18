@@ -250,7 +250,7 @@ export class HyoSettingTab extends PluginSettingTab {
     this.fallback = new FallbackRenderer({
       change: (row, value) => this.applyControl(row, value),
       saved: (setting) => this.showSavedNear(setting.nameEl),
-      redraw: () => this.display(),
+      redraw: () => this.drawFallback(),
     });
   }
 
@@ -269,7 +269,13 @@ export class HyoSettingTab extends PluginSettingTab {
   }
 
   /** Obsidian 1.7.2 to 1.12. From 1.13 the definitions above are drawn instead. */
+  /** Obsidian before 1.13 calls this to draw the tab; 1.13+ uses getSettingDefinitions. */
   display(): void {
+    this.drawFallback();
+  }
+
+  /** The tab as drawn for Obsidian before 1.13 (the tab bar and its pages). */
+  private drawFallback(): void {
     this.fallback.render(this.containerEl, this.buildLayout());
   }
 
@@ -306,13 +312,13 @@ export class HyoSettingTab extends PluginSettingTab {
   /** The rows themselves changed (one added or removed): draw them again. */
   private rebuild(): void {
     if (requireApiVersion("1.13.0")) this.update();
-    else this.display();
+    else this.drawFallback();
   }
 
   /** A value other rows' visibility depends on changed. */
   private refreshVisibility(): void {
     if (requireApiVersion("1.13.0")) this.refreshDomState();
-    else this.display();
+    else this.drawFallback();
   }
 
   private showSavedNear(nameEl: HTMLElement): void {
@@ -853,7 +859,7 @@ export class HyoSettingTab extends PluginSettingTab {
               kind: "custom",
               name: "Install Claude Code",
               desc: "Not installed yet? Hyo installs it for you in the background.",
-              build: (setting) =>
+              build: (setting) => {
                 setting.addButton((b) =>
                   b.setButtonText("Install Claude").onClick(async () => {
                     b.setDisabled(true);
@@ -873,13 +879,14 @@ export class HyoSettingTab extends PluginSettingTab {
                     }
                     this.rebuild();
                   })
-                ),
+                );
+              },
             },
             {
               kind: "custom",
               name: "Sign in to Claude",
               desc: "Opens your browser to approve. No terminal, nothing to copy.",
-              build: (setting) =>
+              build: (setting) => {
                 setting.addButton((b) =>
                   b.setButtonText("Sign in to Claude").onClick(async () => {
                     const p = settings().cliPath;
@@ -895,7 +902,8 @@ export class HyoSettingTab extends PluginSettingTab {
                     new Notice(r.ok ? "✓ Signed in." : `Sign-in didn't finish: ${r.error}`);
                     this.rebuild();
                   })
-                ),
+                );
+              },
             },
             {
               kind: "custom",
@@ -990,7 +998,9 @@ export class HyoSettingTab extends PluginSettingTab {
               kind: "custom",
               name: "How commands work",
               desc: "A short guide to note commands.",
-              build: (setting) => setting.addButton((b) => b.setButtonText("Open the guide").onClick(() => openUrl(COMMANDS_GUIDE_URL))),
+              build: (setting) => {
+                setting.addButton((b) => b.setButtonText("Open the guide").onClick(() => openUrl(COMMANDS_GUIDE_URL)));
+              },
             },
             {
               kind: "custom",
@@ -1068,7 +1078,9 @@ export class HyoSettingTab extends PluginSettingTab {
         name: "No commands yet",
         desc: "Add one with the button above.",
         searchable: false,
-        build: (setting) => setting.settingEl.addClass("hyo-commands-empty"),
+        build: (setting) => {
+          setting.settingEl.addClass("hyo-commands-empty");
+        },
       });
     } else {
       // Column headers, sized exactly like the row controls below so the

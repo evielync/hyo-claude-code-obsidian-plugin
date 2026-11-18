@@ -3,7 +3,7 @@ import { isSelfStartedPrompt, isInjectedContext, steerAsUserEntry } from "./repl
 import { transcriptModel, resumeModel } from "./models";
 import { isTrivialOpener, historyFallbackTitle } from "./conversation-title";
 import { mergeStoredCalls, upsertCall, callOnlySessions, type VoiceCallRecord } from "./voice/voice-call";
-import type * as fsTypes from "fs"; // type-only (erased at build) for annotations
+import type { FsStats } from "./platform/node";
 // Node built-ins are desktop-only: each function loads what it uses, so this
 // module also loads on mobile (where only the pure parsing is used).
 import { nodeFs, nodeOs, nodePath } from "./platform/node";
@@ -323,7 +323,7 @@ export function listPastSessions(cwd: string): PastSession[] {
   const path = nodePath();
   const candidates = getCandidateProjectDirs(cwd);
   const seenIds = new Set<string>();
-  const allEntries: { name: string; fullPath: string; stat: fsTypes.Stats }[] = [];
+  const allEntries: { name: string; fullPath: string; stat: FsStats }[] = [];
 
   debug("[hyo] Looking for past sessions. CWD:", cwd);
 

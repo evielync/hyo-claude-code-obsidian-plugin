@@ -1,5 +1,5 @@
 import { debug } from "./debug";
-import type { ChildProcess } from "child_process";
+import type { ChildProcess } from "./platform/node";
 // Desktop-only transport (GatewayTransport is used on mobile; this class isn't
 // instantiated there). Node modules load through the desktop loader when a
 // process is spawned, so importing this module is mobile-safe.

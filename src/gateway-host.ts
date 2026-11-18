@@ -73,8 +73,7 @@ import {
   type GatewaySessionContext,
 } from "./session-owner";
 import { openConversations, gatewayOpenList, gatewayOpenListGone, gatewayOpenListReset, gatewayOpenListRefresh, type OpenEntry } from "./open-conversations";
-import type * as FsType from "fs";
-import type { ChildProcess } from "child_process";
+import type { ChildProcess, FsDirent, FsStats } from "./platform/node";
 import type { WebSocket as WsSocket, WebSocketServer as WsServer } from "ws";
 
 // Node built-ins (and `ws`) are desktop-only. They're loaded where they're
@@ -322,7 +321,7 @@ function listSessions(cwd: string): SessionRow[] {
   for (const f of fs.readdirSync(dir)) {
     if (!f.endsWith(".jsonl")) continue;
     const full = path.join(dir, f);
-    let st: FsType.Stats;
+    let st: FsStats;
     try {
       st = fs.statSync(full);
     } catch {
@@ -617,7 +616,7 @@ function listSkillsFromDir(dir: string, seen: Map<string, NamedItem>): void {
   const fs = nodeFs();
   const path = nodePath();
   if (!fs.existsSync(dir)) return;
-  let entries: FsType.Dirent[];
+  let entries: FsDirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {

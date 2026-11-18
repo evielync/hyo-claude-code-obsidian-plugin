@@ -11,13 +11,20 @@
  * `import type`, which TypeScript erases, so nothing here loads on mobile.
  */
 import { Platform } from "obsidian";
-import type * as NodeChildProcess from "child_process";
-import type * as NodeCrypto from "crypto";
-import type * as NodeFs from "fs";
-import type * as NodeNet from "net";
-import type * as NodeOs from "os";
-import type * as NodePath from "path";
-import type * as NodeUtil from "util";
+
+// Types only: `typeof import()` is erased at build, so declaring them here
+// loads nothing. Other modules take Node types from this file too, so no file
+// but this one names a Node module.
+type NodeChildProcess = typeof import("child_process");
+type NodeCrypto = typeof import("crypto");
+type NodeFs = typeof import("fs");
+type NodeNet = typeof import("net");
+type NodeOs = typeof import("os");
+type NodePath = typeof import("path");
+type NodeUtil = typeof import("util");
+export type ChildProcess = import("child_process").ChildProcess;
+export type FsStats = import("fs").Stats;
+export type FsDirent = import("fs").Dirent;
 
 declare global {
   interface Window {
@@ -37,39 +44,39 @@ export function hasNode(): boolean {
   return Platform.isDesktop && typeof window.require === "function";
 }
 
-export function nodeFs(): typeof NodeFs {
+export function nodeFs(): NodeFs {
   if (!Platform.isDesktop) throw new DesktopOnlyError("fs");
-  return window.require?.("fs") as typeof NodeFs;
+  return window.require?.("fs") as NodeFs;
 }
 
-export function nodePath(): typeof NodePath {
+export function nodePath(): NodePath {
   if (!Platform.isDesktop) throw new DesktopOnlyError("path");
-  return window.require?.("path") as typeof NodePath;
+  return window.require?.("path") as NodePath;
 }
 
-export function nodeOs(): typeof NodeOs {
+export function nodeOs(): NodeOs {
   if (!Platform.isDesktop) throw new DesktopOnlyError("os");
-  return window.require?.("os") as typeof NodeOs;
+  return window.require?.("os") as NodeOs;
 }
 
-export function nodeChildProcess(): typeof NodeChildProcess {
+export function nodeChildProcess(): NodeChildProcess {
   if (!Platform.isDesktop) throw new DesktopOnlyError("child_process");
-  return window.require?.("child_process") as typeof NodeChildProcess;
+  return window.require?.("child_process") as NodeChildProcess;
 }
 
-export function nodeCrypto(): typeof NodeCrypto {
+export function nodeCrypto(): NodeCrypto {
   if (!Platform.isDesktop) throw new DesktopOnlyError("crypto");
-  return window.require?.("crypto") as typeof NodeCrypto;
+  return window.require?.("crypto") as NodeCrypto;
 }
 
-export function nodeNet(): typeof NodeNet {
+export function nodeNet(): NodeNet {
   if (!Platform.isDesktop) throw new DesktopOnlyError("net");
-  return window.require?.("net") as typeof NodeNet;
+  return window.require?.("net") as NodeNet;
 }
 
-export function nodeUtil(): typeof NodeUtil {
+export function nodeUtil(): NodeUtil {
   if (!Platform.isDesktop) throw new DesktopOnlyError("util");
-  return window.require?.("util") as typeof NodeUtil;
+  return window.require?.("util") as NodeUtil;
 }
 
 /** The parts of Electron Hyo uses. Electron's own types aren't a dependency. */
