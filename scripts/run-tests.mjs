@@ -8,6 +8,19 @@ import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
 const dir = "test";
+
+// src/platform/node.ts loads Node modules through Electron's window.require,
+// which plain Node doesn't have; tests get a stand-in that uses require().
+const desktopLoaderStub = {
+  name: "desktop-loader-stub",
+  setup(build) {
+    build.onResolve({ filter: /(^|\/)platform\/node$/ }, (args) =>
+      args.importer.includes(`${join("test", "stubs")}`)
+        ? undefined
+        : { path: join(process.cwd(), "test", "stubs", "node.ts") },
+    );
+  },
+};
 const files = readdirSync(dir).filter((f) => f.endsWith(".test.ts") || f.endsWith(".test.tsx"));
 const out = mkdtempSync(join(tmpdir(), "hyo-tests-"));
 const built = [];
@@ -20,6 +33,7 @@ for (const f of files) {
     format: "cjs",
     outfile,
     logLevel: "error",
+    plugins: [desktopLoaderStub],
     // Obsidian isn't available outside the app; a small stub stands in.
     // Tests that drive the real session-manager hooks (*.hooks.test.ts) get
     // a tiny React that runs a hook without a DOM.
