@@ -6,7 +6,6 @@ import { newStreamState, processContentBlocks, buildSnapshot, endTurn, startsTur
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { GatewayTransport } from "../gateway-transport";
 import { MAIN_CHAT_WIRE_ID, unexpectedExitNotice } from "../../session-owner";
-import { VOICE_PERSONA } from "../voice/voice-persona";
 import type { Message, ToolCallData } from "./useChatEngine";
 import { allowedPrompts, askedQuestions, blocksOf, eventSubtype, eventType, inputText, isSessionEvent, type UserContent } from "../../types/session-events";
 import { errorMessage, isObject } from "../../types/json";
@@ -202,14 +201,8 @@ export function useSessionManager(options: SessionManagerOptions) {
   const turnEnded = (tabId: string) => {
     turnRunningRef.current[tabId] = false;
   };
-  // The voice engine the desktop is set to (ChatPanel learns it from the
-  // gateway). GPT-Live tabs get the backend persona, ElevenLabs the spoken one.
-  const voiceEngineRef = useRef<string>("elevenlabs");
-  const setVoiceEngine = useCallback((engine: string) => {
-    voiceEngineRef.current = engine;
-  }, []);
   const personaFor = (voiceMode: boolean | undefined): string | undefined =>
-    voiceMode ? (voiceEngineRef.current === "gpt-live" ? LIVE_BACKEND_PERSONA : VOICE_PERSONA) : undefined;
+    voiceMode ? LIVE_BACKEND_PERSONA : undefined;
   // The main chat's instructions (main chat only), then the voice persona.
   const promptFor = useCallback(
     (tab: TabSession | undefined): string | undefined => appendedPrompt(tab?.isMain, personaFor(tab?.voiceMode)),
@@ -1979,7 +1972,6 @@ export function useSessionManager(options: SessionManagerOptions) {
     activeIsMain: !!activeTab?.isMain,
     tabJobs,
     addVoiceCall,
-    setVoiceEngine,
     tabs: state.tabs,
     activeTabId: state.activeTabId,
     activeMessages: activeTab?.messages || [],

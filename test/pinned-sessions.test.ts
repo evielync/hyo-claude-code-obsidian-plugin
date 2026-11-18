@@ -84,7 +84,7 @@ test("phone: the gateway's list carries a pinned conversation older than the new
     cliPath: "claude",
     defaultAgent: "",
     defaultModel: "claude-opus-5-5",
-    getLiveVoice: () => ({ engine: "elevenlabs", openAiApiKey: "", voice: "marin", personality: "" }),
+    getLiveVoice: () => ({ openAiApiKey: "", voice: "marin", personality: "" }),
     onConnectUrl: () => {},
     onStatus: () => {},
     updateClaude: async () => ({ ok: false }),

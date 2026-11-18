@@ -85,9 +85,8 @@ Hyo connects to these services and nothing else:
 
 - **Anthropic (Claude).** The Claude Code CLI connects to Anthropic with your existing Claude login. Your messages, and any vault content you choose to share, go to Anthropic under your own account, subject to [Anthropic's terms](https://www.anthropic.com/legal). Hyo reads your usage from Anthropic's API (`api.anthropic.com`) for the usage meter, refreshing the CLI's sign-in token (`claude.ai`) when it has expired.
 - **Claude Code installer (`claude.ai`).** Only when you click Install, to download the official CLI installer.
-- **OpenAI (optional voice).** Off by default. If you choose GPT-Live voice or OpenAI dictation, your microphone audio and the conversation are sent to OpenAI with an API key you provide.
-- **ElevenLabs (optional voice).** Off by default. If you turn it on, your microphone audio and message text are sent to ElevenLabs for speech-to-text and text-to-speech, using an API key you provide.
-- **GitHub.** The first time you use voice mode, Hyo downloads its speech-detection models and the runtime that runs them (about 50 MB) from this plugin's own GitHub releases, and keeps them in the plugin folder.
+- **OpenAI (optional voice calls and dictation).** Off by default. A voice call runs on OpenAI's GPT-Live: while it's on, your microphone audio and the conversation are sent to OpenAI, using an API key you provide. If you choose OpenAI for dictation, your dictated audio goes to OpenAI to be turned into text.
+- **ElevenLabs (optional dictation).** Off by default. If you choose ElevenLabs for dictation, your dictated audio is sent to ElevenLabs to be turned into text, using an API key you provide. Nothing else goes to ElevenLabs.
 - **Your own computer (optional mobile access).** The phone connects to your computer through your private Tailscale network. Nothing goes through a Hyo server, because there isn't one.
 - **No telemetry.** Hyo collects no analytics and sends nothing anywhere else.
 

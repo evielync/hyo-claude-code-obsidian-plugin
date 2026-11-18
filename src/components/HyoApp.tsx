@@ -184,7 +184,6 @@ export function HyoApp({ app, plugin, isShown }: HyoAppProps) {
     maxOutputTokens: plugin.settings.maxOutputTokens,
     autoGenerateTitles: plugin.settings.autoGenerateTitles,
     settingsVersion,
-    voiceEngine: plugin.settings.voiceEngine,
     mainChat: mainChatOn(plugin.settings),
     mainChatSessionId: plugin.settings.mainChatSessionId || "",
     onMainChatSession: onMainChatSession,

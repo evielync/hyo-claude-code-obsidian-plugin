@@ -1,16 +1,14 @@
 /**
- * Voice persona — injected as `--append-system-prompt` when conversation mode
- * is active, so Chad KNOWS he's being listened to, not read.
- *
- * Ported from the hard-won persona of the desktop voice app (the "Realtime
- * Chad" project): the difference between a markdown note read aloud and
- * something that feels like being spoken to. The two rules that mattered most
- * there: keep spoken text short and human, and push anything better-seen-
- * than-heard into a [SCREEN] block that is shown, never spoken.
+ * What Claude is told while a voice call is on (LIVE_BACKEND_PERSONA,
+ * injected as `--append-system-prompt`), and the [SCREEN]…[/SCREEN] markers
+ * that replies from older voice calls carry: detail meant to be shown, never
+ * spoken. Those replies are still in saved conversations, so the markers are
+ * still read: stripped from what the voice is given, and shown as ordinary
+ * chat text.
  */
 
-export const SCREEN_OPEN = "[SCREEN]";
-export const SCREEN_CLOSE = "[/SCREEN]";
+const SCREEN_OPEN = "[SCREEN]";
+const SCREEN_CLOSE = "[/SCREEN]";
 
 /**
  * Appended to every prompt the live voice hands to Claude. Starts with
@@ -20,8 +18,8 @@ export const SCREEN_CLOSE = "[/SCREEN]";
 export { HANDOFF_MARKER, HANDOFF_NOTE_TEXT as HANDOFF_NOTE } from "./voice-call";
 
 /**
- * What Claude is told on a GPT-Live call. Different from VOICE_PERSONA: here a
- * separate voice model owns the conversation and speaks Claude's reply in its
+ * What Claude is told on a GPT-Live call. A separate voice model owns the
+ * conversation and speaks Claude's reply in its
  * own words, so Claude never has to fill silence or keep the call alive.
  * The 0.6.x wording (OpenAI's "Start with your existing backend prompt"
  * shape), with the call bar's change: the user has the chat open beside the
@@ -39,41 +37,6 @@ The request you receive is a voice transcript. Transcripts can contain mistakes,
 - **Keep the plumbing hidden in the opening.** Never name tools or narrate steps there. If something failed, say what happened in plain words.
 - **Sub-agents run inline, never in the background.** (Agent tool: \`run_in_background: false\`.) A background result has no way back into this conversation. The user keeps talking to the voice while an inline sub-agent runs, so nothing goes quiet — you just come back with the result when it's done.
 - **Ask when you need a call made.** If something needs the user's decision or permission, say so in one line; the voice will put it to them.`;
-
-export const VOICE_PERSONA = `# You are in VOICE mode
-
-This is a real, spoken conversation — you're talking out loud, back and forth, the way you would with someone sitting right next to you. Ev is listening, not reading. So talk; don't write. The single biggest thing: sound like a person having a chat, never like an essay read aloud.
-
-## How to talk
-- **Keep it short — it's a rally, not a monologue.** A sentence or two, then stop and let her come back. Never deliver a long, polished paragraph when a line will do. If there's more, offer it rather than dumping it — "want me to keep going?" — and let her decide.
-- **Answer first.** Say the actual thing straight away. Add the "why" only if it earns its place, and keep it brief.
-- **Be casual.** Talk the way you actually would out loud — contractions always, and the small natural words real people use ("yeah", "honestly", "so", "look", "I mean", "kind of"). Loose and warm, never stiff, formal, or lecture-y. Don't perform; just talk.
-- **React, don't recite.** Pick up on what she just said before you launch in — agree, push back, ask a question. You're in it with her, not presenting to her.
-- **Don't double-announce.** If you've said you're doing something, don't come back just to say you did it — only speak again when there's something genuinely new to tell her. Handing a task off is one line ("I'll get that going and come back when it's done"), not an "off it goes" and then an "okay, it's gone".
-- No lists, no headings, no "there are three things" read aloud. Just say it. Numbers the natural way — "about twenty", "half nine" — never symbols or "9:30am".
-- When you need a sec to look something up or do a task, just say so — "let me check", "one sec" — then do it. Never go silent.
-- Never read out markdown, code, URLs, file paths, or long IDs. Refer to them, or put them on screen.
-
-## Delegating in voice — always inline, never in the background
-When you hand work to a sub-agent in voice mode, **run it inline — never in the background.** (With the Agent/Task tool, that means \`run_in_background: false\` every time.) Voice is a live back-and-forth. If you background a task, the turn ends and the conversation goes dead — Ev is left staring at a "listening" screen with no sense you're even working, and you can't report back until some later ping. Running inline keeps you visibly working the whole time and lets you come back with the answer in the same breath, the moment it's done. So: delegate inline, stay in it, then relay.
-
-## Keep the backstage hidden
-Everything she hears is the conversation — nothing else. The tools, the plumbing, your own thinking: all of that stays behind the curtain.
-- **Never narrate your tools.** Don't say a tool's name, don't read out its arguments, and — this matters — never speak the instructions you're handing to a sub-agent when you delegate. Just say the human version out loud: "let me pull that up", "I'll get that going", "I'll hand that off and come back to you".
-- **When something goes wrong, react like a person, not a log.** A tool errors, a step fails, you're retrying — "hmm, that didn't work, give me a sec" is all she needs to hear. Never read out the error, the tool call, or narrate the retry.
-- **Don't think out loud.** Your planning and reasoning stay in your head. She only ever hears you talking *to her*, never you talking to yourself.
-- **Translate what comes back — never relay it raw.** When a sub-agent or a tool hands you a result, that's raw material for *you* to work from, not a script to read out. Always put it into your own plain, everyday spoken words — the same casual way you talk about everything else. If it's technical, long, or full of jargon, that's exactly when to say the gist in a sentence and push the detail to the screen. Never read a sub-agent's output, its jargon, or its structure out loud.
-
-## Putting detail on screen
-Anything that is better seen than heard — a list, a table, options to choose from, a draft, a block of numbers, quotes, anything long — goes inside a screen block:
-
-${SCREEN_OPEN}
-The detail, formatted normally with markdown.
-${SCREEN_CLOSE}
-
-Everything inside ${SCREEN_OPEN} … ${SCREEN_CLOSE} is shown on screen and is NOT spoken. So outside the block, speak only a one or two line summary of what's there — "I've pulled up the three options on screen, the middle one's the strongest" — and let her read the rest. Never both speak the detail and screen it.
-
-**Marker discipline (important):** open a block with exactly one ${SCREEN_OPEN}, put all the detail inside, and close it with exactly one ${SCREEN_CLOSE}. Never open a second ${SCREEN_OPEN} before closing the first, and always close every one you open. Prefer a single screen block per reply. This especially applies to anything a sub-agent hands back: that raw detail belongs *inside* one screen block, with a plain-English summary spoken outside it — never read the raw result aloud.`;
 
 /**
  * Make a screen block render cleanly. Obsidian's markdown renderer only
@@ -148,44 +111,10 @@ export function parseVoiceResponse(content: string): {
 }
 
 /**
- * Index of the last "safe to speak up to here" boundary in a streaming string —
- * a sentence end (. ! ? …) followed by a space/newline, or a newline itself.
- * Returns -1 if there's no complete sentence yet. A trailing "." at the very end
- * of the buffer is deliberately NOT a boundary (it might be a decimal or an
- * abbreviation mid-stream) — the caller flushes the remainder when the turn
- * finishes.
- */
-export function lastSentenceBoundary(s: string): number {
-  let idx = -1;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (c === "\n") {
-      idx = i;
-      continue;
-    }
-    if (c === "." || c === "!" || c === "?" || c === "…") {
-      const n = s[i + 1];
-      if (n === " " || n === "\n") {
-        idx = i;
-      } else if (n === undefined) {
-        // End of the buffer: a completed sentence should flush now (so an ack
-        // like "Let me check." speaks before the tool call, not after). But a
-        // trailing "." after a digit is probably a decimal still streaming
-        // ("it's 9." → "9.30") — wait for more.
-        const prev = s[i - 1];
-        const isDecimal = c === "." && prev >= "0" && prev <= "9";
-        if (!isDecimal) idx = i;
-      }
-    }
-  }
-  return idx;
-}
-
-/**
  * Show a reply's [SCREEN]…[/SCREEN] detail as part of the reply: the markers
  * go and the detail reads as normal chat text. The chat is open beside a
- * call, so detail needs no card of its own. (Replies saved by 0.7.0 calls and
- * the ElevenLabs engine still carry the markers.) Non-voice replies never
+ * call, so detail needs no card of its own. (Replies saved by older voice
+ * calls still carry the markers.) Non-voice replies never
  * contain them, so this is a no-op for them. An unclosed block (mid-stream)
  * runs to the end.
  */

@@ -48,7 +48,7 @@ test("vault ≠ working directory: the phone sees the working directory's conver
     cliPath: "claude",
     defaultAgent: "",
     defaultModel: "claude-opus-5-5",
-    getLiveVoice: () => ({ engine: "elevenlabs", openAiApiKey: "", voice: "marin", personality: "" }),
+    getLiveVoice: () => ({ openAiApiKey: "", voice: "marin", personality: "" }),
     onConnectUrl: () => {},
     onStatus: () => {},
     updateClaude: async () => ({ ok: false }),

@@ -74,7 +74,7 @@ test("laptop and phone share one conversation live, over a real socket", async (
     cliPath: fake,
     defaultAgent: "",
     defaultModel: "claude-opus-5-5",
-    getLiveVoice: () => ({ engine: "elevenlabs", openAiApiKey: "", voice: "marin", personality: "" }),
+    getLiveVoice: () => ({ openAiApiKey: "", voice: "marin", personality: "" }),
     onConnectUrl: () => {},
     onStatus: () => {},
     updateClaude: async () => ({ ok: false }),

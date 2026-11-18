@@ -2,9 +2,9 @@ import { requestUrl } from "obsidian";
 import { STT_TIMEOUT_ERROR, STT_TIMEOUT_MS, transcriptText } from "./elevenlabs-api";
 
 /**
- * Transcribe a dictation with OpenAI (`/v1/audio/transcriptions`). Used when
- * the voice engine is GPT-Live, so one OpenAI key covers both the live call
- * and dictation on the phone.
+ * Transcribe a dictation with OpenAI (`/v1/audio/transcriptions`), when
+ * Settings → Voice → Dictation is OpenAI: the key that runs calls covers
+ * dictation too.
  *
  * `gpt-transcribe` writes down every word as spoken. Tested against Ev's own
  * recorded voice on 10 Nov 2026, three runs per clip:

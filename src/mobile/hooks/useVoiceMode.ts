@@ -1,34 +1,21 @@
 import { Notice } from "obsidian";
 import { debug } from "../debug";
 import { useState, useCallback, useRef, useEffect } from "react";
-import {
-  textToSpeech,
-  speechToText,
-  STT_TIMEOUT_ERROR,
-  sttTimeoutFor,
-} from "../voice/elevenlabs-api";
+import { speechToText, STT_TIMEOUT_ERROR, sttTimeoutFor } from "../voice/elevenlabs-api";
 import type { RecordingStore, RecordingMeta, SegmentMeta } from "../voice/recording-store";
 import { openAiSpeechToText } from "../voice/openai-stt";
 import type { GptLiveHistoryItem } from "../../voice/gpt-live";
 import { playChime, CONNECT_CHIME, HANGUP_CHIME } from "../../voice/chimes";
 import { LiveCall } from "../../voice/live-call";
 import type { VoiceCallRecord, CallEndReason } from "../../voice/voice-call";
+import type { DictationProvider } from "../../voice/dictation";
 
-export type VoiceState = "idle" | "listening" | "thinking" | "speaking" | "error";
-
-const VOICE_SPEEDS = [1.0, 1.25, 1.5, 2.0];
+/** The dictation mic's state. A live call shows in the call bar instead. */
+export type VoiceState = "idle" | "listening" | "thinking" | "error";
 
 interface UseVoiceModeOptions {
-  apiKey: string;
-  /**
-   * Who transcribes a dictation. Follows the voice engine, so one key covers
-   * everything: OpenAI when the engine is GPT-Live, ElevenLabs otherwise.
-   */
-  stt: { provider: "elevenlabs" | "openai"; apiKey: string };
-  voiceId: string;
-  playbackSpeed: number;
-  isVoiceMode: boolean;
-  autoSpeak: boolean;
+  /** Who transcribes a dictation (Settings → Voice → Dictation), and that service's key. */
+  stt: { provider: DictationProvider; apiKey: string };
   onTranscript: (text: string) => void;
   /** Where dictations are kept on disk until their transcript has landed. */
   store?: RecordingStore | null;
@@ -37,8 +24,7 @@ interface UseVoiceModeOptions {
    * the session (its key, voice, personality, the tab's agent), so the phone
    * only supplies the offer, the tab's agent name and the conversation so far.
    */
-  live?: {
-    enabled: boolean;
+  live: {
     exchangeSdp: (offerSdp: string, agent: string, history: GptLiveHistoryItem[]) => Promise<{ sdp: string }>;
     /** The tab's agent, the conversation so far, and where the call's line goes. */
     getContext: () => { agent: string; history: GptLiveHistoryItem[]; after: number };
@@ -51,20 +37,9 @@ interface UseVoiceModeOptions {
   };
 }
 
-export function useVoiceMode({
-  apiKey,
-  stt,
-  voiceId,
-  playbackSpeed,
-  isVoiceMode,
-  autoSpeak: autoSpeakEnabled,
-  onTranscript,
-  store,
-  live,
-}: UseVoiceModeOptions) {
+export function useVoiceMode({ stt, onTranscript, store, live }: UseVoiceModeOptions) {
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   // ---- GPT-Live call (full duplex) ----
-  const isLive = !!live?.enabled;
   // Session, record and hand-offs live in LiveCall — the same code as desktop.
   const liveRef = useRef<LiveCall | null>(null);
   const [liveSide, setLiveSide] = useState<"user" | "agent" | null>(null);
@@ -79,7 +54,6 @@ export function useVoiceMode({
     call?.hangUp();
     liveMutedRef.current = false;
     setLiveMuted(false);
-    setVoiceState("idle");
     setLiveSide(null);
     setLiveLevel(0);
     setLiveStatus("off");
@@ -87,7 +61,7 @@ export function useVoiceMode({
 
   const startLive = useCallback(async () => {
     const opts = liveOptsRef.current;
-    if (!opts?.enabled || liveRef.current) return;
+    if (liveRef.current) return;
     const { agent, history, after } = opts.getContext();
     const call: LiveCall = new LiveCall({
       transports: ["webrtc"],
@@ -99,8 +73,8 @@ export function useVoiceMode({
         history,
         exchangeSdp: (offerSdp) => opts.exchangeSdp(offerSdp, agent, history),
       },
-      onHandoff: (prompt, said) => liveOptsRef.current?.onHandoff(prompt, said),
-      onTurn: (side, text) => liveOptsRef.current?.onVoiceTurn?.(side, text),
+      onHandoff: (prompt, said) => liveOptsRef.current.onHandoff(prompt, said),
+      onTurn: (side, text) => liveOptsRef.current.onVoiceTurn?.(side, text),
       onUi: (ui) => {
         setLiveStatus(ui.status);
         setLiveSide(ui.side);
@@ -112,7 +86,7 @@ export function useVoiceMode({
       onEnded: (record, reason) => {
         if (reason === "hung-up") playChime(HANGUP_CHIME);
         if (liveRef.current === call) liveRef.current = null;
-        liveOptsRef.current?.onCallEnded(record, reason);
+        liveOptsRef.current.onCallEnded(record, reason);
       },
       onError: (msg) => {
         console.error("[hyo-voice] GPT-Live:", msg);
@@ -126,10 +100,6 @@ export function useVoiceMode({
   /** Claude finished a reply: the answer to the open hand-off, or something typed in the chat. */
   const finishReply = useCallback((markdown: string, selfStarted?: boolean) => {
     liveRef.current?.finishReply(markdown, selfStarted);
-  }, []);
-
-  const noteSilently = useCallback((text: string) => {
-    liveRef.current?.note(text);
   }, []);
 
   /** A permission ask was answered on screen: the voice knows without her saying so. */
@@ -166,12 +136,6 @@ export function useVoiceMode({
   const liveMutedRef = useRef(false);
   const [liveMuted, setLiveMuted] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>("");
-  const [isPaused, setIsPaused] = useState(false);
-  const [hasLastAudio, setHasLastAudio] = useState(false);
-  const [currentSpeed, setCurrentSpeed] = useState(playbackSpeed);
-
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const lastAudioUrlRef = useRef<string | null>(null);
 
   // Live waveform off the mic input — a trust signal so you can see it's
   // actually hearing you while recording. Non-critical: guarded everywhere,
@@ -208,15 +172,13 @@ export function useVoiceMode({
   // Always-latest refs. The recording chain (`startRecording` → `onstop` →
   // `processRecording`) is created once at mount with stable `[]` deps so the
   // MediaRecorder callbacks never go stale. But that means it would otherwise
-  // capture the FIRST render's `onTranscript` and `apiKey` — and `onTranscript`
+  // capture the FIRST render's `onTranscript` and `stt` — and `onTranscript`
   // closes over `activeTabId`, so every transcript would be delivered to
   // whatever conversation was open when the panel first loaded, not the one
   // the user is actually recording in. Reading these through refs keeps the
   // chain stable AND always current.
   const onTranscriptRef = useRef(onTranscript);
   onTranscriptRef.current = onTranscript;
-  const apiKeyRef = useRef(apiKey);
-  apiKeyRef.current = apiKey;
   const sttRef = useRef(stt);
   sttRef.current = stt;
 
@@ -623,24 +585,9 @@ export function useVoiceMode({
     if (store) void offerLeftover();
   }, [store, offerLeftover]);
 
-  // Stops whatever is playing (the record button does this while speaking).
-  const stopAudio = useCallback(() => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-      audioRef.current = null;
-    }
-    setVoiceState("idle");
-    setIsPaused(false);
-  }, []);
-
   // --- Record button handler ---
 
   const handleRecordClick = useCallback(() => {
-    if (voiceState === "speaking") {
-      stopAudio();
-      return;
-    }
     if (voiceState === "error") {
       // Retry the SAME recording — every piece is still held (in memory and on
       // disk), and only the ones without text get sent again.
@@ -661,7 +608,7 @@ export function useVoiceMode({
       // startRecording reports its own failures (a Notice), so nothing to wait for here.
       void startRecording();
     }
-  }, [voiceState, stopAudio, stopRecording, startRecording, pump]);
+  }, [voiceState, stopRecording, startRecording, pump]);
 
   // Discard a failed recording and return to a clean idle state — the escape
   // hatch when the user wants to start a fresh note instead of retrying.
@@ -675,123 +622,21 @@ export function useVoiceMode({
     void offerLeftover();
   }, [resetRecording, offerLeftover]);
 
-  // --- TTS Playback ---
-
-  const speakResponse = useCallback(
-    async (text: string) => {
-      if (!text || !apiKey || !voiceId) return;
-      setVoiceState("speaking");
-
-      try {
-        const audioBuffer = await textToSpeech(apiKey, voiceId, text);
-
-        // Create playable URL from the audio data
-        const blob = new Blob([audioBuffer], { type: "audio/mpeg" });
-        if (lastAudioUrlRef.current) URL.revokeObjectURL(lastAudioUrlRef.current);
-        lastAudioUrlRef.current = URL.createObjectURL(blob);
-        setHasLastAudio(true);
-
-        const audio = new Audio(lastAudioUrlRef.current);
-        audio.playbackRate = currentSpeed;
-        audioRef.current = audio;
-
-        audio.onended = () => {
-          setVoiceState("idle");
-          setIsPaused(false);
-        };
-
-        await audio.play();
-      } catch (err) {
-        console.error("[hyo-voice] TTS error:", err);
-        setVoiceState("idle");
-      }
-    },
-    [apiKey, voiceId, currentSpeed]
-  );
-
-  // --- Audio controls ---
-
-  const togglePause = useCallback(() => {
-    if (!audioRef.current) return;
-    if (audioRef.current.paused) {
-      audioRef.current.play().catch((err) => {
-        console.error("[hyo-voice] couldn't resume playback:", err);
-        setIsPaused(true);
-      });
-      setIsPaused(false);
-    } else {
-      audioRef.current.pause();
-      setIsPaused(true);
-    }
-  }, []);
-
-  const replay = useCallback(() => {
-    if (!lastAudioUrlRef.current) return;
-    if (audioRef.current) {
-      audioRef.current.pause();
-    }
-    const audio = new Audio(lastAudioUrlRef.current);
-    audio.playbackRate = currentSpeed;
-    audioRef.current = audio;
-    audio.onended = () => {
-      setVoiceState("idle");
-      setIsPaused(false);
-    };
-    setVoiceState("speaking");
-    audio.play().catch((err) => {
-      // It never started, so onended won't come: settle back the same way.
-      console.error("[hyo-voice] couldn't replay the last reply:", err);
-      setVoiceState("idle");
-      setIsPaused(false);
-    });
-  }, [currentSpeed]);
-
-  const cycleSpeed = useCallback(() => {
-    setCurrentSpeed((prev) => {
-      const idx = VOICE_SPEEDS.indexOf(prev);
-      const next = VOICE_SPEEDS[(idx + 1) % VOICE_SPEEDS.length];
-      if (audioRef.current) audioRef.current.playbackRate = next;
-      return next;
-    });
-  }, []);
-
-  // Auto-speak when response completes (called externally)
-  const autoSpeak = useCallback(
-    (text: string) => {
-      if (isVoiceMode && autoSpeakEnabled && text) {
-        // speakResponse catches its own errors and settles the state.
-        void speakResponse(text);
-      }
-    },
-    [isVoiceMode, autoSpeakEnabled, speakResponse]
-  );
-
   return {
     voiceState,
     errorMessage,
     dismissError,
-    isPaused,
-    hasLastAudio,
-    currentSpeed,
     handleRecordClick,
     startRecording,
     stopRecording,
     getWaveform,
-    stopAudio,
-    togglePause,
-    replay,
-    cycleSpeed,
-    speakResponse,
-    autoSpeak,
     // GPT-Live call
-    isLive,
     startLive,
     stopLive,
     finishReply,
     notifyProgress,
     notifyPermissionAnswered,
     notifyErrorShown,
-    noteSilently,
     currentCall,
     notifyAttention,
     toggleLiveMute,

@@ -12,6 +12,11 @@
 
 export type CallSide = "user" | "agent";
 export type CallEndReason = "hung-up" | "disconnected" | "failed";
+/**
+ * What ran the call. Every call is GPT-Live now; "elevenlabs" marks calls
+ * from the ElevenLabs voice mode in Hyo 0.9.4 and earlier, still in saved
+ * conversations.
+ */
 export type CallEngine = "gpt-live" | "elevenlabs";
 
 export interface VoiceCallTurn {
@@ -347,7 +352,8 @@ export function finishedClaudeCount<M extends CallCarrier & { streaming?: boolea
  * Spoken turns Claude hasn't been given, from the finished calls in a thread
  * plus the call that's on now (if any). Returns the turns, in order, and the
  * records it advanced (`claudeSaw` moved to the end) so the caller can save
- * them. ElevenLabs calls are skipped: there, every turn already went to Claude.
+ * them. Calls from the old ElevenLabs voice mode are skipped: there, every
+ * turn already went to Claude.
  */
 export function takeUnseenTurns<M extends CallCarrier>(
   messages: M[],

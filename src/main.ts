@@ -1,5 +1,6 @@
 import { resolveLiveVoice } from "./voice/live-voice";
 import { aboutYouFromNote } from "./voice/voice-call";
+import { migrateVoiceSettings } from "./voice/dictation";
 import { Plugin, WorkspaceLeaf, Platform, Notice, TFile } from "obsidian";
 // Node built-ins are desktop-only, so they're loaded where they're used, and
 // every use site is guarded by `!Platform.isMobile` (see platform/node.ts).
@@ -392,7 +393,6 @@ export default class HyoPlugin extends Plugin {
         defaultModel: this.settings.model,
         // The phone's live calls are signed here with the desktop's settings.
         getLiveVoice: () => ({
-          engine: this.settings.voiceEngine || "elevenlabs",
           openAiApiKey: this.settings.openAiApiKey || "",
           ...(() => {
             const v = resolveLiveVoice(this.settings.gptLiveVoice, this.settings.gptLiveCustomVoices);
@@ -486,13 +486,11 @@ export default class HyoPlugin extends Plugin {
   }
 
   async loadSettings() {
-    const saved: unknown = await this.loadData();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, isObject(saved) ? saved : {});
-    // The voice engine is GPT-Live (or the older ElevenLabs loop). A build
-    // that tried OpenAI Realtime saved "realtime" here; that runs as GPT-Live.
-    if (this.settings.voiceEngine !== "elevenlabs" && this.settings.voiceEngine !== "gpt-live") {
-      this.settings.voiceEngine = "gpt-live";
-    }
+    const loaded: unknown = await this.loadData();
+    const saved: Record<string, unknown> = isObject(loaded) ? { ...loaded } : {};
+    const voiceMigrated = migrateVoiceSettings(saved);
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
+    if (voiceMigrated) await this.saveData(this.settings);
     // Reset stale shorthand model IDs to the default (Sonnet)
     const staleShorthands = ["opus", "sonnet", "haiku"];
     if (staleShorthands.includes(this.settings.model)) {

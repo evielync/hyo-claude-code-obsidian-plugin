@@ -20,15 +20,12 @@ export interface CallBarProps {
   /** What the agent is doing on a hand-off, in plain words. Empty when nothing. */
   working: string;
   muted: boolean;
-  /** Absent where there's nothing to mute (phone walkie-talkie). */
-  onToggleMute?: () => void;
+  onToggleMute: () => void;
   onEnd: () => void;
   onSettings?: () => void;
-  /** Tapping the orb (ElevenLabs: stop it talking). */
-  onOrbClick?: () => void;
 }
 
-export function CallBar({ startedAt, connecting, side, level, working, muted, onToggleMute, onEnd, onSettings, onOrbClick }: CallBarProps) {
+export function CallBar({ startedAt, connecting, side, level, working, muted, onToggleMute, onEnd, onSettings }: CallBarProps) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (connecting || !startedAt) return;
@@ -42,11 +39,7 @@ export function CallBar({ startedAt, connecting, side, level, working, muted, on
   return (
     <div className="hyo-callbar-wrap">
       <div className={`hyo-callbar${connecting ? " connecting" : ""}`} role="region" aria-label="Voice call">
-        <div
-          className={`hyo-callbar-orb${onOrbClick ? " clickable" : ""}`}
-          onClick={onOrbClick}
-          title={onOrbClick ? "Stop talking" : undefined}
-        >
+        <div className="hyo-callbar-orb">
           <VoiceOrb side={side} level={level} working={!side && !!working && !connecting} connecting={connecting} size={40} />
         </div>
         <div className="hyo-callbar-text">
@@ -67,7 +60,7 @@ export function CallBar({ startedAt, connecting, side, level, working, muted, on
             </svg>
           </button>
         )}
-        {onToggleMute && <button
+        <button
           className={`hyo-callbar-btn${muted ? " muted" : ""}`}
           title={muted ? "Unmute" : "Mute"}
           aria-label={muted ? "Unmute" : "Mute"}
@@ -80,7 +73,7 @@ export function CallBar({ startedAt, connecting, side, level, working, muted, on
             <line x1="12" y1="18" x2="12" y2="22" />
             {muted && <line x1="3" y1="3" x2="21" y2="21" strokeWidth="2" />}
           </svg>
-        </button>}
+        </button>
         <button className="hyo-callbar-end" title="End the call" aria-label="End the call" onClick={onEnd}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M12 9.5c-2.6 0-5.1.5-7.3 1.5-.7.3-1.2 1-1.2 1.8v2.1c0 .9.8 1.6 1.7 1.4l3-.6c.7-.1 1.2-.7 1.2-1.4v-1.6c1.7-.4 3.5-.4 5.2 0v1.6c0 .7.5 1.3 1.2 1.4l3 .6c.9.2 1.7-.5 1.7-1.4v-2.1c0-.8-.5-1.5-1.2-1.8-2.2-1-4.7-1.5-7.3-1.5z" />

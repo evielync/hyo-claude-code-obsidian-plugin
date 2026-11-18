@@ -51,7 +51,6 @@ export function DockApp({ app, plugin }: DockAppProps) {
     maxOutputTokens: s.maxOutputTokens,
     autoGenerateTitles: s.autoGenerateTitles,
     settingsVersion,
-    voiceEngine: s.voiceEngine,
     mainChat: mainChatOn(s),
     mainChatSessionId: s.mainChatSessionId || "",
     onMainChatSession,

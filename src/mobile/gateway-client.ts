@@ -125,10 +125,8 @@ export class GatewayClient {
   private agentsQueue: PendingRPC<unknown[]>[] = [];
   private skillsQueue: PendingRPC<unknown[]>[] = [];
   private searchQueue: PendingRPC<Record<string, string>>[] = [];
-  // Live voice: the desktop signs the phone's WebRTC offer and tells it which
-  // engine/voice is set. Keyed by requestId.
+  // Live voice: the desktop signs the phone's WebRTC offer. Keyed by requestId.
   private liveSdpPending = new Map<string, PendingRPC<{ sdp: string }>>();
-  private liveConfigPending = new Map<string, PendingRPC<{ engine: string; voice: string }>>();
   // History requests, by request id (older Macs answer by session id only).
   private historyPending = new Map<string, PendingRPC<HistoryReply> & { sessionId: string }>();
   // The shared open list (open-conversations.ts): pushed by the Mac whenever
@@ -466,16 +464,6 @@ export class GatewayClient {
         }
         return;
       }
-      case "live_config": {
-        const requestId = str(msg.requestId);
-        const pending = requestId !== undefined ? this.liveConfigPending.get(requestId) : undefined;
-        if (requestId !== undefined && pending) {
-          this.liveConfigPending.delete(requestId);
-          window.clearTimeout(pending.timer);
-          pending.resolve({ engine: str(msg.engine) || "elevenlabs", voice: str(msg.voice) || "marin" });
-        }
-        return;
-      }
       case "repair_result": {
         const requestId = str(msg.requestId);
         const pending = requestId !== undefined ? this.repairPending.get(requestId) : undefined;
@@ -649,19 +637,6 @@ export class GatewayClient {
   }
 
   // ---- promise-based RPCs ----
-
-  /** Which voice engine and voice the desktop has set; the phone follows it. */
-  liveConfig(): Promise<{ engine: string; voice: string }> {
-    const requestId = `lc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
-    return new Promise((resolve, reject) => {
-      const timer = window.setTimeout(() => {
-        this.liveConfigPending.delete(requestId);
-        reject(new Error("live_config timed out"));
-      }, RPC_TIMEOUT_MS);
-      this.liveConfigPending.set(requestId, { resolve, reject, timer });
-      this.send({ type: "live_config", requestId });
-    });
-  }
 
   /**
    * Ask the desktop to sign a WebRTC offer with OpenAI and return the answer.

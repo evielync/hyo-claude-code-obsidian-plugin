@@ -1,9 +1,9 @@
 import { requestUrl } from "obsidian";
 import { isRecord } from "../../types/json";
 
-const TTS_MODEL = "eleven_flash_v2_5";
+/** Dictation on the phone, transcribed by ElevenLabs Scribe. */
+
 const STT_MODEL = "scribe_v2";
-const MAX_TTS_CHARS = 4000;
 
 // How long we'll wait for a transcription before giving up. Obsidian's
 // `requestUrl` has no built-in timeout, so on a flaky mobile connection a hung
@@ -20,111 +20,9 @@ export function sttTimeoutFor(durationMs: number): number {
 }
 export const STT_TIMEOUT_ERROR = "hyo-stt-timeout";
 
-export interface ElevenLabsVoice {
-  voice_id: string;
-  name: string;
-  category: string;
-  labels?: Record<string, string>;
-  preview_url?: string;
-}
-
-
-/** A voice from GET /v1/voices: the fields Hyo relies on are present. */
-function isVoice(v: unknown): v is ElevenLabsVoice {
-  return isRecord(v) && typeof v.voice_id === "string" && typeof v.name === "string" && typeof v.category === "string";
-}
-
 /** `text` from a transcription response, or "". */
 export function transcriptText(json: unknown): string {
   return isRecord(json) && typeof json.text === "string" ? json.text : "";
-}
-
-/**
- * Fetch available voices from the user's ElevenLabs account.
- * Filters out premade voices — only returns cloned/custom voices.
- */
-export async function listVoices(
-  apiKey: string
-): Promise<ElevenLabsVoice[]> {
-  const res = await requestUrl({
-    url: "https://api.elevenlabs.io/v1/voices",
-    method: "GET",
-    headers: { "xi-api-key": apiKey },
-  });
-  const data: unknown = res.json;
-  if (!isRecord(data) || !Array.isArray(data.voices)) throw new Error("Invalid response from ElevenLabs");
-  return data.voices
-    .filter(isVoice)
-    .filter((v) => v.category !== "premade")
-    .sort((a, b) => a.name.localeCompare(b.name));
-}
-
-/**
- * Strip markdown formatting from text to make it cleaner for TTS.
- * Removes headers, bold, italic, code blocks, links, images, etc.
- */
-function stripMarkdown(text: string): string {
-  return text
-    // Remove code blocks (```...```)
-    .replace(/```[\s\S]*?```/g, "")
-    // Remove inline code (`...`)
-    .replace(/`[^`]+`/g, "")
-    // Remove images ![alt](url)
-    .replace(/!\[.*?\]\(.*?\)/g, "")
-    // Convert links [text](url) to just text
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    // Remove headers (## ...)
-    .replace(/^#{1,6}\s+/gm, "")
-    // Remove bold/italic (**text** or *text* or __text__ or _text_)
-    .replace(/(\*\*|__)(.*?)\1/g, "$2")
-    .replace(/(\*|_)(.*?)\1/g, "$2")
-    // Remove horizontal rules
-    .replace(/^[-*_]{3,}\s*$/gm, "")
-    // Remove bullet points and numbered lists markers
-    .replace(/^\s*[-*+]\s+/gm, "")
-    .replace(/^\s*\d+\.\s+/gm, "")
-    // Remove blockquotes
-    .replace(/^\s*>\s+/gm, "")
-    // Remove HTML tags
-    .replace(/<[^>]+>/g, "")
-    // Collapse multiple newlines
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-/**
- * Convert text to speech using ElevenLabs streaming TTS endpoint (it starts
- * generating sooner than the plain one). The whole MP3 is waited for either
- * way. Returns raw MP3 audio as an ArrayBuffer.
- */
-export async function textToSpeech(
-  apiKey: string,
-  voiceId: string,
-  text: string
-): Promise<ArrayBuffer> {
-  // Strip markdown and truncate
-  let ttsText = stripMarkdown(text);
-  if (ttsText.length > MAX_TTS_CHARS) {
-    ttsText = ttsText.substring(0, MAX_TTS_CHARS) + "... response truncated for speech.";
-  }
-
-  const res = await requestUrl({
-    url: `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
-    method: "POST",
-    headers: { "xi-api-key": apiKey },
-    contentType: "application/json",
-    body: JSON.stringify({
-      text: ttsText,
-      model_id: TTS_MODEL,
-    }),
-    throw: false,
-  });
-
-  if (res.status < 200 || res.status >= 300) {
-    throw new Error(`ElevenLabs TTS error: ${res.status}`);
-  }
-
-  return res.arrayBuffer;
 }
 
 /**
@@ -208,22 +106,5 @@ export async function speechToText(
     return transcriptText(res.json);
   } finally {
     window.clearTimeout(timer);
-  }
-}
-
-/**
- * Quick validation — checks if an API key can reach ElevenLabs.
- * Returns true if the key is valid, false otherwise.
- */
-export async function validateApiKey(apiKey: string): Promise<boolean> {
-  try {
-    await requestUrl({
-      url: "https://api.elevenlabs.io/v1/voices",
-      method: "GET",
-      headers: { "xi-api-key": apiKey },
-    });
-    return true;
-  } catch {
-    return false;
   }
 }

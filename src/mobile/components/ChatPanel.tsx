@@ -11,7 +11,6 @@ import type { TaskMeta } from "../../settings";
 import type { useSessionManager } from "../hooks/useSessionManager";
 import { useVoiceMode } from "../hooks/useVoiceMode";
 import { RecordingStore } from "../voice/recording-store";
-import { parseVoiceResponse } from "../voice/voice-persona";
 import { buildLiveHistory } from "../../voice/gpt-live";
 import { describeStep, attentionLine } from "../../voice/voice-words";
 import {
@@ -20,12 +19,9 @@ import {
   ShownErrors,
   claudeMessageCount,
   placeAtHangUp,
-  startCall,
-  addTurn,
-  endCall,
-  callHasContent,
   type VoiceCallRecord,
 } from "../../voice/voice-call";
+import { dictationSetup } from "../../voice/dictation";
 import { CallBar } from "../../components/CallBar";
 import { SendButton, sendButtonMode } from "../../components/SendButton";
 import { VoiceCallSheet } from "../../components/VoiceCallLine";
@@ -146,7 +142,6 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
     activeInputTokens,
     activeContextWindow,
     addVoiceCall,
-    setVoiceEngine,
     newTab,
     closeTab,
     switchTab,
@@ -311,38 +306,14 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
-  // Voice has two modes on one mic button:
-  //  • Dictation (voice mode OFF) — records, transcribes, drops the text in the
-  //    input box for Ev to review and send by hand. Unchanged from before.
-  //  • Walkie-talkie (voice mode ON) — the loop closes itself: you talk, it
-  //    auto-sends, and Chad speaks the reply back conversationally.
-  // Which voice engine the desktop has set. The phone follows it: on GPT-Live
-  // the desktop signs each call, so no key is needed here.
-  const [liveEngine, setLiveEngine] = useState<string>(plugin.settings.voiceEngine || "elevenlabs");
-  useEffect(() => {
-    const url = plugin.settings.gatewayUrl;
-    if (!url) return;
-    let cancelled = false;
-    GatewayClient.get(url)
-      .liveConfig()
-      .then((c) => {
-        if (!cancelled) setLiveEngine(c.engine);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [plugin.settings.gatewayUrl]);
-  const isLiveEngine = liveEngine === "gpt-live";
-  useEffect(() => setVoiceEngine(liveEngine), [liveEngine, setVoiceEngine]);
-  const hasVoiceApiKey = isLiveEngine ? !!plugin.settings.gatewayUrl : !!plugin.settings.elevenLabsApiKey;
-  // Dictation follows the engine, so one key covers both: OpenAI transcribes
-  // when the engine is GPT-Live, ElevenLabs otherwise.
-  const dictationKey = isLiveEngine ? plugin.settings.openAiApiKey : plugin.settings.elevenLabsApiKey;
-  const canDictate = !!dictationKey;
-  const dictationKeyNotice = isLiveEngine
-    ? "Add your OpenAI API key in Hyo settings to dictate."
-    : "Add your ElevenLabs API key in Hyo settings to use voice.";
+  // Voice on the phone is two things:
+  //  • Dictation — the mic button records, transcribes, and drops the text in
+  //    the input box to review and send by hand.
+  //  • A call — GPT-Live, signed by the desktop gateway with its OpenAI key,
+  //    so the phone needs only the gateway.
+  const canCall = !!plugin.settings.gatewayUrl;
+  const dictation = dictationSetup(plugin.settings);
+  const canDictate = !!dictation.apiKey;
 
   // What a live call starts out knowing, read through refs at call start.
   const activeMessagesRef = useRef(activeMessages);
@@ -402,9 +373,6 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
     },
     [addVoiceCall, toggleVoiceMode]
   );
-  // Walkie-talkie (ElevenLabs) calls keep the same one-line record.
-  const elCallRef = useRef<VoiceCallRecord | null>(null);
-
   // Dictations are saved here as they're recorded, so none is ever lost.
   const recordingStore = useMemo(
     () =>
@@ -417,14 +385,8 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
 
   const voiceMode = useVoiceMode({
     store: recordingStore,
-    apiKey: plugin.settings.elevenLabsApiKey,
-    stt: { provider: isLiveEngine ? "openai" : "elevenlabs", apiKey: dictationKey },
-    voiceId: plugin.settings.voiceId,
-    playbackSpeed: plugin.settings.voicePlaybackSpeed,
-    isVoiceMode: activeVoiceMode,
-    autoSpeak: activeVoiceMode,
+    stt: dictation,
     live: {
-      enabled: isLiveEngine,
       exchangeSdp: (sdp, agent, history) =>
         GatewayClient.get(plugin.settings.gatewayUrl).liveSdp(sdp, agent, history),
       getContext: () => {
@@ -440,14 +402,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
 
     },
     onTranscript: (text: string) => {
-      if (activeVoiceMode) {
-        // Walkie-talkie: send straight away — no glancing at the box, no
-        // keyboard. Chad's reply gets spoken back by the effect below.
-        if (elCallRef.current) addTurn(elCallRef.current, "user", text);
-        sendMessage(text);
-        return;
-      }
-      // Dictation: append to whatever's in the box (typed or a previous take)
+      // Append to whatever's in the box (typed or a previous take)
       // rather than replacing it, so multiple takes stack. Deliberately do NOT
       // focus the textarea — focusing re-summons the iOS keyboard after every
       // take, the opposite of a hands-free flow.
@@ -462,12 +417,10 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
   currentCallRef.current = voiceMode.currentCall;
   notifyPermRef.current = voiceMode.notifyPermissionAnswered;
 
-  // Walkie-talkie: speak Chad's reply once it finishes generating. Strip any
-  // [SCREEN] detail so only the spoken summary is read aloud — the full reply
-  // still shows in the chat. Whole-reply for now; streaming sentence-by-sentence
-  // is a follow-up. Guarded to the voice-mode tab so text chats never speak.
+  // Claude finished a reply on a call: the voice says the opening and points
+  // to the chat. Guarded to the call's tab so text chats never reach it.
   const prevGeneratingRef = useRef(false);
-  const { speakResponse, finishReply } = voiceMode;
+  const { finishReply } = voiceMode;
   useEffect(() => {
     const finished = prevGeneratingRef.current && !activeGenerating;
     prevGeneratingRef.current = activeGenerating;
@@ -481,52 +434,26 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
       }
     }
     if (!last) return;
-    if (voiceMode.isLive) {
-      // Live call: the voice says the opening and points to the chat.
-      finishReply(last.content || "", !!last.selfStarted);
-      return;
-    }
-    const parsed = parseVoiceResponse(last.content || "");
-    if (parsed.spoken) {
-      if (elCallRef.current) addTurn(elCallRef.current, "agent", parsed.spoken);
-      void speakResponse(parsed.spoken);
-    }
-  }, [activeGenerating, activeVoiceMode, activeMessages, speakResponse, finishReply, voiceMode.isLive]);
+    finishReply(last.content || "", !!last.selfStarted);
+  }, [activeGenerating, activeVoiceMode, activeMessages, finishReply]);
 
   // Live call: start when the voice view opens, end when it closes.
   const startLiveRef = useRef(voiceMode.startLive);
   const stopLiveRef = useRef(voiceMode.stopLive);
   startLiveRef.current = voiceMode.startLive;
   stopLiveRef.current = voiceMode.stopLive;
-  const callOpen = activeVoiceMode && hasVoiceApiKey;
-  const liveViewOpen = callOpen && voiceMode.isLive;
+  const callOpen = activeVoiceMode && canCall;
   const [callStartedAt, setCallStartedAt] = useState<number | null>(null);
-  // Read through a ref so a new onCallEnded never restarts the call.
-  const onCallEndedRef = useRef(onCallEnded);
-  onCallEndedRef.current = onCallEnded;
   useEffect(() => {
     if (!callOpen) return;
     callTabIdRef.current = activeTabIdRef.current;
     setCallStartedAt(Date.now());
-    if (liveViewOpen) {
-      void startLiveRef.current();
-      return () => {
-        stopLiveRef.current();
-        setCallStartedAt(null);
-      };
-    }
-    // Walkie-talkie: the record runs from voice on to voice off.
-    elCallRef.current = startCall("elevenlabs", claudeMessageCount(activeMessagesRef.current));
+    void startLiveRef.current();
     return () => {
-      const call = elCallRef.current;
-      elCallRef.current = null;
+      stopLiveRef.current();
       setCallStartedAt(null);
-      if (call) {
-        endCall(call, "hung-up");
-        onCallEndedRef.current(callHasContent(call) ? call : null, "hung-up");
-      }
     };
-  }, [callOpen, liveViewOpen]);
+  }, [callOpen]);
 
   // An error shown in the call's chat (the process ended, Claude couldn't
   // start, an API error): the voice hears what it said straight away, and
@@ -547,7 +474,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
   const [callStep, setCallStep] = useState("");
   const { notifyProgress, notifyAttention } = voiceMode;
   useEffect(() => {
-    if (!voiceMode.isLive || !activeGenerating) {
+    if (!callOpen || !activeGenerating) {
       if (!activeGenerating) setCallStep("");
       return;
     }
@@ -579,22 +506,22 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
         }
       }
     });
-  }, [activeMessages, activeGenerating, voiceMode.isLive, notifyProgress]);
+  }, [activeMessages, activeGenerating, callOpen, notifyProgress]);
 
 
   // The mic button reads BOTH gestures off one press, so you can hold-to-talk
-  // (walkie-talkie) or tap-to-toggle (start, tap again to stop) — Ev asked for
-  // both. On press we start recording and note the time; on release we decide:
-  // held long enough → it was a hold, stop and send; a quick tap → leave it
-  // recording so the next tap stops it. Non-idle states (transcribing, speaking,
-  // error) keep their existing tap behaviour.
+  // or tap-to-toggle (start, tap again to stop) — Ev asked for both. On press
+  // we start recording and note the time; on release we decide: held long
+  // enough → it was a hold, stop and transcribe; a quick tap → leave it
+  // recording so the next tap stops it. Non-idle states (transcribing, error)
+  // keep their existing tap behaviour.
   const pressStartRef = useRef(0);
   const heldCycleRef = useRef(false);
   const HOLD_MS = 350;
 
   const handleMicPointerDown = useCallback(() => {
     if (!canDictate) {
-      new Notice(dictationKeyNotice);
+      new Notice(dictation.missingKeyNotice);
       return;
     }
     if (voiceMode.voiceState === "idle") {
@@ -602,7 +529,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
       heldCycleRef.current = true;
       void voiceMode.startRecording();
     }
-  }, [canDictate, dictationKeyNotice, voiceMode]);
+  }, [canDictate, dictation.missingKeyNotice, voiceMode]);
 
   const handleMicPointerUp = useCallback(() => {
     const st = voiceMode.voiceState;
@@ -611,18 +538,18 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
       const held = Date.now() - pressStartRef.current;
       heldCycleRef.current = false;
       if (held >= HOLD_MS) {
-        voiceMode.stopRecording(); // hold-release → send
+        voiceMode.stopRecording(); // hold-release → transcribe
       }
       // else: quick tap → keep recording, next tap stops it
       return;
     }
     heldCycleRef.current = false;
-    // A tap while already recording (from an earlier tap-start) → stop + send.
+    // A tap while already recording (from an earlier tap-start) → stop + transcribe.
     if (st === "listening") {
       voiceMode.stopRecording();
       return;
     }
-    // Transcribing / speaking / error → existing tap semantics (retry, stop TTS…).
+    // Transcribing / error → existing tap semantics (retry).
     if (st !== "idle") {
       if (!canDictate) return;
       voiceMode.handleRecordClick();
@@ -636,16 +563,12 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
 
   const handleVoiceModeToggle = useCallback(() => {
     if (dictating) return;
-    if (!hasVoiceApiKey) {
-      new Notice(
-        isLiveEngine
-          ? "Connect to your desktop gateway in Hyo settings to use voice."
-          : "Add your ElevenLabs API key in Hyo settings to use voice."
-      );
+    if (!canCall) {
+      new Notice("Connect to your desktop gateway in Hyo settings to use voice.");
       return;
     }
     toggleVoiceMode();
-  }, [dictating, hasVoiceApiKey, isLiveEngine, toggleVoiceMode]);
+  }, [dictating, canCall, toggleVoiceMode]);
 
   // Session settings chip — agent, model and permissions in one panel,
   // replacing the standalone Ask First toggle in the input bar. On a phone
@@ -1117,7 +1040,6 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
     const desc = (inputString(agentCall?.input, "description") || "").trim();
     callWorking = agentCall ? (desc ? `Sub-agent: ${desc}` : "Sub-agent running") : callStep || "Working on it";
   }
-  const elSide = voiceMode.voiceState === "speaking" ? "agent" : voiceMode.voiceState === "listening" ? "user" : null;
   // Clean up a session the thinking-block error broke, and put back the
   // message that hit it so it can be sent again.
   const recoverAndRestore = async () => {
@@ -1148,8 +1070,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
     }
   };
   const endCallNow = () => {
-    voiceMode.stopAudio();
-    if (voiceMode.isLive) voiceMode.stopLive();
+    voiceMode.stopLive();
     toggleVoiceMode();
   };
 
@@ -1163,15 +1084,14 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
       {inVoiceView && (
         <CallBar
           startedAt={callStartedAt}
-          connecting={voiceMode.isLive ? voiceMode.liveStatus !== "live" : false}
-          side={voiceMode.isLive ? voiceMode.liveSide : elSide}
-          level={voiceMode.isLive ? voiceMode.liveLevel : elSide ? 0.35 : 0}
+          connecting={voiceMode.liveStatus !== "live"}
+          side={voiceMode.liveSide}
+          level={voiceMode.liveLevel}
           working={callWorking}
-          muted={voiceMode.isLive ? voiceMode.liveMuted : false}
-          onToggleMute={voiceMode.isLive ? voiceMode.toggleLiveMute : undefined}
+          muted={voiceMode.liveMuted}
+          onToggleMute={voiceMode.toggleLiveMute}
           onEnd={endCallNow}
           onSettings={() => openPluginSettings(app, plugin.manifest.id)}
-          onOrbClick={!voiceMode.isLive && voiceMode.voiceState === "speaking" ? voiceMode.stopAudio : undefined}
         />
       )}
       {showReleaseCard && (
@@ -1423,21 +1343,19 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
             />
 
 
-            {/* On a live call the mic is the call's; dictation waits. */}
-            {!liveViewOpen && (
+            {/* On a call the mic is the call's; dictation waits. */}
+            {!inVoiceView && (
             <button
               className={`hyo-mic-btn${voiceMode.voiceState === "listening" ? " recording" : ""}${voiceMode.voiceState === "thinking" ? " thinking" : ""}${voiceMode.voiceState === "error" ? " error" : ""}`}
               title={
                 !canDictate
-                  ? "Set up voice in Hyo settings"
+                  ? dictation.missingKeyNotice
                   : voiceMode.voiceState === "listening"
                   ? "Tap to stop, or release if holding"
                   : voiceMode.voiceState === "thinking"
                   ? "Transcribing…"
                   : voiceMode.voiceState === "error"
                   ? "Tap to retry"
-                  : activeVoiceMode
-                  ? "Hold to talk, or tap to start/stop"
                   : "Hold or tap to dictate"
               }
               disabled={voiceMode.voiceState === "thinking"}

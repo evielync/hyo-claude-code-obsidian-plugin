@@ -83,7 +83,6 @@ import type { WebSocket as WsSocket, WebSocketServer as WsServer } from "ws";
 // startGatewayHost/stopGatewayHost are never called there.
 
 export interface LiveVoiceConfig {
-  engine: string;
   openAiApiKey: string;
   /** Built-in name, or `{ id }` for a custom voice. */
   voice: string | { id: string };
@@ -1336,16 +1335,11 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
           send({ type: "title", requestId: str(m.requestId), title });
           break;
         }
-        case "live_config": {
-          const lv = cfg.getLiveVoice?.();
-          send({
-            type: "live_config",
-            requestId: str(m.requestId),
-            engine: lv?.engine || "elevenlabs",
-            voice: typeof lv?.voice === "string" ? lv.voice : lv?.voice ? "custom" : "marin",
-          });
+        case "live_config":
+          // Asked by phones on Hyo 0.9.4 and earlier, which pick between two
+          // voice engines by the answer. Calls are always GPT-Live now.
+          send({ type: "live_config", requestId: str(m.requestId), engine: "gpt-live" });
           break;
-        }
         case "live_sdp": {
           // The phone's WebRTC offer → OpenAI's answer, signed here with the
           // desktop's key. The session (personality, the tab's agent identity,
@@ -1353,11 +1347,11 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
           // nothing secret and follows the desktop's voice settings.
           const lv = cfg.getLiveVoice?.();
           const requestId = str(m.requestId);
-          if (!lv || lv.engine !== "gpt-live" || !lv.openAiApiKey) {
+          if (!lv || !lv.openAiApiKey) {
             send({
               type: "live_sdp_error",
               requestId,
-              message: "Set the desktop's voice engine to GPT-Live and add an OpenAI key in Hyo settings there.",
+              message: "Add an OpenAI API key in Hyo settings on your desktop (Voice tab) to make calls.",
             });
             break;
           }
@@ -1480,7 +1474,7 @@ export function startGatewayHost(config: GatewayHostConfig): void {
     getCwd: config.getCwd ?? (() => resolved.cwd),
     getLiveVoice:
       config.getLiveVoice ??
-      (() => ({ engine: "elevenlabs", openAiApiKey: "", voice: "marin", personality: "" })),
+      (() => ({ openAiApiKey: "", voice: "marin", personality: "" })),
     cliPath: config.cliPath,
     defaultAgent: config.defaultAgent,
     defaultModel: config.defaultModel,

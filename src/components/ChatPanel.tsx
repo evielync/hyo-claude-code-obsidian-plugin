@@ -22,8 +22,6 @@ import { SendButton, sendButtonMode } from "./SendButton";
 import { VoiceCallSheet } from "./VoiceCallLine";
 import type { useSessionManager } from "../hooks/useSessionManager";
 import { useVoiceMode } from "../hooks/useVoiceMode";
-import { parseVoiceResponse, lastSentenceBoundary } from "../voice/voice-persona";
-import { ensureVoiceAssets } from "../voice/voice-assets";
 import { describeStep, attentionLine } from "../voice/voice-words";
 import {
   unseenTurnsBlock,
@@ -322,12 +320,8 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     [vaultPath, plugin.manifest.dir]
   );
 
-  // Voice mode
-  const voiceEngine = plugin.settings.voiceEngine || "elevenlabs";
-  const hasVoiceApiKey =
-    voiceEngine === "gpt-live"
-      ? !!plugin.settings.openAiApiKey
-      : !!plugin.settings.elevenLabsApiKey;
+  // Voice calls are GPT-Live, signed with the OpenAI key held here.
+  const hasVoiceApiKey = !!plugin.settings.openAiApiKey;
   // A permission answered on screen during a call: the voice is told
   // silently, so Ev doesn't have to say "done" (which became a second job).
   const notifyPermRef = useRef<(allowed: boolean) => void>(() => {});
@@ -369,37 +363,14 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     [sendMessage, addVoiceCall]
   );
 
-  // What was said on the call. GPT-Live: a hand-off — Claude's message shows
-  // the request marked "Asked on the call" and its reply shows in full.
-  // ElevenLabs: Claude IS the voice, so it's an ordinary message.
-  const recordTurnRef = useRef<(side: "user" | "agent", text: string) => void>(() => {});
-  // ElevenLabs: what she said goes to Claude as an ordinary message (Claude
-  // IS the voice). GPT-Live jobs come through onLiveHandoff instead.
-  const handleTranscript = useCallback(
-    (text: string) => {
-      recordTurnRef.current("user", text);
-      sendToClaude(text);
-    },
-    [sendToClaude]
-  );
   // A job from the live call: the whole request, built from everything she
-  // said since the last job (voice/voice-call.ts handoffTask).
+  // said since the last job (voice/voice-call.ts handoffTask). Claude's
+  // message shows the request marked "Asked on the call" and its reply shows
+  // in full.
   const onLiveHandoff = useCallback(
     (prompt: string, said: string) => sendToClaude(prompt, { displayText: said, handoff: true }),
     [sendToClaude]
   );
-  // Base URL for the bundled Silero/ORT model assets, served from the plugin
-  // folder via Obsidian's resource-path scheme (strip the cache token, keep a
-  // trailing slash so vad-web/ort can append filenames).
-  const vadAssetBase = useMemo(() => {
-    try {
-      const rel = `${plugin.manifest.dir}/vad-assets`;
-      const url = app.vault.adapter.getResourcePath(rel);
-      return url.split("?")[0].replace(/\/?$/, "/");
-    } catch {
-      return "";
-    }
-  }, [plugin.manifest.dir, app.vault.adapter]);
   // What a GPT-Live call starts out knowing: the personality paragraph from
   // settings and the open conversation. Read through a ref at call start so
   // the hook's identity doesn't churn every render.
@@ -437,18 +408,6 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   );
 
   const voiceMode = useVoiceMode({
-    engine: voiceEngine,
-    apiKey: plugin.settings.elevenLabsApiKey,
-    voiceId: plugin.settings.voiceId,
-    playbackSpeed: plugin.settings.voicePlaybackSpeed,
-    isVoiceMode: activeVoiceMode,
-    autoSpeak: plugin.settings.voiceAutoSpeak,
-    onTranscript: handleTranscript,
-    vadAssetBase,
-    ensureAssets: useCallback(
-      () => ensureVoiceAssets(app, plugin.manifest.dir || ""),
-      [app, plugin.manifest.dir]
-    ),
     openAiApiKey: plugin.settings.openAiApiKey,
     ...(() => {
       const v = resolveLiveVoice(plugin.settings.gptLiveVoice, plugin.settings.gptLiveCustomVoices);
@@ -460,7 +419,6 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     onLiveHandoff,
     debugLog: !!plugin.settings.voiceDebugLog,
   });
-  recordTurnRef.current = voiceMode.recordTurn;
   currentCallRef.current = voiceMode.currentCall;
   notifyPermRef.current = voiceMode.notifyPermissionAnswered;
 
@@ -518,9 +476,9 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   const showUpdateBanner = !!updateRequired && dismissedUpdateKey !== updateKey && !cardInThread;
   const prevPermIdRef = useRef<string | null>(null);
 
-  // Start the hands-free mic loop when the voice view is open, stop when it
-  // closes. Refs so identity churn in the hook can't restart the mic each
-  // render — the effect only fires on the view opening/closing.
+  // Start the call when the voice view opens, end it when it closes. Refs so
+  // identity churn in the hook can't restart the call each render — the
+  // effect only fires on the view opening/closing.
   const startConvRef = useRef(voiceMode.startConversation);
   const stopConvRef = useRef(voiceMode.stopConversation);
   startConvRef.current = voiceMode.startConversation;
@@ -549,12 +507,6 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     if (!callStartedAt || activeTabId !== callTabIdRef.current) return;
     for (const text of shownErrorsRef.current.take(activeMessages)) notifyErrorShown(text);
   }, [activeMessages, activeTabId, callStartedAt, notifyErrorShown]);
-
-  // Half-duplex: the loop stays muted while Chad is generating.
-  const { setBusy: setVoiceBusy } = voiceMode;
-  useEffect(() => {
-    setVoiceBusy(activeGenerating);
-  }, [activeGenerating, setVoiceBusy]);
 
   // AI Commands seam: expose `runCommand` so an external trigger (the AI
   // Commands companion plugin) can open a new chat pre-loaded with a prompt
@@ -600,26 +552,18 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     }
   }, [activeTabId, sendMessage]);
 
-  // Speak Chad's reply AS IT STREAMS (ElevenLabs). On each streamed update we
-  // take the conversational text so far (with [SCREEN] detail stripped —
-  // that's shown, not spoken), and speak whatever complete sentences are new
-  // since last time. On finish we flush the trailing bit.
-  // GPT-Live: the voice gets Claude's finished reply once (finishReply).
+  // The voice gets Claude's finished reply once (finishReply): the answer to
+  // the open hand-off, or a reply to something typed in the chat.
   const prevGeneratingRef = useRef(activeGenerating);
   const prevTabIdRef = useRef(activeTabId);
-  // The text we've already spoken this turn — tracked as a string (not a char
-  // offset) so it stays aligned even when the reply arrives partly streamed and
-  // partly as a completed message that REPLACES the content.
-  const spokenSoFarRef = useRef("");
-  const speakTurnRef = useRef(-1);
-  const { enqueueSpeech, stopAudio, finishReply, isLive, recordTurn } = voiceMode;
+  const replyTurnRef = useRef(-1);
+  const { finishReply } = voiceMode;
   useEffect(() => {
     const tabChanged = prevTabIdRef.current !== activeTabId;
-    const startedGenerating = !prevGeneratingRef.current && activeGenerating;
     const finishedGenerating = prevGeneratingRef.current && !activeGenerating;
     prevGeneratingRef.current = activeGenerating;
     prevTabIdRef.current = activeTabId;
-    if (tabChanged || !activeVoiceMode) return;
+    if (tabChanged || !activeVoiceMode || !finishedGenerating) return;
 
     // Index of the assistant message this turn is about.
     let idx = -1;
@@ -630,61 +574,10 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
         break;
       }
     }
-    if (idx === -1) return;
-
-    if (isLive) {
-      if (finishedGenerating && speakTurnRef.current !== idx) {
-        speakTurnRef.current = idx;
-        finishReply(activeMessages[idx].content || "", !!activeMessages[idx].selfStarted);
-      }
-      return;
-    }
-    if (!plugin.settings.voiceAutoSpeak) return;
-    // A new turn interrupts any speech still playing from the last one.
-    if (startedGenerating) {
-      stopAudio();
-      spokenSoFarRef.current = "";
-    }
-    if (speakTurnRef.current !== idx) {
-      speakTurnRef.current = idx;
-      spokenSoFarRef.current = "";
-    }
-    const spoken = parseVoiceResponse(activeMessages[idx].content || "").spoken;
-    // Re-anchor: how much of the current text have we already spoken?
-    const prev = spokenSoFarRef.current;
-    const max = Math.min(prev.length, spoken.length);
-    let base = 0;
-    while (base < max && prev[base] === spoken[base]) base++;
-    const remainder = spoken.slice(base);
-    // While streaming, only speak up to the last complete sentence; on
-    // finish, flush everything that's left.
-    const cut = finishedGenerating ? remainder.length : lastSentenceBoundary(remainder) + 1;
-    if (cut > 0) {
-      const chunk = remainder.slice(0, cut).trim();
-      if (chunk) enqueueSpeech(chunk);
-      spokenSoFarRef.current = spoken.slice(0, base + cut);
-    }
-    if (finishedGenerating && spoken.trim()) recordTurn("agent", spoken);
-  }, [
-    activeGenerating,
-    activeVoiceMode,
-    activeMessages,
-    activeTabId,
-    enqueueSpeech,
-    stopAudio,
-    finishReply,
-    plugin.settings.voiceAutoSpeak,
-    isLive,
-    recordTurn,
-  ]);
-
-  // Stop audio when switching or closing tabs: only that runs it, so the
-  // stopper is read through a ref rather than listed.
-  const stopAudioRef = useRef(stopAudio);
-  stopAudioRef.current = stopAudio;
-  useEffect(() => {
-    stopAudioRef.current();
-  }, [activeTabId]);
+    if (idx === -1 || replyTurnRef.current === idx) return;
+    replyTurnRef.current = idx;
+    finishReply(activeMessages[idx].content || "", !!activeMessages[idx].selfStarted);
+  }, [activeGenerating, activeVoiceMode, activeMessages, activeTabId, finishReply]);
 
   // Slash command state (checks both .claude/skills and skills/)
   const skills = useSkills(workingDirectory);
@@ -1207,12 +1100,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   // no voice key yet, it says where to add one and opens the settings.
   const startCallFromInput = () => {
     if (!hasVoiceApiKey) {
-      new Notice(
-        voiceEngine === "gpt-live"
-          ? "Hyo voice: add your OpenAI API key in Settings → Hyo → Voice to start a call."
-          : "Hyo voice: add your ElevenLabs API key in Settings → Hyo → Voice to start a call.",
-        6000
-      );
+      new Notice("Hyo voice: add your OpenAI API key in Settings → Hyo → Voice to start a call.", 6000);
       openVoiceSettings();
       return;
     }
@@ -1225,10 +1113,6 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     voiceMode.stopConversation();
     toggleVoiceMode();
   };
-  // The call bar's orb and status. GPT-Live: the real audio level and who's
-  // talking. ElevenLabs: who's talking, from the speech loop.
-  const elSide = voiceMode.voiceState === "speaking" ? "agent" : voiceMode.voiceState === "listening" ? "user" : null;
-  const callConnecting = voiceMode.isLive ? voiceMode.liveStatus !== "live" : !voiceMode.conversationActive;
 
   return (
     <div
@@ -1240,15 +1124,14 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
       {inVoiceView ? (
         <CallBar
           startedAt={callStartedAt}
-          connecting={callConnecting}
-          side={voiceMode.isLive ? voiceMode.liveSide : elSide}
-          level={voiceMode.isLive ? voiceMode.liveLevel : elSide ? 0.35 : 0}
+          connecting={voiceMode.liveStatus !== "live"}
+          side={voiceMode.liveSide}
+          level={voiceMode.liveLevel}
           working={callWorking}
           muted={voiceMode.micMuted}
           onToggleMute={voiceMode.toggleMute}
           onEnd={endVoice}
           onSettings={openVoiceSettings}
-          onOrbClick={!voiceMode.isLive && voiceMode.voiceState === "speaking" ? voiceMode.stopAudio : undefined}
         />
       ) : isPopup ? null : (
         <ConversationSwitcher

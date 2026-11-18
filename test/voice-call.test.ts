@@ -307,7 +307,7 @@ test("turns ride along from the call that's on now, then only the new ones", () 
   assert.deepEqual(takeUnseenTurns([], live).turns.map((t) => t.text), ["Hi"]);
   addTurn(live, "agent", "Hey", T0 + 5000);
   assert.deepEqual(takeUnseenTurns([], live).turns.map((t) => t.text), ["Hey"]);
-  // ElevenLabs calls never ride along: Claude was the voice.
+  // Calls from the old ElevenLabs voice mode never ride along: Claude was the voice.
   const el = startCall("elevenlabs", 0, T0);
   addTurn(el, "user", "x", T0);
   assert.equal(takeUnseenTurns([line(el)]).turns.length, 0);

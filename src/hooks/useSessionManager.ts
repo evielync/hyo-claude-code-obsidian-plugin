@@ -10,7 +10,7 @@ import { OwnerTransport, mainChatOwner, sessionOwner, findSessionOwner, unexpect
 // Every tab's Claude connection: a subscription to the Mac's one process for
 // its conversation, shared with other panels and the phone (session-owner.ts).
 type TabProc = OwnerTransport;
-import { VOICE_PERSONA, LIVE_BACKEND_PERSONA, HANDOFF_MARKER } from "../voice/voice-persona";
+import { LIVE_BACKEND_PERSONA, HANDOFF_MARKER } from "../voice/voice-persona";
 import type { Message, ToolCallData } from "./useChatEngine";
 import { allowedPrompts, askedQuestions, blocksOf, eventSubtype, eventType, inputText, isSessionEvent, type UserContent } from "../types/session-events";
 import { isObject } from "../types/json";
@@ -82,8 +82,6 @@ interface SessionManagerOptions {
   maxOutputTokens?: number;
   settingsVersion?: number;
   autoGenerateTitles?: boolean;
-  // Which voice engine is on — picks the persona Claude gets in voice mode.
-  voiceEngine?: string;
   // Settings → Main chat. The conversation it carries on, shared with the
   // phone through the synced settings, and where a new id is saved.
   mainChat?: boolean;
@@ -225,7 +223,7 @@ export function useSessionManager(options: SessionManagerOptions) {
   // killing a turn that's running (a hand-off carries on after hang-up).
   const transportPromptRef = useRef<Record<string, string | undefined>>({});
   const personaFor = (voiceMode: boolean | undefined): string | undefined =>
-    voiceMode ? (options.voiceEngine === "gpt-live" ? LIVE_BACKEND_PERSONA : VOICE_PERSONA) : undefined;
+    voiceMode ? LIVE_BACKEND_PERSONA : undefined;
   // What a tab's process is spawned with: the main chat's instructions (main
   // chat only), then the voice persona when a call is on.
   const promptFor = (tab: TabSession | undefined): string | undefined =>
@@ -1121,9 +1119,8 @@ export function useSessionManager(options: SessionManagerOptions) {
       sessionId: currentTab?.cliSessionId ?? null,
       maxOutputTokens: optionsRef.current.maxOutputTokens,
       // The main chat's delegation instructions, then the voice persona
-      // when a call is on. ElevenLabs: Claude IS the voice, so it gets the
-      // full spoken persona. GPT-Live: a separate model talks; Claude is
-      // the backend it hands to. A change swaps the process between turns
+      // when a call is on: a separate model talks, and Claude is the
+      // backend it hands to. A change swaps the process between turns
       // and --resumes (the owner does it once nothing is running).
       appendSystemPrompt: promptFor(currentTab),
     };

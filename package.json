@@ -11,9 +11,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "@ricky0123/vad-web": "^0.0.30",
     "fflate": "^0.8.3",
-    "onnxruntime-web": "^1.27.0",
     "openai": "^7.15.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

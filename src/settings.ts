@@ -12,6 +12,7 @@ import type { Skill } from "./hooks/useSkills";
 import { checkMobileAccess, mobileLogPath } from "./gateway-host";
 import { detectClaude, probeClaude, checkAuth, installClaude, signIn } from "./cli-probe";
 import { DEFAULT_VOICE_PERSONALITY } from "./voice/gpt-live";
+import { DICTATION_PROVIDERS, isDictationProvider, type DictationProvider } from "./voice/dictation";
 
 // A single command: which skill it fires, what its header-menu label reads,
 // and any extra instruction text appended after the skill invocation.
@@ -20,8 +21,6 @@ export interface HyoCommand {
   label: string;
   extra?: string;
 }
-
-export type VoiceEngine = "elevenlabs" | "gpt-live";
 
 // OpenAI's built-in voices for GPT-Live-1 (from the SDK's BuiltInVoice type).
 export const GPT_LIVE_VOICES = [
@@ -59,16 +58,11 @@ export interface HyoSettings {
   // suppresses the card — a first-time user doesn't need to be told what
   // changed in a version they never had.
   lastSeenVersion: string;
-  // Voice
-  // Which engine runs the conversation. "elevenlabs" is the turn-based loop
-  // (Silero + Smart Turn + ElevenLabs STT/TTS); "gpt-live" is OpenAI's
-  // full-duplex GPT-Live-1 voice model that hands real work to Claude.
-  voiceEngine: VoiceEngine;
+  // Voice. A call is OpenAI's GPT-Live-1 voice model, which hands real work
+  // to Claude. Dictation (the phone's mic button) is transcribed by the
+  // service chosen here, with its key.
+  dictationProvider: DictationProvider;
   elevenLabsApiKey: string;
-  voiceId: string;
-  voiceName: string;
-  voicePlaybackSpeed: number;
-  voiceAutoSpeak: boolean;
   openAiApiKey: string;
   gptLiveVoice: string;
   gptLiveCustomVoices: CustomLiveVoice[];
@@ -133,12 +127,8 @@ export const DEFAULT_SETTINGS: HyoSettings = {
   gatewayPort: 8787,
   lastSeenVersion: "",
   // Voice
-  voiceEngine: "elevenlabs",
+  dictationProvider: "openai",
   elevenLabsApiKey: "",
-  voiceId: "",
-  voiceName: "",
-  voicePlaybackSpeed: 1.25,
-  voiceAutoSpeak: true,
   openAiApiKey: "",
   gptLiveVoice: "marin",
   gptLiveCustomVoices: [],
@@ -507,302 +497,211 @@ export class HyoSettingTab extends PluginSettingTab {
 
   // ---- Voice ----------------------------------------------------------------
   private renderVoice(containerEl: HTMLElement): void {
-    const engine = this.plugin.settings.voiceEngine || "elevenlabs";
-
     containerEl.createEl("p", {
-      text:
-        engine === "gpt-live"
-          ? "GPT-Live is a real back-and-forth call. The voice talks with you and hands anything that needs your files or real work to Claude, then tells you what came back. Paste an OpenAI API key and pick a voice."
-          : "Connect ElevenLabs to enable voice mode — speak to Claude and hear responses read aloud.",
+      text: "A voice call is a real back-and-forth conversation with GPT-Live. The voice talks with you and hands anything that needs your files or real work to Claude, then tells you what came back. Paste an OpenAI API key and pick a voice.",
       cls: "hyo-settings-intro",
     });
 
-    new Setting(containerEl)
-      .setName("Voice engine")
-      .setDesc("GPT-Live: a live call with OpenAI's voice model (full duplex, interrupt any time). ElevenLabs: take turns — you speak, it transcribes, Claude answers, it reads the reply.")
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOption("gpt-live", "GPT-Live (OpenAI)")
-          .addOption("elevenlabs", "ElevenLabs")
-          .setValue(engine)
-          .onChange(async (value) => {
-            this.plugin.settings.voiceEngine = value as VoiceEngine;
-            await this.plugin.saveSettings();
-            dispatchSettingsChanged();
-            this.display();
-          })
-      );
-
-    if (engine === "gpt-live") {
-      const openAiSetting = new Setting(containerEl)
-        .setName("OpenAI API key")
-        .setDesc("From platform.openai.com → API keys. Calls are billed to this key at OpenAI's per-minute rate. On the phone, this same key also transcribes dictation, so you don't need ElevenLabs as well.")
-        .addText((text) => {
-          text.inputEl.type = "password";
-          text.inputEl.addClass("hyo-input-key");
-          return text
-            .setPlaceholder("sk-...")
-            .setValue(this.plugin.settings.openAiApiKey)
-            .onChange(async (value) => {
-              this.plugin.settings.openAiApiKey = value.trim();
-              await this.plugin.saveSettings();
-              this.showSavedNear(openAiSetting.nameEl);
-              dispatchSettingsChanged();
-            });
-        });
-
-      const liveVoiceSetting = new Setting(containerEl)
-        .setName("Voice")
-        .setDesc("One of OpenAI's built-in voices, or a custom voice you've added below. Takes effect on the next call. Play sample says one line in the chosen voice (about two seconds of call time).")
-        .addDropdown((dropdown) => {
-          for (const c of this.plugin.settings.gptLiveCustomVoices || []) {
-            dropdown.addOption(`${CUSTOM_VOICE_PREFIX}${c.id}`, `${c.name || "Custom voice"} (custom)`);
-          }
-          for (const v of GPT_LIVE_VOICES) {
-            dropdown.addOption(v, v.charAt(0).toUpperCase() + v.slice(1));
-          }
-          dropdown
-            .setValue(this.plugin.settings.gptLiveVoice || "marin")
-            .onChange(async (value) => {
-              this.plugin.settings.gptLiveVoice = value;
-              await this.plugin.saveSettings();
-              this.showSavedNear(liveVoiceSetting.nameEl);
-              dispatchSettingsChanged();
-            });
-        })
-        .addButton((btn) => {
-          btn.setButtonText("Play sample").onClick(async () => {
-            const key = this.plugin.settings.openAiApiKey;
-            if (!key) {
-              new Notice("Add your OpenAI API key first.");
-              return;
-            }
-            btn.setDisabled(true).setButtonText("Playing…");
-            try {
-              const { playVoiceSample } = await import("./voice/gpt-live");
-              const { voice } = resolveLiveVoice(this.plugin.settings.gptLiveVoice, this.plugin.settings.gptLiveCustomVoices);
-              await playVoiceSample(key, voice);
-            } catch (e) {
-              new Notice(`Couldn't play the sample — ${e instanceof Error ? e.message : "error"}`);
-            } finally {
-              btn.setDisabled(false).setButtonText("Play sample");
-            }
-          });
-        });
-
-      // Custom voices: an id from OpenAI's custom voices, with the description
-      // it was made from (OpenAI's guide: keep that description in the
-      // call's instructions so the voice stays in character).
-      for (const c of this.plugin.settings.gptLiveCustomVoices || []) {
-        new Setting(containerEl)
-          .setName(c.name || "Custom voice")
-          .setDesc(`${c.id}${c.description ? ` · ${c.description.slice(0, 120)}${c.description.length > 120 ? "…" : ""}` : ""}`)
-          .addButton((btn) =>
-            btn.setButtonText("Remove").onClick(async () => {
-              const s = this.plugin.settings;
-              s.gptLiveCustomVoices = (s.gptLiveCustomVoices || []).filter((v) => v.id !== c.id);
-              if (s.gptLiveVoice === `${CUSTOM_VOICE_PREFIX}${c.id}`) s.gptLiveVoice = "marin";
-              await this.plugin.saveSettings();
-              dispatchSettingsChanged();
-              this.display();
-            })
-          );
-      }
-      const draft = { name: "", id: "", description: "" };
-      const customSetting = new Setting(containerEl)
-        .setName("Add a custom voice")
-        .setDesc("Paste a custom voice's id (it starts voice_) and the description it was made from. It joins the list above.")
-        .addText((t) => t.setPlaceholder("Name, e.g. Chad").onChange((v) => (draft.name = v.trim())))
-        .addText((t) => t.setPlaceholder("voice_…").onChange((v) => (draft.id = v.trim())))
-        .addButton((btn) =>
-          btn.setButtonText("Add").onClick(async () => {
-            if (!/^voice_[A-Za-z0-9]+$/.test(draft.id)) {
-              new Notice("That doesn't look like a voice id. It starts with voice_.");
-              return;
-            }
-            const s = this.plugin.settings;
-            const list = (s.gptLiveCustomVoices || []).filter((v) => v.id !== draft.id);
-            list.push({ id: draft.id, name: draft.name || "Custom voice", description: draft.description.trim() });
-            s.gptLiveCustomVoices = list;
-            s.gptLiveVoice = `${CUSTOM_VOICE_PREFIX}${draft.id}`;
-            await this.plugin.saveSettings();
-            dispatchSettingsChanged();
-            this.display();
-          })
-        );
-      const descArea = containerEl.createEl("textarea", {
-        attr: { rows: "3", placeholder: "The voice's description, e.g. A natural, relaxed British man in his forties…" },
-      });
-      descArea.addClass("hyo-textarea-full");
-      descArea.addEventListener("input", () => (draft.description = descArea.value));
-      customSetting.settingEl.addClass("hyo-setting-no-border-bottom");
-
-      const aboutNote = this.plugin.settings.voiceAboutYouNote || "";
-      const aboutSetting = new Setting(containerEl)
-        .setName("About you")
-        .setDesc(
-          aboutNote
-            ? `The voice reads your note "${aboutNote.replace(/\.md$/, "")}" fresh at the start of each call.`
-            : "A few lines the voice always knows: your name, what you do, how you like to be spoken to. Or use a note from your vault instead."
-        )
-        .addButton((btn) =>
-          btn.setButtonText(aboutNote ? "Change note" : "Use a note").onClick(() => {
-            new NotePickerModal(this.app, async (notePath) => {
-              this.plugin.settings.voiceAboutYouNote = notePath;
-              await this.plugin.saveSettings();
-              dispatchSettingsChanged();
-              this.display();
-            }).open();
-          })
-        );
-      if (aboutNote) {
-        aboutSetting.addButton((btn) =>
-          btn.setButtonText("Write it here instead").onClick(async () => {
-            this.plugin.settings.voiceAboutYouNote = "";
-            await this.plugin.saveSettings();
-            dispatchSettingsChanged();
-            this.display();
-          })
-        );
-      } else {
-        const aboutText = new Setting(containerEl).addTextArea((text) => {
-          text.inputEl.rows = 3;
-          text.inputEl.addClass("hyo-textarea-full");
-          return text
-            .setPlaceholder("I'm Sam. I run a small design studio. Keep it brief and skip the pleasantries.")
-            .setValue(this.plugin.settings.voiceAboutYou || "")
-            .onChange(async (value) => {
-              this.plugin.settings.voiceAboutYou = value;
-              await this.plugin.saveSettings();
-              this.showSavedNear(aboutSetting.nameEl);
-              dispatchSettingsChanged();
-            });
-        });
-        aboutText.infoEl.remove();
-        aboutText.settingEl.addClass("hyo-setting-attached");
-      }
-
-      const personalitySetting = new Setting(containerEl)
-        .setName("Personality")
-        .setDesc("How the voice talks and who it's talking to: its character, your name, anything it should always know about you. A few sentences. Its name comes from the tab's agent file; with no agent it's simply your agent. Everything about your files and work still comes from Claude.")
-        .addTextArea((text) => {
-          text.inputEl.rows = 5;
-          text.inputEl.addClass("hyo-textarea-full");
-          return text
-            .setPlaceholder(DEFAULT_VOICE_PERSONALITY)
-            .setValue(this.plugin.settings.voicePersonality || "")
-            .onChange(async (value) => {
-              this.plugin.settings.voicePersonality = value;
-              await this.plugin.saveSettings();
-              this.showSavedNear(personalitySetting.nameEl);
-              dispatchSettingsChanged();
-            });
-        });
-      personalitySetting.settingEl.addClass("hyo-setting-stacked");
-      return;
-    }
-
-    const apiKeySetting = new Setting(containerEl)
-      .setName("ElevenLabs API key")
-      .setDesc("Get your API key from elevenlabs.io/app/settings/api-keys")
+    const openAiSetting = new Setting(containerEl)
+      .setName("OpenAI API key")
+      .setDesc("From platform.openai.com → API keys. Calls are billed to this key at OpenAI's per-minute rate. Calls from your phone use this key too, through your desktop. It can also transcribe dictation (below).")
       .addText((text) => {
         text.inputEl.type = "password";
         text.inputEl.addClass("hyo-input-key");
         return text
-          .setPlaceholder("xi_...")
-          .setValue(this.plugin.settings.elevenLabsApiKey)
+          .setPlaceholder("sk-...")
+          .setValue(this.plugin.settings.openAiApiKey)
           .onChange(async (value) => {
-            this.plugin.settings.elevenLabsApiKey = value.trim();
+            this.plugin.settings.openAiApiKey = value.trim();
             await this.plugin.saveSettings();
-            this.showSavedNear(apiKeySetting.nameEl);
+            this.showSavedNear(openAiSetting.nameEl);
             dispatchSettingsChanged();
           });
       });
 
-    const voiceSetting = new Setting(containerEl)
+    const liveVoiceSetting = new Setting(containerEl)
       .setName("Voice")
-      .setDesc("Select a voice from your ElevenLabs library")
+      .setDesc("One of OpenAI's built-in voices, or a custom voice you've added below. Takes effect on the next call. Play sample says one line in the chosen voice (about two seconds of call time).")
       .addDropdown((dropdown) => {
-        // Start with current selection or placeholder
-        if (this.plugin.settings.voiceId) {
-          dropdown.addOption(this.plugin.settings.voiceId, this.plugin.settings.voiceName || "Selected voice");
-        } else {
-          dropdown.addOption("", "Select a voice...");
+        for (const c of this.plugin.settings.gptLiveCustomVoices || []) {
+          dropdown.addOption(`${CUSTOM_VOICE_PREFIX}${c.id}`, `${c.name || "Custom voice"} (custom)`);
         }
-        dropdown.setValue(this.plugin.settings.voiceId);
-
-        dropdown.onChange(async (value) => {
-          if (!value) return;
-          // Find the voice name from the dropdown's display text
-          const selectEl = dropdown.selectEl;
-          const selectedOption = selectEl.options[selectEl.selectedIndex];
-          this.plugin.settings.voiceId = value;
-          this.plugin.settings.voiceName = selectedOption?.text || "";
-          await this.plugin.saveSettings();
-          this.showSavedNear(voiceSetting.nameEl);
-          dispatchSettingsChanged();
+        for (const v of GPT_LIVE_VOICES) {
+          dropdown.addOption(v, v.charAt(0).toUpperCase() + v.slice(1));
+        }
+        dropdown
+          .setValue(this.plugin.settings.gptLiveVoice || "marin")
+          .onChange(async (value) => {
+            this.plugin.settings.gptLiveVoice = value;
+            await this.plugin.saveSettings();
+            this.showSavedNear(liveVoiceSetting.nameEl);
+            dispatchSettingsChanged();
+          });
+      })
+      .addButton((btn) => {
+        btn.setButtonText("Play sample").onClick(async () => {
+          const key = this.plugin.settings.openAiApiKey;
+          if (!key) {
+            new Notice("Add your OpenAI API key first.");
+            return;
+          }
+          btn.setDisabled(true).setButtonText("Playing…");
+          try {
+            const { playVoiceSample } = await import("./voice/gpt-live");
+            const { voice } = resolveLiveVoice(this.plugin.settings.gptLiveVoice, this.plugin.settings.gptLiveCustomVoices);
+            await playVoiceSample(key, voice);
+          } catch (e) {
+            new Notice(`Couldn't play the sample — ${e instanceof Error ? e.message : "error"}`);
+          } finally {
+            btn.setDisabled(false).setButtonText("Play sample");
+          }
         });
-
-        // Async-load voices from ElevenLabs when API key exists
-        const apiKey = this.plugin.settings.elevenLabsApiKey;
-        if (apiKey) {
-          import("./voice/elevenlabs-api")
-            .then(({ listVoices }) => listVoices(apiKey))
-            .then((voices) => {
-              // Clear and repopulate
-              const selectEl = dropdown.selectEl;
-              const currentValue = this.plugin.settings.voiceId;
-              selectEl.empty();
-
-              if (!currentValue) {
-                const placeholder = selectEl.createEl("option", { text: "Select a voice...", value: "" });
-                placeholder.disabled = true;
-                placeholder.selected = true;
-              }
-
-              for (const v of voices) {
-                const opt = selectEl.createEl("option", { text: v.name, value: v.voice_id });
-                if (v.voice_id === currentValue) opt.selected = true;
-              }
-            })
-            .catch(() => {
-              new Notice("Could not load voices — check your ElevenLabs API key");
-            });
-        }
       });
 
-    new Setting(containerEl)
-      .setName("Playback speed")
-      .setDesc("How fast Hyo reads responses aloud")
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOption("1", "1.0×")
-          .addOption("1.25", "1.25×")
-          .addOption("1.5", "1.5×")
-          .addOption("2", "2.0×")
-          .setValue(String(this.plugin.settings.voicePlaybackSpeed))
-          .onChange(async (value) => {
-            this.plugin.settings.voicePlaybackSpeed = parseFloat(value);
+    // Custom voices: an id from OpenAI's custom voices, with the description
+    // it was made from (OpenAI's guide: keep that description in the
+    // call's instructions so the voice stays in character).
+    for (const c of this.plugin.settings.gptLiveCustomVoices || []) {
+      new Setting(containerEl)
+        .setName(c.name || "Custom voice")
+        .setDesc(`${c.id}${c.description ? ` · ${c.description.slice(0, 120)}${c.description.length > 120 ? "…" : ""}` : ""}`)
+        .addButton((btn) =>
+          btn.setButtonText("Remove").onClick(async () => {
+            const s = this.plugin.settings;
+            s.gptLiveCustomVoices = (s.gptLiveCustomVoices || []).filter((v) => v.id !== c.id);
+            if (s.gptLiveVoice === `${CUSTOM_VOICE_PREFIX}${c.id}`) s.gptLiveVoice = "marin";
             await this.plugin.saveSettings();
-            this.showSaved();
             dispatchSettingsChanged();
+            this.display();
           })
+        );
+    }
+    const draft = { name: "", id: "", description: "" };
+    const customSetting = new Setting(containerEl)
+      .setName("Add a custom voice")
+      .setDesc("Paste a custom voice's id (it starts voice_) and the description it was made from. It joins the list above.")
+      .addText((t) => t.setPlaceholder("Name, e.g. Chad").onChange((v) => (draft.name = v.trim())))
+      .addText((t) => t.setPlaceholder("voice_…").onChange((v) => (draft.id = v.trim())))
+      .addButton((btn) =>
+        btn.setButtonText("Add").onClick(async () => {
+          if (!/^voice_[A-Za-z0-9]+$/.test(draft.id)) {
+            new Notice("That doesn't look like a voice id. It starts with voice_.");
+            return;
+          }
+          const s = this.plugin.settings;
+          const list = (s.gptLiveCustomVoices || []).filter((v) => v.id !== draft.id);
+          list.push({ id: draft.id, name: draft.name || "Custom voice", description: draft.description.trim() });
+          s.gptLiveCustomVoices = list;
+          s.gptLiveVoice = `${CUSTOM_VOICE_PREFIX}${draft.id}`;
+          await this.plugin.saveSettings();
+          dispatchSettingsChanged();
+          this.display();
+        })
       );
+    const descArea = containerEl.createEl("textarea", {
+      attr: { rows: "3", placeholder: "The voice's description, e.g. A natural, relaxed British man in his forties…" },
+    });
+    descArea.addClass("hyo-textarea-full");
+    descArea.addEventListener("input", () => (draft.description = descArea.value));
+    customSetting.settingEl.addClass("hyo-setting-no-border-bottom");
 
-    new Setting(containerEl)
-      .setName("Auto-speak responses")
-      .setDesc("Automatically read responses aloud when voice mode is active")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.voiceAutoSpeak)
-          .onChange(async (value) => {
-            this.plugin.settings.voiceAutoSpeak = value;
+    const aboutNote = this.plugin.settings.voiceAboutYouNote || "";
+    const aboutSetting = new Setting(containerEl)
+      .setName("About you")
+      .setDesc(
+        aboutNote
+          ? `The voice reads your note "${aboutNote.replace(/\.md$/, "")}" fresh at the start of each call.`
+          : "A few lines the voice always knows: your name, what you do, how you like to be spoken to. Or use a note from your vault instead."
+      )
+      .addButton((btn) =>
+        btn.setButtonText(aboutNote ? "Change note" : "Use a note").onClick(() => {
+          new NotePickerModal(this.app, async (notePath) => {
+            this.plugin.settings.voiceAboutYouNote = notePath;
             await this.plugin.saveSettings();
-            this.showSaved();
             dispatchSettingsChanged();
-          })
+            this.display();
+          }).open();
+        })
       );
+    if (aboutNote) {
+      aboutSetting.addButton((btn) =>
+        btn.setButtonText("Write it here instead").onClick(async () => {
+          this.plugin.settings.voiceAboutYouNote = "";
+          await this.plugin.saveSettings();
+          dispatchSettingsChanged();
+          this.display();
+        })
+      );
+    } else {
+      const aboutText = new Setting(containerEl).addTextArea((text) => {
+        text.inputEl.rows = 3;
+        text.inputEl.addClass("hyo-textarea-full");
+        return text
+          .setPlaceholder("I'm Sam. I run a small design studio. Keep it brief and skip the pleasantries.")
+          .setValue(this.plugin.settings.voiceAboutYou || "")
+          .onChange(async (value) => {
+            this.plugin.settings.voiceAboutYou = value;
+            await this.plugin.saveSettings();
+            this.showSavedNear(aboutSetting.nameEl);
+            dispatchSettingsChanged();
+          });
+      });
+      aboutText.infoEl.remove();
+      aboutText.settingEl.addClass("hyo-setting-attached");
+    }
 
+    const personalitySetting = new Setting(containerEl)
+      .setName("Personality")
+      .setDesc("How the voice talks and who it's talking to: its character, your name, anything it should always know about you. A few sentences. Its name comes from the tab's agent file; with no agent it's simply your agent. Everything about your files and work still comes from Claude.")
+      .addTextArea((text) => {
+        text.inputEl.rows = 5;
+        text.inputEl.addClass("hyo-textarea-full");
+        return text
+          .setPlaceholder(DEFAULT_VOICE_PERSONALITY)
+          .setValue(this.plugin.settings.voicePersonality || "")
+          .onChange(async (value) => {
+            this.plugin.settings.voicePersonality = value;
+            await this.plugin.saveSettings();
+            this.showSavedNear(personalitySetting.nameEl);
+            dispatchSettingsChanged();
+          });
+      });
+    personalitySetting.settingEl.addClass("hyo-setting-stacked");
+
+    new Setting(containerEl).setName("Dictation").setHeading();
+    const provider = this.plugin.settings.dictationProvider;
+    new Setting(containerEl)
+      .setName("Dictation service")
+      .setDesc("Who turns your words into text when you hold or tap the mic on your phone. OpenAI uses the key above; ElevenLabs needs a key of its own.")
+      .addDropdown((dropdown) => {
+        for (const p of DICTATION_PROVIDERS) dropdown.addOption(p.id, p.label);
+        dropdown.setValue(provider).onChange(async (value) => {
+          if (!isDictationProvider(value)) return;
+          this.plugin.settings.dictationProvider = value;
+          await this.plugin.saveSettings();
+          dispatchSettingsChanged();
+          this.display();
+        });
+      });
+
+    if (provider === "elevenlabs") {
+      const apiKeySetting = new Setting(containerEl)
+        .setName("ElevenLabs API key")
+        .setDesc("For dictation. Get your API key from elevenlabs.io/app/settings/api-keys")
+        .addText((text) => {
+          text.inputEl.type = "password";
+          text.inputEl.addClass("hyo-input-key");
+          return text
+            .setPlaceholder("xi_...")
+            .setValue(this.plugin.settings.elevenLabsApiKey)
+            .onChange(async (value) => {
+              this.plugin.settings.elevenLabsApiKey = value.trim();
+              await this.plugin.saveSettings();
+              this.showSavedNear(apiKeySetting.nameEl);
+              dispatchSettingsChanged();
+            });
+        });
+    }
   }
 
   // ---- Advanced: paths and caps ----------------------------------------------
