@@ -3,17 +3,20 @@ import { renderToolBlock, useShowAllToolCalls } from "./ToolCallRun";
 import { PermissionRequest } from "./PermissionRequest";
 import { AskQuestion } from "./AskQuestion";
 import { PlanReview } from "./PlanReview";
+import type { App } from "obsidian";
 import { MarkdownBlock } from "./MarkdownBlock";
 import type { Message } from "../hooks/useChatEngine";
 import { HIDDEN_TOOLS } from "../hooks/useChatEngine";
 
 interface StreamingMessageProps {
+  app: App;
   message: Message;
   onPermissionResponse: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
   onQuestionAnswer: (questionId: string, answers: Record<string, string>) => void;
 }
 
 export function StreamingMessage({
+  app,
   message,
   onPermissionResponse,
   onQuestionAnswer,
@@ -71,7 +74,7 @@ export function StreamingMessage({
             const isLast = !blocks.slice(i + 1).some((b) => b.type === "text" && !b.isSkillOutput && !skillTurnIndices.has(b.turnIndex));
             return (
               <span key={i}>
-                <MarkdownBlock content={block.content || ""} />
+                <MarkdownBlock app={app} content={block.content || ""} />
                 {isLast && <span className="hyo-streaming-cursor" />}
               </span>
             );
@@ -102,6 +105,7 @@ export function StreamingMessage({
 
         {message.planReview && !message.planReview.resolved && (
           <PlanReview
+            app={app}
             review={message.planReview}
             onRespond={onPermissionResponse}
           />

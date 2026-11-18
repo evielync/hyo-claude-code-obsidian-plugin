@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from "react";
+import type { App } from "obsidian";
 import { renderToolBlock, useShowAllToolCalls } from "../../components/ToolCallRun";
 import { AskQuestion } from "./AskQuestion";
 import { PlanReview } from "./PlanReview";
@@ -13,6 +14,7 @@ import { ClaudeUpdateCard, type ClaudeUpdateRunner } from "../../components/Clau
 import { QueuedNote } from "../../components/QueuedNote";
 
 interface ChatMessageProps {
+  app: App;
   message: Message;
   onRecover?: () => void;
   onClaudeUpdate?: ClaudeUpdateRunner;
@@ -22,7 +24,7 @@ interface ChatMessageProps {
   onSendNow?: (qid: string) => void;
 }
 
-export function ChatMessage({ message, onRecover, onClaudeUpdate, onPermissionResponse, onQuestionAnswer, onSendNow }: ChatMessageProps) {
+export function ChatMessage({ app, message, onRecover, onClaudeUpdate, onPermissionResponse, onQuestionAnswer, onSendNow }: ChatMessageProps) {
   if (message.isCompaction) {
     return <CompactionMessage message={message} />;
   }
@@ -35,6 +37,7 @@ export function ChatMessage({ message, onRecover, onClaudeUpdate, onPermissionRe
   if (message.role === "assistant") {
     return (
       <AssistantMessage
+        app={app}
         message={message}
         onRecover={onRecover}
         onClaudeUpdate={onClaudeUpdate}
@@ -98,7 +101,7 @@ function CopyButton({ getText }: { getText: () => string }) {
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      window.setTimeout(() => setCopied(false), 1500);
     } catch {
       // Clipboard not available
     }
@@ -108,7 +111,7 @@ function CopyButton({ getText }: { getText: () => string }) {
     <button
       className="hyo-copy-btn"
       title="Copy message"
-      onClick={handleCopy}
+      onClick={() => void handleCopy()}
     >
       {copied ? (
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -141,7 +144,8 @@ function isThinkingBlockErrorContent(text: string): boolean {
   return THINKING_BLOCK_ERROR_RE.test(text);
 }
 
-function AssistantMessage({ message, onRecover, onClaudeUpdate, onPermissionResponse, onQuestionAnswer }: {
+function AssistantMessage({ app, message, onRecover, onClaudeUpdate, onPermissionResponse, onQuestionAnswer }: {
+  app: App;
   message: Message;
   onRecover?: () => void;
   onClaudeUpdate?: ClaudeUpdateRunner;
@@ -200,7 +204,7 @@ function AssistantMessage({ message, onRecover, onClaudeUpdate, onPermissionResp
     return (
       <div className={wrapClass}>
         <div className="hyo-message-content">
-          <MarkdownBlock content={transformScreenBlocks(message.content)} />
+          <MarkdownBlock app={app} content={transformScreenBlocks(message.content)} />
         </div>
         {showRecover && onRecover && <RecoverBanner onRecover={onRecover} />}
         {updateCard}
@@ -227,7 +231,7 @@ function AssistantMessage({ message, onRecover, onClaudeUpdate, onPermissionResp
           }
           if (block.type === "text") {
             if (block.isSkillOutput || skillTurnIndices.has(block.turnIndex)) return null;
-            return <MarkdownBlock key={i} content={transformScreenBlocks(block.content || "")} />;
+            return <MarkdownBlock key={i} app={app} content={transformScreenBlocks(block.content || "")} />;
           }
           if (block.type === "tool") {
             return renderToolBlock(blocks, i, toolCalls, HIDDEN_TOOLS, showAllTools,
@@ -245,12 +249,14 @@ function AssistantMessage({ message, onRecover, onClaudeUpdate, onPermissionResp
 
         {message.planReview && !message.planReview.resolved && onPermissionResponse && (
           <PlanReview
+            app={app}
             review={message.planReview}
             onRespond={onPermissionResponse}
           />
         )}
         {message.planReview?.resolved && (
           <PlanReview
+            app={app}
             review={message.planReview}
             onRespond={() => {}}
           />

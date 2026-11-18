@@ -59,7 +59,7 @@ export function ClaudeUpdateCard({ required, onUpdate, banner, onDismiss, update
         console.error("[hyo] Claude update failed:", r.error);
         setError("fail");
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       setPhase(null);
       console.error("[hyo] Claude update failed:", e);
       setError("fail");
@@ -96,7 +96,7 @@ export function ClaudeUpdateCard({ required, onUpdate, banner, onDismiss, update
       </div>
       {!done && <div className="hyo-claude-update-text">{body}</div>}
       {canRun && !done && (
-        <button className="mod-cta hyo-claude-update-button" onClick={run} disabled={busy}>
+        <button className="mod-cta hyo-claude-update-button" onClick={() => void run()} disabled={busy}>
           {busy ? "Updating…" : "Update Claude"}
         </button>
       )}

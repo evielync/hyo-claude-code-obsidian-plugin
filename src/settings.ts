@@ -1,9 +1,9 @@
 import { App, FuzzySuggestModal, Modal, Notice, PluginSettingTab, Setting, Platform, TFile, setIcon } from "obsidian";
 import { MAIN_CHAT_AVAILABLE } from "./main-chat";
-// Node built-ins are desktop-only; deferred so this module loads on mobile.
-const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
-const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
-const os: typeof import("os") = Platform.isMobile ? (undefined as any) : require("os");
+// Node built-ins and Electron are desktop-only, loaded where they're used.
+import { electron, nodeFs, nodeOs, nodePath, type ElectronApi } from "./platform/node";
+import { vaultBasePath } from "./obsidian-internals";
+import { errorMessage } from "./json-guards";
 import type HyoPlugin from "./main";
 import { CUSTOM_VOICE_PREFIX, resolveLiveVoice, type CustomLiveVoice } from "./voice/live-voice";
 export { CUSTOM_VOICE_PREFIX, resolveLiveVoice, type CustomLiveVoice };
@@ -160,10 +160,35 @@ export function dispatchSettingsChanged(): void {
   window.dispatchEvent(new CustomEvent("hyo-settings-changed"));
 }
 
+/**
+ * Electron's file dialog, where this Obsidian still exposes it (`remote` went
+ * away in later Electron versions). Undefined means Browse can't open a
+ * dialog here and the path has to be typed in.
+ */
+function fileDialog(): NonNullable<ElectronApi["remote"]>["dialog"] | undefined {
+  return electron().remote?.dialog;
+}
+
+const NO_FILE_DIALOG = "This version of Obsidian can't open a file browser here. Type the path into the box instead.";
+
+// The colour a status line shows in, as a class (see styles.css).
+type StatusKind = "ok" | "warn" | "bad" | "muted";
+const STATUS_CLASSES: Record<StatusKind, string> = {
+  ok: "is-ok",
+  warn: "is-warn",
+  bad: "is-bad",
+  muted: "is-muted",
+};
+
+function setStatusKind(el: HTMLElement, kind: StatusKind): void {
+  el.addClass("hyo-status-text");
+  for (const [k, cls] of Object.entries(STATUS_CLASSES)) el.toggleClass(cls, k === kind);
+}
+
 export class HyoSettingTab extends PluginSettingTab {
   plugin: HyoPlugin;
   private savedIndicator: HTMLElement | null = null;
-  private savedTimeout: ReturnType<typeof setTimeout> | null = null;
+  private savedTimeout: number | null = null;
   // Which settings tab is showing. Survives re-renders (display() is called
   // after most edits) so adding a command doesn't bounce you back to General.
   private activeTab = "general";
@@ -179,9 +204,9 @@ export class HyoSettingTab extends PluginSettingTab {
 
   private showSaved(): void {
     if (this.savedIndicator) {
-      if (this.savedTimeout) clearTimeout(this.savedTimeout);
+      if (this.savedTimeout) window.clearTimeout(this.savedTimeout);
       this.savedIndicator.addClass("is-visible");
-      this.savedTimeout = setTimeout(() => {
+      this.savedTimeout = window.setTimeout(() => {
         if (this.savedIndicator) this.savedIndicator.removeClass("is-visible");
       }, 1500);
     }
@@ -195,8 +220,8 @@ export class HyoSettingTab extends PluginSettingTab {
       cls: "hyo-setting-saved",
       text: "✓ Saved",
     });
-    setTimeout(() => badge.addClass("is-fading"), 1200);
-    setTimeout(() => badge.remove(), 1800);
+    window.setTimeout(() => badge.addClass("is-fading"), 1200);
+    window.setTimeout(() => badge.remove(), 1800);
   }
 
   display(): void {
@@ -205,11 +230,7 @@ export class HyoSettingTab extends PluginSettingTab {
 
     // One row: links and the saved indicator on the same baseline. The tab
     // itself carries the plugin name, so there's no title here.
-    const header = containerEl.createEl("div", {
-      attr: {
-        style: "display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 20px;",
-      },
-    });
+    const header = containerEl.createDiv({ cls: "hyo-settings-header" });
     header.createEl("a", {
       text: "Read the docs →",
       href: "https://docs.gethyo.co",
@@ -220,7 +241,7 @@ export class HyoSettingTab extends PluginSettingTab {
       href: "https://www.loom.com/share/349eaac59e514142bc47b10469287db0",
       attr: { target: "_blank", rel: "noopener" },
     });
-    this.savedIndicator = header.createEl("span", {
+    this.savedIndicator = header.createSpan({
       text: "Saved",
       cls: "hyo-settings-saved",
     });
@@ -243,25 +264,10 @@ export class HyoSettingTab extends PluginSettingTab {
         ];
     if (!tabs.some((t) => t.id === this.activeTab)) this.activeTab = "general";
 
-    const bar = containerEl.createEl("div", {
-      attr: {
-        style:
-          "display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--background-modifier-border);",
-      },
-    });
+    const bar = containerEl.createDiv({ cls: "hyo-settings-tabs" });
     for (const tab of tabs) {
-      const active = tab.id === this.activeTab;
-      const btn = bar.createEl("div", {
-        text: tab.label,
-        attr: {
-          style:
-            `padding: 8px 14px; cursor: pointer; font-size: 0.95em; border-bottom: 2px solid ${
-              active ? "var(--interactive-accent)" : "transparent"
-            }; color: ${active ? "var(--text-normal)" : "var(--text-muted)"}; font-weight: ${
-              active ? "600" : "400"
-            };`,
-        },
-      });
+      const btn = bar.createDiv({ text: tab.label, cls: "hyo-settings-tab" });
+      btn.toggleClass("is-active", tab.id === this.activeTab);
       btn.addEventListener("click", () => {
         this.activeTab = tab.id;
         this.display();
@@ -436,7 +442,8 @@ export class HyoSettingTab extends PluginSettingTab {
     let agentFiles: string[] = [];
     if (!Platform.isMobile) {
       try {
-        const agentDir = path.join(os.homedir(), ".claude", "agents");
+        const fs = nodeFs();
+        const agentDir = nodePath().join(nodeOs().homedir(), ".claude", "agents");
         if (fs.existsSync(agentDir)) {
           agentFiles = fs
             .readdirSync(agentDir)
@@ -444,7 +451,9 @@ export class HyoSettingTab extends PluginSettingTab {
             .map((f) => f.replace(/\.md$/, "").toLowerCase())
             .sort();
         }
-      } catch {}
+      } catch {
+        // An unreadable agents folder just means there's no agent to offer.
+      }
     }
 
     if (agentFiles.length > 0) {
@@ -458,9 +467,7 @@ export class HyoSettingTab extends PluginSettingTab {
           dropdown.onChange(async (value) => {
             this.plugin.settings.defaultAgent = value;
             await this.plugin.saveSettings();
-            this.showSavedNear(
-              agentSetting.nameEl as HTMLElement
-            );
+            this.showSavedNear(agentSetting.nameEl);
           });
         });
     }
@@ -507,7 +514,7 @@ export class HyoSettingTab extends PluginSettingTab {
         engine === "gpt-live"
           ? "GPT-Live is a real back-and-forth call. The voice talks with you and hands anything that needs your files or real work to Claude, then tells you what came back. Paste an OpenAI API key and pick a voice."
           : "Connect ElevenLabs to enable voice mode — speak to Claude and hear responses read aloud.",
-      attr: { style: "margin: 0 0 16px; color: var(--text-muted); font-size: 0.9em;" },
+      cls: "hyo-settings-intro",
     });
 
     new Setting(containerEl)
@@ -539,7 +546,7 @@ export class HyoSettingTab extends PluginSettingTab {
             .onChange(async (value) => {
               this.plugin.settings.openAiApiKey = value.trim();
               await this.plugin.saveSettings();
-              this.showSavedNear(openAiSetting.nameEl as HTMLElement);
+              this.showSavedNear(openAiSetting.nameEl);
               dispatchSettingsChanged();
             });
         });
@@ -559,7 +566,7 @@ export class HyoSettingTab extends PluginSettingTab {
             .onChange(async (value) => {
               this.plugin.settings.gptLiveVoice = value;
               await this.plugin.saveSettings();
-              this.showSavedNear(liveVoiceSetting.nameEl as HTMLElement);
+              this.showSavedNear(liveVoiceSetting.nameEl);
               dispatchSettingsChanged();
             });
         })
@@ -640,8 +647,8 @@ export class HyoSettingTab extends PluginSettingTab {
         )
         .addButton((btn) =>
           btn.setButtonText(aboutNote ? "Change note" : "Use a note").onClick(() => {
-            new NotePickerModal(this.app, async (path) => {
-              this.plugin.settings.voiceAboutYouNote = path;
+            new NotePickerModal(this.app, async (notePath) => {
+              this.plugin.settings.voiceAboutYouNote = notePath;
               await this.plugin.saveSettings();
               dispatchSettingsChanged();
               this.display();
@@ -667,7 +674,7 @@ export class HyoSettingTab extends PluginSettingTab {
             .onChange(async (value) => {
               this.plugin.settings.voiceAboutYou = value;
               await this.plugin.saveSettings();
-              this.showSavedNear(aboutSetting.nameEl as HTMLElement);
+              this.showSavedNear(aboutSetting.nameEl);
               dispatchSettingsChanged();
             });
         });
@@ -687,7 +694,7 @@ export class HyoSettingTab extends PluginSettingTab {
             .onChange(async (value) => {
               this.plugin.settings.voicePersonality = value;
               await this.plugin.saveSettings();
-              this.showSavedNear(personalitySetting.nameEl as HTMLElement);
+              this.showSavedNear(personalitySetting.nameEl);
               dispatchSettingsChanged();
             });
         });
@@ -707,7 +714,7 @@ export class HyoSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.elevenLabsApiKey = value.trim();
             await this.plugin.saveSettings();
-            this.showSavedNear(apiKeySetting.nameEl as HTMLElement);
+            this.showSavedNear(apiKeySetting.nameEl);
             dispatchSettingsChanged();
           });
       });
@@ -732,15 +739,16 @@ export class HyoSettingTab extends PluginSettingTab {
           this.plugin.settings.voiceId = value;
           this.plugin.settings.voiceName = selectedOption?.text || "";
           await this.plugin.saveSettings();
-          this.showSavedNear(voiceSetting.nameEl as HTMLElement);
+          this.showSavedNear(voiceSetting.nameEl);
           dispatchSettingsChanged();
         });
 
         // Async-load voices from ElevenLabs when API key exists
         const apiKey = this.plugin.settings.elevenLabsApiKey;
         if (apiKey) {
-          import("./voice/elevenlabs-api").then(({ listVoices }) =>
-            listVoices(apiKey).then((voices) => {
+          import("./voice/elevenlabs-api")
+            .then(({ listVoices }) => listVoices(apiKey))
+            .then((voices) => {
               // Clear and repopulate
               const selectEl = dropdown.selectEl;
               const currentValue = this.plugin.settings.voiceId;
@@ -756,10 +764,10 @@ export class HyoSettingTab extends PluginSettingTab {
                 const opt = selectEl.createEl("option", { text: v.name, value: v.voice_id });
                 if (v.voice_id === currentValue) opt.selected = true;
               }
-            }).catch(() => {
-              new Notice("Could not load voices — check your ElevenLabs API key");
             })
-          );
+            .catch(() => {
+              new Notice("Could not load voices — check your ElevenLabs API key");
+            });
         }
       });
 
@@ -801,7 +809,7 @@ export class HyoSettingTab extends PluginSettingTab {
   private renderAdvanced(containerEl: HTMLElement): void {
     containerEl.createEl("p", {
       text: "You shouldn't need these unless something isn't working or your setup is unusual.",
-      attr: { style: "margin: 0 0 16px; color: var(--text-muted); font-size: 0.9em;" },
+      cls: "hyo-settings-intro",
     });
 
     // Working directory
@@ -817,18 +825,20 @@ export class HyoSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.workingDirectory = value;
             await this.plugin.saveSettings();
-            this.showSavedNear(workingDirSetting.nameEl as HTMLElement);
+            this.showSavedNear(workingDirSetting.nameEl);
           })
       );
 
     workingDirSetting.addButton((button) =>
       button.setButtonText("Browse...").onClick(async () => {
-        // @ts-ignore
-        // @ts-ignore
-        const { dialog } = require("electron").remote;
+        const dialog = fileDialog();
+        if (!dialog) {
+          new Notice(NO_FILE_DIALOG);
+          return;
+        }
         const result = await dialog.showOpenDialog({
           properties: ["openDirectory"],
-          defaultPath: this.plugin.settings.workingDirectory || os.homedir(),
+          defaultPath: this.plugin.settings.workingDirectory || nodeOs().homedir(),
         });
         if (!result.canceled && result.filePaths.length > 0) {
           this.plugin.settings.workingDirectory = result.filePaths[0];
@@ -853,14 +863,14 @@ export class HyoSettingTab extends PluginSettingTab {
             if (!isNaN(n) && n >= 1024) {
               this.plugin.settings.maxOutputTokens = n;
               await this.plugin.saveSettings();
-              this.showSavedNear(maxTokensSetting.nameEl as HTMLElement);
+              this.showSavedNear(maxTokensSetting.nameEl);
             }
           })
       );
 
     containerEl.createEl("p", {
       text: "Claude Code setup — installing, signing in and the CLI path — has moved to the Setup tab.",
-      attr: { style: "margin: 16px 0 0; color: var(--text-muted); font-size: 0.85em;" },
+      cls: "hyo-settings-footnote",
     });
   }
 
@@ -873,31 +883,23 @@ export class HyoSettingTab extends PluginSettingTab {
     if (Platform.isMobile) {
       containerEl.createEl("p", {
         text: "Claude runs on your desktop. Set it up there, then connect this phone from the Mobile tab.",
-        attr: { style: "margin: 0; color: var(--text-muted);" },
+        cls: "hyo-settings-note",
       });
       return;
     }
 
     containerEl.createEl("p", {
       text: "Hyo runs on Claude Code. This checks it's installed and signed in — and sets it up for you if not.",
-      attr: { style: "margin: 0 0 16px; color: var(--text-muted); font-size: 0.9em;" },
+      cls: "hyo-settings-intro",
     });
 
     const statusSetting = new Setting(containerEl)
       .setName("Claude Code")
       .setDesc("Whether Claude is installed, working and signed in on this machine.");
-    const statusEl = statusSetting.descEl.createEl("div", {
-      attr: { style: "margin-top: 4px; font-size: 0.95em;" },
-    });
-    const setStatus = (kind: "ok" | "warn" | "bad" | "muted", detail: string) => {
+    const statusEl = statusSetting.descEl.createDiv({ cls: "hyo-setup-status" });
+    const setStatus = (kind: StatusKind, detail: string) => {
       statusEl.setText(detail);
-      statusEl.setCssStyles({ color: kind === "ok"
-          ? "var(--color-green)"
-          : kind === "warn"
-          ? "var(--color-orange)"
-          : kind === "bad"
-          ? "var(--color-red)"
-          : "var(--text-muted)" });
+      setStatusKind(statusEl, kind);
     };
 
     // Reflect reality on open: run Claude, check sign-in. No file-existence guess.
@@ -1000,16 +1002,19 @@ export class HyoSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.cliPath = value;
             await this.plugin.saveSettings();
-            this.showSavedNear(cliPathSetting.nameEl as HTMLElement);
+            this.showSavedNear(cliPathSetting.nameEl);
           })
       );
     cliPathSetting.addButton((button) =>
       button.setButtonText("Browse…").onClick(async () => {
-        // @ts-ignore
-        const { dialog } = require("electron").remote;
+        const dialog = fileDialog();
+        if (!dialog) {
+          new Notice(NO_FILE_DIALOG);
+          return;
+        }
         const result = await dialog.showOpenDialog({
           properties: ["openFile"],
-          defaultPath: path.dirname(this.plugin.settings.cliPath || "/usr/local/bin"),
+          defaultPath: nodePath().dirname(this.plugin.settings.cliPath || "/usr/local/bin"),
         });
         if (!result.canceled && result.filePaths.length > 0) {
           this.plugin.settings.cliPath = result.filePaths[0];
@@ -1025,7 +1030,7 @@ export class HyoSettingTab extends PluginSettingTab {
   // drives which commands show.
   private renderCommands(containerEl: HTMLElement): void {
     const intro = containerEl.createEl("p", {
-      attr: { style: "margin: 0 0 16px; color: var(--text-muted); font-size: 0.9em;" },
+      cls: "hyo-settings-intro",
     });
     intro.setText(
       "Attach a skill to a note type in your vault and run one-click commands. For example: a Summarise command on your meeting notes. ",
@@ -1112,10 +1117,7 @@ export class HyoSettingTab extends PluginSettingTab {
     const skills = this.plugin.commands.getSkills();
     const commands = this.plugin.settings.commands[type];
 
-    const back = containerEl.createEl("div", {
-      text: "← All note types",
-      attr: { style: "cursor: pointer; color: var(--text-accent); margin: 0 0 14px; font-size: 0.95em;" },
-    });
+    const back = containerEl.createDiv({ text: "← All note types", cls: "hyo-commands-back" });
     back.addEventListener("click", () => {
       this.commandsDetailType = null;
       this.display();
@@ -1139,21 +1141,16 @@ export class HyoSettingTab extends PluginSettingTab {
     if (commands.length === 0) {
       containerEl.createEl("p", {
         text: "No commands yet — add one above.",
-        attr: { style: "color: var(--text-muted); font-size: 0.9em; margin: 8px 0 16px;" },
+        cls: "hyo-commands-empty",
       });
     } else {
       // Column headers, sized exactly like the row controls below so the
       // whole thing reads as one table.
-      const header = containerEl.createEl("div", {
-        attr: {
-          style:
-            "display: flex; gap: 8px; padding: 10px 0 4px; font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);",
-        },
-      });
-      header.createEl("span", { attr: { style: "width: 18px; flex-shrink: 0;" } });
-      header.createEl("span", { text: "Name", attr: { style: "width: 170px; flex-shrink: 0;" } });
-      header.createEl("span", { text: "Skill it runs", attr: { style: "flex: 1;" } });
-      header.createEl("span", { attr: { style: "width: 28px; flex-shrink: 0;" } });
+      const header = containerEl.createDiv({ cls: "hyo-commands-columns" });
+      header.createSpan({ cls: "hyo-commands-col-grip" });
+      header.createSpan({ text: "Name", cls: "hyo-commands-col-name" });
+      header.createSpan({ text: "Skill it runs", cls: "hyo-commands-col-skill" });
+      header.createSpan({ cls: "hyo-commands-col-action" });
     }
 
     commands.forEach((cmd, i) => this.renderCommandRow(containerEl, commands, cmd, i, skills));
@@ -1188,7 +1185,7 @@ export class HyoSettingTab extends PluginSettingTab {
   private renderMobile(containerEl: HTMLElement): void {
     if (Platform.isMobile) {
       const intro = containerEl.createEl("p", {
-        attr: { style: "margin: 0 0 16px; color: var(--text-muted); font-size: 0.9em;" },
+        cls: "hyo-settings-intro",
       });
       intro.setText(
         "Hyo on your phone talks to Claude running on your Mac. Set up your Mac first — this side mostly takes care of itself. ",
@@ -1199,20 +1196,17 @@ export class HyoSettingTab extends PluginSettingTab {
         attr: { target: "_blank", rel: "noopener" },
       });
     } else {
-      const mutedStyle = "margin: 0 0 12px; color: var(--text-muted); font-size: 0.9em;";
       containerEl.createEl("p", {
         text: "Set up Hyo to work on your mobile devices, so you can talk to your agent from anywhere. This involves setting up a mobile gateway on your desktop that the mobile can connect to.",
-        attr: { style: mutedStyle },
+        cls: "hyo-settings-intro-tight",
       });
-      const guide = containerEl.createEl("p", { attr: { style: mutedStyle } });
+      const guide = containerEl.createEl("p", { cls: "hyo-settings-intro-tight" });
       guide.createEl("a", {
         text: "Read the setup guide to get started →",
         href: "https://docs.gethyo.co/mobile/setup/",
         attr: { target: "_blank", rel: "noopener" },
       });
-      const steps = containerEl.createEl("ol", {
-        attr: { style: "margin: 0 0 16px; padding-left: 20px; color: var(--text-muted); font-size: 0.9em;" },
-      });
+      const steps = containerEl.createEl("ol", { cls: "hyo-settings-steps" });
       steps.createEl("li", {
         text: "Download Tailscale on your desktop and mobile device first (it won't work without Tailscale).",
       });
@@ -1234,7 +1228,7 @@ export class HyoSettingTab extends PluginSettingTab {
             .onChange(async (value) => {
               this.plugin.settings.gatewayUrl = value.trim();
               await this.plugin.saveSettings();
-              this.showSavedNear(gwSetting.nameEl as HTMLElement);
+              this.showSavedNear(gwSetting.nameEl);
             })
         );
     } else {
@@ -1254,7 +1248,7 @@ export class HyoSettingTab extends PluginSettingTab {
               else this.plugin.stopMobileHost();
               // The gateway comes up (or down) asynchronously — re-render once
               // it has had a moment, so the status below tells the truth.
-              setTimeout(() => {
+              window.setTimeout(() => {
                 if (this.activeTab === "mobile") this.display();
               }, 2500);
             })
@@ -1274,7 +1268,7 @@ export class HyoSettingTab extends PluginSettingTab {
                 ? `On · ${s.clients} device${s.clients === 1 ? "" : "s"} connected`
                 : "On";
       const statusSetting = new Setting(containerEl).setName("Status").setDesc(statusText);
-      statusSetting.descEl.setCssStyles({ color: s?.state === "on" ? "var(--color-green)" : s?.state === "error" ? "var(--color-red)" : "var(--text-muted)" });
+      setStatusKind(statusSetting.descEl, s?.state === "on" ? "ok" : s?.state === "error" ? "bad" : "muted");
 
       if (s?.state === "on" && s.url) {
         new Setting(containerEl)
@@ -1300,7 +1294,7 @@ export class HyoSettingTab extends PluginSettingTab {
           b.setButtonText("Checking…").setDisabled(true);
           resultsEl.empty();
           try {
-            const vault = (this.app.vault.adapter as any).basePath as string;
+            const vault = vaultBasePath(this.app);
             const checks = await checkMobileAccess(vault, this.plugin.settings.gatewayPort);
             for (const c of checks) {
               const row = resultsEl.createDiv({ cls: "hyo-mobile-check-row" });
@@ -1314,8 +1308,8 @@ export class HyoSettingTab extends PluginSettingTab {
               const foot = resultsEl.createDiv({ cls: "hyo-mobile-check-detail" });
               foot.setText(`Full log: ${mobileLogPath()}`);
             }
-          } catch (e: any) {
-            resultsEl.createDiv({ text: `Check failed: ${e?.message || String(e)}` });
+          } catch (e: unknown) {
+            resultsEl.createDiv({ text: `Check failed: ${errorMessage(e)}` });
           }
           b.setButtonText("Run check").setDisabled(false);
         })
@@ -1373,15 +1367,17 @@ export class HyoSettingTab extends PluginSettingTab {
       row.settingEl.addEventListener("dragleave", () => {
         dropLine.removeClass("is-active");
       });
-      row.settingEl.addEventListener("drop", async (e: DragEvent) => {
+      row.settingEl.addEventListener("drop", (e: DragEvent) => {
         e.preventDefault();
         dropLine.removeClass("is-active");
         const from = parseInt(e.dataTransfer?.getData("text/plain") ?? "", 10);
         if (isNaN(from) || from === i) return;
         const [moved] = commands.splice(from, 1);
         commands.splice(i, 0, moved);
-        await this.plugin.saveSettings();
-        this.display();
+        this.plugin
+          .saveSettings()
+          .then(() => this.display())
+          .catch((err: unknown) => console.error("[hyo] Couldn't save the new command order:", err));
       });
 
       row.addText((text) => {
@@ -1434,7 +1430,7 @@ export class HyoSettingTab extends PluginSettingTab {
 
 /** Pick a note from the vault (Settings → Voice → About you). */
 class NotePickerModal extends FuzzySuggestModal<TFile> {
-  constructor(app: App, private onPick: (path: string) => void) {
+  constructor(app: App, private onPick: (path: string) => void | Promise<void>) {
     super(app);
     this.setPlaceholder("Pick the note the voice should read about you");
   }
@@ -1445,7 +1441,7 @@ class NotePickerModal extends FuzzySuggestModal<TFile> {
     return f.path.replace(/\.md$/, "");
   }
   onChooseItem(f: TFile): void {
-    this.onPick(f.path);
+    Promise.resolve(this.onPick(f.path)).catch((e: unknown) => console.error("[hyo] Couldn't use the chosen note:", e));
   }
 }
 
@@ -1462,15 +1458,13 @@ class ConfirmDeleteModal extends Modal {
 
   onOpen(): void {
     this.contentEl.createEl("p", { text: this.message });
-    const row = this.contentEl.createEl("div", {
-      attr: { style: "display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;" },
-    });
+    const row = this.contentEl.createDiv({ cls: "hyo-confirm-buttons" });
     const cancel = row.createEl("button", { text: "Cancel" });
     cancel.addEventListener("click", () => this.close());
     const del = row.createEl("button", { text: "Delete", cls: "mod-warning" });
-    del.addEventListener("click", async () => {
+    del.addEventListener("click", () => {
       this.close();
-      await this.onConfirm();
+      Promise.resolve(this.onConfirm()).catch((e: unknown) => console.error("[hyo] Couldn't finish removing:", e));
     });
     cancel.focus();
   }

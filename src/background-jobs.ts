@@ -32,13 +32,24 @@ export type JobMap = Record<string, BackgroundJob>;
 
 const DONE = new Set(["completed", "failed", "killed", "stopped", "cancelled", "error"]);
 
+type Fields = Record<string, unknown>;
+
+/** Stream events are parsed JSON: an object with string keys, or nothing we can use. */
+function isFields(v: unknown): v is Fields {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function str(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+
 /**
  * Fold one stream event into the jobs. Returns the new map, or null when the
  * event doesn't change anything (so callers can skip a re-render).
  */
-export function applyJobEvent(jobs: JobMap, event: any, now: number = Date.now()): JobMap | null {
-  if (!event || event.type !== "system") return null;
-  const id = typeof event.task_id === "string" ? event.task_id : "";
+export function applyJobEvent(jobs: JobMap, event: unknown, now: number = Date.now()): JobMap | null {
+  if (!isFields(event) || event.type !== "system") return null;
+  const id = str(event.task_id);
   switch (event.subtype) {
     case "task_started": {
       if (!id) return null;
@@ -49,7 +60,7 @@ export function applyJobEvent(jobs: JobMap, event: any, now: number = Date.now()
           id,
           title: clean(event.description) || prev?.title || "Background job",
           activity: prev?.activity || "",
-          agentType: String(event.subagent_type || prev?.agentType || ""),
+          agentType: str(event.subagent_type) || prev?.agentType || "",
           startedAt: prev?.startedAt || now,
         },
       };
@@ -60,13 +71,13 @@ export function applyJobEvent(jobs: JobMap, event: any, now: number = Date.now()
       const activity = activityWords(event.description);
       if (!prev) {
         // Missed the start (Hyo reconnected mid-job): track it from here.
-        return { ...jobs, [id]: { id, title: activity || "Background job", activity, agentType: String(event.subagent_type || ""), startedAt: now } };
+        return { ...jobs, [id]: { id, title: activity || "Background job", activity, agentType: str(event.subagent_type), startedAt: now } };
       }
       if (!activity || activity === prev.activity) return null;
       return { ...jobs, [id]: { ...prev, activity } };
     }
     case "task_updated": {
-      const status = event.patch?.status;
+      const status = isFields(event.patch) ? event.patch.status : undefined;
       if (!id || !jobs[id] || !DONE.has(String(status))) return null;
       return without(jobs, id);
     }
@@ -75,8 +86,8 @@ export function applyJobEvent(jobs: JobMap, event: any, now: number = Date.now()
       return without(jobs, id);
     }
     case "background_tasks_changed": {
-      const list: any[] = Array.isArray(event.tasks) ? event.tasks : [];
-      const live = new Set(list.map((t) => t?.task_id).filter(Boolean));
+      const list: Fields[] = Array.isArray(event.tasks) ? event.tasks.filter(isFields) : [];
+      const live = new Set(list.map((t) => str(t.task_id)).filter(Boolean));
       let changed = false;
       const next: JobMap = {};
       for (const [k, j] of Object.entries(jobs)) {
@@ -84,8 +95,9 @@ export function applyJobEvent(jobs: JobMap, event: any, now: number = Date.now()
         else changed = true;
       }
       for (const t of list) {
-        if (!t?.task_id || next[t.task_id]) continue;
-        next[t.task_id] = { id: t.task_id, title: clean(t.description) || "Background job", activity: "", agentType: "", startedAt: now };
+        const taskId = str(t.task_id);
+        if (!taskId || next[taskId]) continue;
+        next[taskId] = { id: taskId, title: clean(t.description) || "Background job", activity: "", agentType: "", startedAt: now };
         changed = true;
       }
       return changed ? next : null;
@@ -112,8 +124,8 @@ export function jobLine(job: BackgroundJob): string {
  * Which job a permission prompt comes from, by the request's `agent_id`.
  * Null for the chat's own prompts.
  */
-export function jobAsking(jobs: JobMap | undefined, request: any): BackgroundJob | null {
-  const id = request?.agent_id;
+export function jobAsking(jobs: JobMap | undefined, request: unknown): BackgroundJob | null {
+  const id = isFields(request) ? str(request.agent_id) : "";
   if (!id || !jobs) return null;
   return jobs[id] || null;
 }

@@ -16,15 +16,13 @@ import { MODEL_OPTIONS, claudeUpdateNeeded } from "../models";
 import { ClaudeUpdateCard, type ClaudeUpdateRunner } from "./ClaudeUpdateCard";
 import type { ClaudeSignInRunner } from "./ClaudeSignInCard";
 import type { CodeNeeded } from "../cli-probe";
-import { debug } from "../debug";
 import { CallBar } from "./CallBar";
 import { BackgroundJobs } from "./BackgroundJobs";
 import { SendButton, sendButtonMode } from "./SendButton";
 import { VoiceCallSheet } from "./VoiceCallLine";
-import type { AskQuestionData } from "../hooks/useChatEngine";
 import type { useSessionManager } from "../hooks/useSessionManager";
 import { useVoiceMode } from "../hooks/useVoiceMode";
-import { parseVoiceResponse, lastSentenceBoundary, HANDOFF_NOTE } from "../voice/voice-persona";
+import { parseVoiceResponse, lastSentenceBoundary } from "../voice/voice-persona";
 import { ensureVoiceAssets } from "../voice/voice-assets";
 import { describeStep, attentionLine } from "../voice/voice-words";
 import {
@@ -37,7 +35,7 @@ import {
 } from "../voice/voice-call";
 import { readAgentIdentity } from "../voice/gpt-live";
 import { resolveLiveVoice } from "../voice/live-voice";
-import { useSkills, type Skill } from "../hooks/useSkills";
+import { useSkills } from "../hooks/useSkills";
 import { withBundledSkills } from "../bundled-skills";
 import type HyoPlugin from "../main";
 import {
@@ -46,9 +44,10 @@ import {
   shouldInline,
   writeAttachmentToDisk,
 } from "../attachments";
-import { Platform } from "obsidian";
-// Node built-in; deferred so this module loads on mobile.
-const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
+import { nodePath } from "../platform/node";
+import { audioContextClass, openPluginSettings, vaultBasePath } from "./platform-internals";
+import { cellText } from "./excel-cell";
+import { inputString } from "./tool-input";
 
 interface AttachedFile {
   name: string;
@@ -58,6 +57,12 @@ interface AttachedFile {
   data?: string;          // image files / pdf — base64
   vaultPath?: string;     // vault-relative path (only set for "Attach current file")
 }
+
+/** What goes to Claude: plain text, or content blocks when files ride along. */
+type OutgoingBlock =
+  | { type: "text"; text: string }
+  | { type: "image" | "document"; source: { type: "base64"; media_type: string | undefined; data: string | undefined } };
+type OutgoingContent = string | OutgoingBlock[];
 
 interface ChatPanelProps {
   sessionManager: ReturnType<typeof useSessionManager>;
@@ -87,8 +92,8 @@ interface ChatPanelProps {
 // looking at the screen. Synthesised (no asset to ship).
 function playPermissionChime() {
   try {
-    const Ctx =
-      window.AudioContext || (window as unknown as any).webkitAudioContext;
+    const Ctx = audioContextClass();
+    if (!Ctx) return;
     const ctx = new Ctx();
     const t0 = ctx.currentTime;
     for (const [freq, at] of [
@@ -107,7 +112,11 @@ function playPermissionChime() {
       osc.start(t0 + at);
       osc.stop(t0 + at + 0.2);
     }
-    setTimeout(() => void ctx.close().catch(() => {}), 700);
+    window.setTimeout(() => {
+      ctx.close().catch(() => {
+        // Already closed, or the page is going away: nothing left to free.
+      });
+    }, 700);
   } catch {
     /* audio not available — no-op */
   }
@@ -152,7 +161,6 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     activePermissionMode,
     activeAgent,
     activeVoiceMode,
-    activeTabHasSession,
     activeInputTokens,
     activeContextWindow,
     newTab,
@@ -231,7 +239,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   // that's gone quiet can fall outside it. Read its transcript's last write
   // directly so its time is real.
   const openHints = useMemo(() => {
-    const cwd = resolveWorkingDirectory(plugin.settings.workingDirectory, (app.vault.adapter as any).basePath as string);
+    const cwd = resolveWorkingDirectory(plugin.settings.workingDirectory, vaultBasePath(app));
     const loaded = new Set(pastSessions.map((p) => p.id));
     const hints: Record<string, OpenHint> = {};
     for (const t of tabs) {
@@ -243,7 +251,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   }, [tabs, pastSessions, plugin.settings.workingDirectory, app]);
 
   // Replies finished while nobody was looking (read-state.ts).
-  const unread = useUnread(resolveWorkingDirectory(plugin.settings.workingDirectory, (app.vault.adapter as any).basePath as string));
+  const unread = useUnread(resolveWorkingDirectory(plugin.settings.workingDirectory, vaultBasePath(app)));
   const boardTasks = useMemo(
     () =>
       buildTaskList(tabs, pastSessions, taskMeta, Date.now(), openHints).map((t) =>
@@ -305,13 +313,13 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   const [dragging, setDragging] = useState(false);
 
   // Auto-detect skills from working directory
-  const vaultPath = (app.vault.adapter as any).basePath as string;
+  const vaultPath = vaultBasePath(app);
   const workingDirectory = resolveWorkingDirectory(plugin.settings.workingDirectory, vaultPath);
 
   // Where large file attachments get written. Inside the plugin's own folder
   // so Obsidian keeps it tidy and Claude's Read tool can access absolute paths.
   const attachmentsDir = useMemo(
-    () => path.join(vaultPath, plugin.manifest.dir || "", "attachments"),
+    () => nodePath().join(vaultPath, plugin.manifest.dir || "", "attachments"),
     [vaultPath, plugin.manifest.dir]
   );
 
@@ -346,7 +354,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   // conversation, even after a reopen. The finished records are saved with
   // their new "seen" mark.
   const sendToClaude = useCallback(
-    (content: string | any[], meta?: { displayText?: string; attachedFileNames?: string[]; handoff?: boolean }) => {
+    (content: OutgoingContent, meta?: { displayText?: string; attachedFileNames?: string[]; handoff?: boolean }) => {
       const tabId = activeTabIdRef.current;
       const current = callTabIdRef.current === tabId ? currentCallRef.current() : null;
       const { turns, advanced } = takeUnseenTurns(activeMessagesRef.current, current);
@@ -387,7 +395,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   const vadAssetBase = useMemo(() => {
     try {
       const rel = `${plugin.manifest.dir}/vad-assets`;
-      const url = (app.vault.adapter as any).getResourcePath(rel) as string;
+      const url = app.vault.adapter.getResourcePath(rel);
       return url.split("?")[0].replace(/\/?$/, "/");
     } catch {
       return "";
@@ -467,10 +475,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     return readAgentIdentity(a)?.name || "Agent";
   }, [activeAgent, plugin.settings.defaultAgent]);
   const openVoiceSettings = useCallback(() => {
-    const setting = (app as any).setting;
-    if (!setting) return;
-    setting.open();
-    setting.openTabById?.(plugin.manifest.id);
+    openPluginSettings(app, plugin.manifest.id);
   }, [app, plugin.manifest.id]);
 
   // Claude updates, from the in-message card or the banner. After a good
@@ -730,7 +735,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   // Reset textarea height when switching tabs
   useEffect(() => {
     if (inputRef.current) {
-      inputRef.current.style.removeProperty("height");
+      inputRef.current.setCssProps({ height: "" });
     }
     setSlashMenuOpen(false);
   }, [activeTabId]);
@@ -743,8 +748,10 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
         setAttachPopupOpen(false);
       }
     };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    // The document the panel lives in, which is a popout's when it's popped out.
+    const doc = attachBtnRef.current?.doc ?? activeDocument;
+    doc.addEventListener("mousedown", handler);
+    return () => doc.removeEventListener("mousedown", handler);
   }, [attachPopupOpen]);
 
   // Scroll selected skill into view
@@ -756,14 +763,14 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   }, [slashSelectedIdx]);
 
   const handleModelChange = useCallback(
-    async (model: string) => {
+    (model: string) => {
       setTabModel(model);
     },
     [setTabModel]
   );
 
   const handleEffortChange = useCallback(
-    async (effort: string) => {
+    (effort: string) => {
       setTabEffort(effort);
     },
     [setTabEffort]
@@ -784,7 +791,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   }, [plugin]);
 
   const handleAddCustomModel = useCallback(
-    async (rawId: string) => {
+    (rawId: string) => {
       const id = rawId.trim();
       if (!id) return;
       const isBuiltIn = MODEL_OPTIONS.some((m) => m.id === id);
@@ -794,13 +801,15 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
         setCustomModels(plugin.settings.customModels);
       }
       setTabModel(id);
-      await plugin.saveSettings();
+      plugin.saveSettings().catch((err: unknown) => {
+        console.error("[hyo] Couldn't save the custom model", err);
+      });
     },
     [setTabModel, plugin]
   );
 
   const handlePermissionModeChange = useCallback(
-    async (mode: string) => {
+    (mode: string) => {
       setTabPermissionMode(mode);
     },
     [setTabPermissionMode]
@@ -855,9 +864,8 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
           workbook.eachSheet((sheet) => {
             parts.push(`# Sheet: ${sheet.name}`);
             sheet.eachRow({ includeEmpty: false }, (row) => {
-              const values = (row.values as any[]).slice(1).map((v) =>
-                v === null || v === undefined ? "" : String(v)
-              );
+              const cells = Array.isArray(row.values) ? row.values.slice(1) : Object.values(row.values);
+              const values = cells.map(cellText);
               parts.push(values.join(","));
             });
             parts.push("");
@@ -1004,7 +1012,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
       const el = e.target;
       const val = el.value;
       setInputValues((prev) => ({ ...prev, [activeTabId]: val }));
-      el.style.removeProperty("height");
+      el.setCssProps({ height: "" });
       el.setCssProps({ height: Math.min(el.scrollHeight, 150) + "px" });
 
       // Slash command detection: only when input is exactly /word (no spaces, no newlines)
@@ -1024,7 +1032,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     if (!text && attachedFiles.length === 0) return;
     setInputValues((prev) => ({ ...prev, [activeTabId]: "" }));
     if (inputRef.current) {
-      inputRef.current.style.removeProperty("height");
+      inputRef.current.setCssProps({ height: "" });
     }
     setSlashMenuOpen(false);
     const meta = attachedFiles.length > 0
@@ -1075,7 +1083,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
     setAttachedFilesMap((prev) => ({ ...prev, [activeTabId]: [] }));
 
     if (imageFiles.length > 0 || pdfFiles.length > 0) {
-      const blocks: any[] = [];
+      const blocks: OutgoingBlock[] = [];
       if (messageText) blocks.push({ type: "text", text: messageText });
       for (const img of imageFiles) {
         blocks.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
@@ -1083,7 +1091,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
       for (const pdf of pdfFiles) {
         blocks.push({ type: "document", source: { type: "base64", media_type: pdf.mediaType, data: pdf.data } });
       }
-      sendToClaude(blocks as any, meta);
+      sendToClaude(blocks, meta);
     } else {
       sendToClaude(messageText, meta);
     }
@@ -1152,10 +1160,11 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
       if (b.type === "tool" && b.toolId && !described.current.tools.has(b.toolId)) {
         const t = tools.find((x) => x.id === b.toolId);
         if (!t) return;
-        const ready = t.result !== null || (t.input && Object.keys(t.input).length > 0);
+        const input: unknown = t.input;
+        const ready = t.result !== null || (typeof input === "object" && input !== null && Object.keys(input).length > 0);
         if (!ready) return;
         described.current.tools.add(b.toolId);
-        const label = describeStep(t.name, t.input);
+        const label = describeStep(t.name, input);
         if (label) {
           notifyProgress(label);
           setCallStep(label.charAt(0).toUpperCase() + label.slice(1));
@@ -1202,7 +1211,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
   if (inVoiceView && activeGenerating) {
     const last = activeMessages[activeMessages.length - 1];
     const agentCall = [...(last?.toolCalls || [])].reverse().find((t) => (t.name === "Agent" || t.name === "Task") && t.result === null);
-    const desc = String(agentCall?.input?.description || "").trim();
+    const desc = (inputString(agentCall?.input, "description") || "").trim();
     callWorking = agentCall ? (desc ? `Sub-agent: ${desc}` : "Sub-agent running") : callStep || "Working on it";
   }
 
@@ -1273,6 +1282,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
 
       {showReleaseCard && !isPopup && (
         <ReleaseCard
+          app={app}
           sinceVersion={plugin.settings.lastSeenVersion}
           version={currentVersion}
           onDismiss={dismissReleaseCard}
@@ -1284,18 +1294,19 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
         <ClaudeUpdateCard
           key={updateKey}
           banner
-          required={updateRequired!}
+          required={updateRequired}
           onUpdate={runClaudeUpdate}
           onDismiss={() => setDismissedUpdateKey(updateKey)}
         />
       )}
 
       {showReleaseNotes && (
-        <ReleaseNotes onClose={() => setShowReleaseNotes(false)} />
+        <ReleaseNotes app={app} onClose={() => setShowReleaseNotes(false)} />
       )}
 
       {activeMessages.length > 0 ? (
         <ChatMessages
+          app={app}
           messages={activeMessages}
           scrollRef={scrollRef}
           onPermissionResponse={answerPermission}
@@ -1312,7 +1323,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
                   ...prev,
                   [activeTabId]: result.capturedUserText!,
                 }));
-                setTimeout(() => inputRef.current?.focus(), 50);
+                window.setTimeout(() => inputRef.current?.focus(), 50);
               }
               new Notice(
                 `Session recovered (${result.linesRemoved} corrupt entries removed). Review your message and send.`
@@ -1406,7 +1417,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
                 </button>
                 {attachPopupOpen && (
                   <div className="hyo-attach-popup">
-                    <button className="hyo-attach-popup-item" onClick={handleAttachCurrentFile}>
+                    <button className="hyo-attach-popup-item" onClick={() => void handleAttachCurrentFile()}>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
                         <polyline points="14 2 14 8 20 8" />
@@ -1428,7 +1439,7 @@ export function ChatPanel({ sessionManager, plugin, app, claudeVersion, onUpdate
               <input
                 ref={fileInputRef}
                 type="file"
-                style={{ display: "none" }}
+                className="hyo-file-input-hidden"
                 accept="image/*,.pdf,.docx,.xlsx,.xls,.xlsm,.txt,.md,.json,.csv,.yaml,.yml,.toml,.xml,.html,.css,.js,.ts,.py,.rb,.go,.rs,.sh,.log"
                 multiple
                 onChange={handleFileInputChange}

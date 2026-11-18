@@ -7,8 +7,10 @@
 // its state, and a line saying what it's doing now or what it needs from you.
 
 import type { TabSession } from "./hooks/useSessionManager";
+import type { ToolCallData } from "./hooks/useChatEngine";
 import { deriveTaskState, hasPendingAttention, type TaskState } from "./task-state";
 import { jobList } from "./background-jobs";
+import { isRecord } from "./json-guards";
 
 export type DockTone = 0 | 1 | 2 | 3 | 4;
 
@@ -86,9 +88,9 @@ export function toneFor(id: string): DockTone {
 
 export function statusLine(tab: TabSession, state: TaskState = "idle"): string {
   if (state === "needs-attention") {
-    for (const m of tab.messages as any[]) {
-      if (!m || m.role !== "assistant") continue;
-      const req = m.permissionRequests?.find((r: any) => !r.resolved);
+    for (const m of tab.messages) {
+      if (m.role !== "assistant") continue;
+      const req = m.permissionRequests?.find((r) => !r.resolved);
       if (req) return `Needs your OK: ${stepWords(req.toolName, req.input).toLowerCase()}`;
       if (m.askQuestion) return "Has a question for you";
       if (m.planReview && !m.planReview.resolved) return "Has a plan for you to review";
@@ -108,11 +110,11 @@ export function statusLine(tab: TabSession, state: TaskState = "idle"): string {
 }
 
 /** The newest tool call in the reply being written that hasn't come back yet. */
-function lastRunningTool(tab: TabSession): { name: string; input: any } | null {
+function lastRunningTool(tab: TabSession): ToolCallData | null {
   for (let i = tab.messages.length - 1; i >= 0; i--) {
-    const m: any = tab.messages[i];
-    if (!m || m.role !== "assistant") continue;
-    const calls: any[] = m.toolCalls || [];
+    const m = tab.messages[i];
+    if (m.role !== "assistant") continue;
+    const calls = m.toolCalls || [];
     for (let j = calls.length - 1; j >= 0; j--) {
       if (calls[j] && calls[j].result == null) return calls[j];
     }
@@ -122,9 +124,14 @@ function lastRunningTool(tab: TabSession): { name: string; input: any } | null {
 }
 
 /** A tool call in plain words: "Reading notes.md", "Searching the web". */
-export function stepWords(name: string, input: any): string {
+export function stepWords(name: string, input: unknown): string {
   const file = (p: unknown) => (typeof p === "string" ? p.split(/[\\/]/).pop() || p : "");
-  const i = input || {};
+  // A tool's input is whatever Claude sent; only its string fields are read.
+  const text = (key: string): string => {
+    const v = isRecord(input) ? input[key] : undefined;
+    return typeof v === "string" ? v : "";
+  };
+  const i = { file_path: text("file_path"), description: text("description"), skill: text("skill"), name: text("name") };
   switch (name) {
     case "Read":
       return i.file_path ? `Reading ${file(i.file_path)}` : "Reading a file";
@@ -134,7 +141,7 @@ export function stepWords(name: string, input: any): string {
     case "MultiEdit":
       return i.file_path ? `Editing ${file(i.file_path)}` : "Editing a file";
     case "Bash":
-      return i.description ? String(i.description) : "Running a command";
+      return i.description || "Running a command";
     case "Grep":
     case "Glob":
       return "Searching your files";

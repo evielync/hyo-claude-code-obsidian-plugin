@@ -25,7 +25,7 @@ export function VoiceWaveform({ getWaveform, bars = 28 }: VoiceWaveformProps) {
         // Floor keeps a faint idle line so it never looks dead; ceiling keeps
         // loud peaks inside the strip.
         const v = Math.max(0.06, Math.min(1, values[i] ?? 0));
-        el.setCssStyles({ transform: `scaleY(${v})` });
+        el.setCssProps({ transform: `scaleY(${v})` });
       }
       raf = window.requestAnimationFrame(tick);
     };

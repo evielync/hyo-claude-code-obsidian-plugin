@@ -2,6 +2,7 @@ import React, { useState, useCallback } from "react";
 import { renderToolBlock, useShowAllToolCalls } from "./ToolCallRun";
 import { AskQuestion } from "./AskQuestion";
 import { PlanReview } from "./PlanReview";
+import type { App } from "obsidian";
 import { MarkdownBlock, stripInlineThinkingTags } from "./MarkdownBlock";
 import type { Message } from "../hooks/useChatEngine";
 import { HIDDEN_TOOLS } from "../hooks/useChatEngine";
@@ -12,6 +13,7 @@ import { ClaudeSignInCard, type ClaudeSignInRunner } from "./ClaudeSignInCard";
 import { QueuedNote } from "./QueuedNote";
 
 interface ChatMessageProps {
+  app: App;
   message: Message;
   onRecover?: () => void;
   onPermissionResponse?: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
@@ -26,7 +28,7 @@ interface ChatMessageProps {
   isLast?: boolean;
 }
 
-export function ChatMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, onSendNow, onClaudeUpdate, onClaudeSignIn, isLast }: ChatMessageProps) {
+export function ChatMessage({ app, message, onRecover, onPermissionResponse, onQuestionAnswer, onSendNow, onClaudeUpdate, onClaudeSignIn, isLast }: ChatMessageProps) {
   if (message.isCompaction) {
     return <CompactionMessage message={message} />;
   }
@@ -39,6 +41,7 @@ export function ChatMessage({ message, onRecover, onPermissionResponse, onQuesti
   if (message.role === "assistant") {
     return (
       <AssistantMessage
+        app={app}
         message={message}
         onRecover={onRecover}
         onPermissionResponse={onPermissionResponse}
@@ -104,9 +107,9 @@ function CopyButton({ getText }: { getText: () => string }) {
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      window.setTimeout(() => setCopied(false), 1500);
     } catch {
-      // Clipboard not available
+      // Clipboard not available: the button just doesn't show the tick.
     }
   }, [getText]);
 
@@ -114,7 +117,7 @@ function CopyButton({ getText }: { getText: () => string }) {
     <button
       className="hyo-copy-btn"
       title="Copy message"
-      onClick={handleCopy}
+      onClick={() => void handleCopy()}
     >
       {copied ? (
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -147,7 +150,8 @@ function isThinkingBlockErrorContent(text: string): boolean {
   return THINKING_BLOCK_ERROR_RE.test(text);
 }
 
-function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestionAnswer, onClaudeUpdate, onClaudeSignIn, isLast }: {
+function AssistantMessage({ app, message, onRecover, onPermissionResponse, onQuestionAnswer, onClaudeUpdate, onClaudeSignIn, isLast }: {
+  app: App;
   message: Message;
   onRecover?: () => void;
   onPermissionResponse?: (requestId: string, behavior: "allow" | "allow_always" | "deny") => void;
@@ -191,7 +195,7 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
     (!!updateInfo && !!parseClaudeUpdateError(text)) || (showSignIn && isClaudeAuthError(text));
   const updateCard = showUpdate ? (
     <ClaudeUpdateCard
-      required={updateInfo!.required}
+      required={updateInfo.required}
       onUpdate={onClaudeUpdate}
       updated={message.claudeUpdate?.status === "done"}
     />
@@ -218,7 +222,7 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
     return (
       <div className={wrapClass}>
         <div className="hyo-message-content">
-          {!isUpdateError(message.content) && <MarkdownBlock content={message.content} />}
+          {!isUpdateError(message.content) && <MarkdownBlock app={app} content={message.content} />}
           {updateCard}
         </div>
         {showRecover && onRecover && <RecoverBanner onRecover={onRecover} />}
@@ -250,7 +254,7 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
           if (block.type === "text") {
             if (block.isSkillOutput || skillTurnIndices.has(block.turnIndex)) return null;
             if (isUpdateError(block.content || "")) return null;
-            return <MarkdownBlock key={i} content={block.content || ""} />;
+            return <MarkdownBlock key={i} app={app} content={block.content || ""} />;
           }
           if (block.type === "tool") {
             return renderToolBlock(blocks, i, toolCalls, HIDDEN_TOOLS, showAllTools,
@@ -270,12 +274,14 @@ function AssistantMessage({ message, onRecover, onPermissionResponse, onQuestion
 
         {message.planReview && !message.planReview.resolved && onPermissionResponse && (
           <PlanReview
+            app={app}
             review={message.planReview}
             onRespond={onPermissionResponse}
           />
         )}
         {message.planReview?.resolved && (
           <PlanReview
+            app={app}
             review={message.planReview}
             onRespond={() => {}}
           />

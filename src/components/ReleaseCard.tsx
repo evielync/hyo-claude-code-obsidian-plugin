@@ -1,8 +1,10 @@
 import React from "react";
+import type { App } from "obsidian";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { sectionsSince } from "../changelog";
 
 interface ReleaseCardProps {
+  app: App;
   /** Version whose card was last acknowledged. */
   sinceVersion: string;
   /** Version now installed. */
@@ -23,6 +25,7 @@ interface ReleaseCardProps {
  * to find out what landed in both.
  */
 export function ReleaseCard({
+  app,
   sinceVersion,
   version,
   onDismiss,
@@ -73,7 +76,7 @@ export function ReleaseCard({
                 )}
               </div>
             )}
-            {section.body && <MarkdownBlock content={section.body} />}
+            {section.body && <MarkdownBlock app={app} content={section.body} />}
           </div>
         ))}
       </div>

@@ -112,15 +112,11 @@ export function HyoStatusBar({
         setPopup(null);
       }
     };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    // The document the bar lives in, which is a popout's when it's popped out.
+    const doc = statusBarRef.current?.doc ?? activeDocument;
+    doc.addEventListener("mousedown", handler);
+    return () => doc.removeEventListener("mousedown", handler);
   }, [popup]);
-
-  const togglePopup = useCallback((name: string) => {
-    setPopup((prev) => (prev === name ? null : name));
-  }, []);
-
-  const closePopup = useCallback(() => setPopup(null), []);
 
   const selectModel = useCallback(
     (id: string) => {
@@ -249,7 +245,7 @@ export function HyoStatusBar({
         />
       )}
 
-      <span style={{ flex: 1 }} />
+      <span className="hyo-status-spacer" />
 
 
       {agents.length > 1 && (
@@ -291,7 +287,7 @@ export function HyoStatusBar({
       </button>
 
       {popup === "usage" && (
-        <div className="hyo-usage-popup" style={{ position: "fixed", bottom: popupBottom, left: 12 }}>
+        <div className="hyo-usage-popup hyo-status-popup hyo-status-popup-left" style={{ bottom: popupBottom }}>
           <div className="hyo-usage-popup-title">USAGE</div>
           <div className="hyo-usage-divider" />
           <div className="hyo-usage-row">
@@ -382,7 +378,7 @@ export function HyoStatusBar({
               ⚠ Waiting for credentials — start a conversation or click Refresh.
             </div>
           )}
-          <button className="hyo-usage-refresh-btn" onClick={refresh}>
+          <button className="hyo-usage-refresh-btn" onClick={() => void refresh()}>
             Refresh · Last updated{" "}
             {lastUpdated ? formatTimeAgo(lastUpdated) : "never"}
           </button>
@@ -390,7 +386,7 @@ export function HyoStatusBar({
       )}
 
       {popup === "model" && (
-        <div className="hyo-model-popup" style={{ position: "fixed", bottom: popupBottom, right: 12 }}>
+        <div className="hyo-model-popup hyo-status-popup hyo-status-popup-right" style={{ bottom: popupBottom }}>
           {allModelOpts.map((opt) => (
             <div
               key={opt.id}
@@ -437,7 +433,7 @@ export function HyoStatusBar({
       )}
 
       {popup === "effort" && (
-        <div className="hyo-model-popup hyo-effort-popup" style={{ position: "fixed", bottom: popupBottom, right: 12 }}>
+        <div className="hyo-model-popup hyo-effort-popup hyo-status-popup hyo-status-popup-right" style={{ bottom: popupBottom }}>
           <div className="hyo-effort-popup-header">
             Higher effort means more thorough responses, but takes longer and
             uses your limits faster.
@@ -473,8 +469,8 @@ export function HyoStatusBar({
 
       {popup === "agent" && (
         <div
-          className="hyo-agent-popup"
-          style={{ position: "fixed", bottom: popupBottom, right: 120 }}
+          className="hyo-agent-popup hyo-status-popup hyo-status-popup-agent"
+          style={{ bottom: popupBottom }}
         >
           {agents.map((a) => (
             <div
@@ -501,7 +497,7 @@ export function HyoStatusBar({
       )}
 
       {popup === "permission" && (
-        <div className="hyo-perm-popup" style={{ position: "fixed", bottom: popupBottom, right: 60 }}>
+        <div className="hyo-perm-popup hyo-status-popup hyo-status-popup-perm" style={{ bottom: popupBottom }}>
           {PERMISSION_MODES.map((opt) => (
             <div
               key={opt.id}
@@ -548,7 +544,7 @@ function ContextRing({ pct, barClass, inputTokens, contextLimit, open, popupBott
         title={`Context: ${formatTokens(inputTokens)} / ${formatTokens(contextLimit)}`}
         onClick={onToggle}
       >
-        <svg width="16" height="16" viewBox="0 0 16 16" style={{ display: "block" }}>
+        <svg className="hyo-context-ring-svg" width="16" height="16" viewBox="0 0 16 16">
           <circle cx="8" cy="8" r={r} fill="none" stroke="var(--background-modifier-border)" strokeWidth="2" />
           <circle
             cx="8" cy="8" r={r}
@@ -562,7 +558,7 @@ function ContextRing({ pct, barClass, inputTokens, contextLimit, open, popupBott
         </svg>
       </button>
       {open && (
-        <div className="hyo-context-popup" style={{ position: "fixed", bottom: popupBottom, left: 12 }}>
+        <div className="hyo-context-popup hyo-status-popup hyo-status-popup-left" style={{ bottom: popupBottom }}>
           <div className="hyo-usage-popup-title">CONTEXT WINDOW</div>
           <div className="hyo-usage-divider" />
           <div className="hyo-usage-row">

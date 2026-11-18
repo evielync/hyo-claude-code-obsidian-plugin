@@ -1,13 +1,11 @@
 import { resolveLiveVoice } from "./voice/live-voice";
 import { aboutYouFromNote } from "./voice/voice-call";
 import { Plugin, WorkspaceLeaf, Platform, Notice, TFile } from "obsidian";
-
-// Node built-ins are desktop-only. Deferred behind a Platform check so this
-// module loads on mobile (where `require` of a Node built-in throws). Every
-// use site below is already guarded by `!Platform.isMobile`.
-const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
-const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
-const os: typeof import("os") = Platform.isMobile ? (undefined as any) : require("os");
+// Node built-ins are desktop-only, so they're loaded where they're used, and
+// every use site is guarded by `!Platform.isMobile` (see platform/node.ts).
+import { nodeFs, nodeOs, nodePath } from "./platform/node";
+import { openPluginSettings, vaultAppId, vaultBasePath } from "./obsidian-internals";
+import { errorMessage, isRecord } from "./json-guards";
 import { HyoView, VIEW_TYPE_HYO } from "./HyoView";
 import { HyoSettingTab, HyoSettings, DEFAULT_SETTINGS, dispatchSettingsChanged } from "./settings";
 import { cleanupOldAttachments } from "./attachments";
@@ -17,7 +15,7 @@ import { startGatewayHost, stopGatewayHost, GatewayStatus } from "./gateway-host
 import { setSessionOwnerFactory, shutdownSessionOwners, fileLock, onTurnEnded } from "./session-owner";
 import { ReadState, setReadStateFactory, readState, UNREAD_FILE } from "./read-state";
 import { ClaudeTransport } from "./claude-transport";
-import { OpenConversationsStore, setOpenConversationsFactory, legacyDesk, OPEN_LIST_FILE } from "./open-conversations";
+import { OpenConversationsStore, setOpenConversationsFactory, legacyDesk, OPEN_LIST_FILE, type OpenEntry } from "./open-conversations";
 import { getProjectDir, listPinned, takeLostPins, hasTranscript, transcriptLineCount } from "./session-parser";
 import { CommandsManager } from "./commands";
 import { updateClaude, detectClaude } from "./cli-probe";
@@ -29,6 +27,43 @@ import { Dock } from "./dock";
 
 // Per-device key for "This computer is the gateway" (see isGatewayHost).
 const GATEWAY_HOST_KEY = "hyo-gateway-host";
+
+/** What other plugins send with a `hyo-run-command` window event. */
+interface RunCommandDetail {
+  prompt?: unknown;
+  notePath?: unknown;
+}
+
+declare global {
+  interface Window {
+    /** Developer-console switch for verbose tracing: `hyoDebug(true)`. */
+    hyoDebug?: (on: boolean) => void;
+  }
+  interface WindowEventMap {
+    "hyo-run-command": CustomEvent<RunCommandDetail | null | undefined>;
+  }
+}
+
+// The saved open list (open-conversations.json). The store checks each
+// entry again; this only turns the parsed file into entries, or null when
+// there's no list in it.
+function savedOpenEntries(raw: unknown): OpenEntry[] | null {
+  const entries = isRecord(raw) ? raw.entries : undefined;
+  if (entries === undefined || entries === null) return null;
+  if (!Array.isArray(entries)) return [];
+  const out: OpenEntry[] = [];
+  for (const e of entries) {
+    if (!isRecord(e) || typeof e.id !== "string") continue;
+    out.push({ id: e.id, title: typeof e.title === "string" ? e.title : "", ...(e.pinned === true ? { pinned: true } : {}) });
+  }
+  return out;
+}
+
+// The saved unread list (unread.json): its ids, or null when there are none saved.
+function savedUnreadIds(raw: unknown): string[] | null {
+  const ids = isRecord(raw) ? raw.unread : undefined;
+  return Array.isArray(ids) ? ids.filter((x): x is string => typeof x === "string") : null;
+}
 
 export default class HyoPlugin extends Plugin {
   settings: HyoSettings = DEFAULT_SETTINGS;
@@ -62,6 +97,9 @@ export default class HyoPlugin extends Plugin {
     // One Claude process per conversation, shared by every Hyo panel and the
     // phone (see session-owner.ts). The main chat is one of them. Desktop only.
     if (!Platform.isMobile) {
+      const fs = nodeFs();
+      const path = nodePath();
+      const os = nodeOs();
       setSessionOwnerFactory({
         make: (spec, on) =>
           new ClaudeTransport({
@@ -94,7 +132,7 @@ export default class HyoPlugin extends Plugin {
           load: () => {
             try {
               if (!fs.existsSync(file())) return null;
-              return JSON.parse(fs.readFileSync(file(), "utf8"))?.entries ?? null;
+              return savedOpenEntries(JSON.parse(fs.readFileSync(file(), "utf8")));
             } catch (e) {
               // Unreadable: start again from this computer's last open tabs.
               console.error("[hyo] Couldn't read the open conversations:", e);
@@ -116,11 +154,11 @@ export default class HyoPlugin extends Plugin {
             }
             return listPinned(cwd);
           },
-          onSaveError: (e: any) => {
+          onSaveError: (e: unknown) => {
             if (warned) return;
             warned = true;
             new Notice(
-              `Hyo couldn't save which conversations are open (${e?.message || e}). They stay open until Obsidian closes, and your phone still sees them.`,
+              `Hyo couldn't save which conversations are open (${errorMessage(e)}). They stay open until Obsidian closes, and your phone still sees them.`,
               10000
             );
           },
@@ -134,8 +172,7 @@ export default class HyoPlugin extends Plugin {
         return new ReadState({
           load: () => {
             if (!fs.existsSync(file())) return null;
-            const ids = JSON.parse(fs.readFileSync(file(), "utf8"))?.unread;
-            return Array.isArray(ids) ? ids : null;
+            return savedUnreadIds(JSON.parse(fs.readFileSync(file(), "utf8")));
           },
           save: (ids) => {
             fs.mkdirSync(path.dirname(file()), { recursive: true });
@@ -151,7 +188,7 @@ export default class HyoPlugin extends Plugin {
     // can be flipped from the developer console without a rebuild:
     //   hyoDebug(true)  → start logging (spawn args, effort level, CLI errors)
     //   hyoDebug(false) → stop
-    (window as any).hyoDebug = setDebug;
+    window.hyoDebug = setDebug;
 
     // Detect CLI capabilities up front so the first message can already use
     // `--effort` where it's supported, rather than falling back to the
@@ -166,9 +203,13 @@ export default class HyoPlugin extends Plugin {
     // note. Generic seam — anything can fire `hyo-run-command` with
     // { prompt, notePath }. Kept alongside the merged commands.ts, which
     // calls runFromSeam() below directly instead of round-tripping an event.
-    this.registerDomEvent(window, "hyo-run-command", async (evt: Event) => {
-      const detail = (evt as CustomEvent).detail || {};
-      await this.runFromSeam(detail.prompt || "", detail.notePath);
+    this.registerDomEvent(window, "hyo-run-command", (evt) => {
+      const detail = evt.detail || {};
+      const prompt = typeof detail.prompt === "string" ? detail.prompt : "";
+      const notePath = typeof detail.notePath === "string" && detail.notePath ? detail.notePath : undefined;
+      this.runFromSeam(prompt, notePath).catch((e: unknown) => {
+        console.error("[hyo] Couldn't open the chat panel for a command:", e);
+      });
     });
 
     // Note-header command button (folded in from the standalone AI Commands
@@ -178,20 +219,19 @@ export default class HyoPlugin extends Plugin {
     this.commands.onload();
 
     this.addRibbonIcon("message-circle", "Open Hyo", () => {
-      this.activateView();
+      void this.activateView();
     });
 
     this.addCommand({
-      id: "open-hyo",
+      id: "open-chat-panel",
       name: "Open chat panel",
-      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "h" }],
       callback: () => this.activateView(),
     });
 
     // obsidian://hyo opens the chat panel on desktop and phone; session= and
     // prompt= open a conversation or prefill a new one (see hyo-link.ts).
     this.registerObsidianProtocolHandler("hyo", async (params) => {
-      const req = parseHyoLink(params as Record<string, string | undefined>);
+      const req = parseHyoLink(params);
       await this.activateView();
       if (!req) return;
       if (this.openLink) this.openLink(req);
@@ -215,8 +255,8 @@ export default class HyoPlugin extends Plugin {
     // mobile writes no attachment files (the gateway host handles them).
     if (!Platform.isMobile) {
       try {
-        const vaultBase = (this.app.vault.adapter as any).basePath as string;
-        const attachmentsDir = path.join(vaultBase, this.manifest.dir || "", "attachments");
+        const vaultBase = vaultBasePath(this.app);
+        const attachmentsDir = nodePath().join(vaultBase, this.manifest.dir || "", "attachments");
         cleanupOldAttachments(attachmentsDir);
       } catch (e) {
         console.error("[hyo] Attachment cleanup setup failed:", e);
@@ -281,24 +321,31 @@ export default class HyoPlugin extends Plugin {
   // Obsidian's vault-scoped local storage (1.8.7+), with a vault-keyed
   // window.localStorage fallback for older versions.
   private readLocal(key: string): unknown {
-    const app = this.app as any;
     try {
-      if (typeof app.loadLocalStorage === "function") return app.loadLocalStorage(key);
-      const raw = window.localStorage.getItem(`${app.appId || this.app.vault.getName()}-${key}`);
-      return raw == null ? null : JSON.parse(raw);
+      if (typeof this.app.loadLocalStorage === "function") {
+        const stored: unknown = this.app.loadLocalStorage(key);
+        return stored;
+      }
+      const raw = window.localStorage.getItem(`${this.localKeyPrefix()}-${key}`);
+      return raw == null ? null : (JSON.parse(raw) as unknown);
     } catch {
+      // Unreadable or not valid JSON: treat it as never set.
       return null;
     }
   }
 
   private writeLocal(key: string, value: unknown) {
-    const app = this.app as any;
     try {
-      if (typeof app.saveLocalStorage === "function") app.saveLocalStorage(key, value);
-      else window.localStorage.setItem(`${app.appId || this.app.vault.getName()}-${key}`, JSON.stringify(value));
+      if (typeof this.app.saveLocalStorage === "function") this.app.saveLocalStorage(key, value);
+      else window.localStorage.setItem(`${this.localKeyPrefix()}-${key}`, JSON.stringify(value));
     } catch (e) {
       console.error("[hyo] Couldn't save a device setting:", e);
     }
+  }
+
+  // The vault-keyed prefix older Obsidian versions (before saveLocalStorage) use.
+  private localKeyPrefix(): string {
+    return vaultAppId(this.app) || this.app.vault.getName();
   }
 
   // Renders the gateway's state into the status bar. "off" hides the item —
@@ -314,11 +361,7 @@ export default class HyoPlugin extends Plugin {
     if (!this.mobileStatusEl) {
       this.mobileStatusEl = this.addStatusBarItem();
       this.mobileStatusEl.addClass("mod-clickable");
-      this.mobileStatusEl.onClickEvent(() => {
-        const setting = (this.app as any).setting;
-        setting?.open?.();
-        setting?.openTabById?.("hyo");
-      });
+      this.mobileStatusEl.onClickEvent(() => openPluginSettings(this.app, this.manifest.id));
     }
     const el = this.mobileStatusEl;
     if (s.state === "starting") {
@@ -336,7 +379,7 @@ export default class HyoPlugin extends Plugin {
   startMobileHost() {
     if (Platform.isMobile) return;
     try {
-      const vault = (this.app.vault.adapter as any).basePath as string;
+      const vault = vaultBasePath(this.app);
       startGatewayHost({
         port: this.settings.gatewayPort,
         vault,
@@ -425,7 +468,7 @@ export default class HyoPlugin extends Plugin {
     }
     // Unmount React and clean up child processes for all Hyo leaves
     this.app.workspace.getLeavesOfType(VIEW_TYPE_HYO).forEach((leaf) => {
-      (leaf.view as HyoView).onClose();
+      if (leaf.view instanceof HyoView) void leaf.view.onClose();
     });
   }
 
@@ -443,11 +486,8 @@ export default class HyoPlugin extends Plugin {
   }
 
   async loadSettings() {
-    this.settings = Object.assign(
-      {},
-      DEFAULT_SETTINGS,
-      await this.loadData()
-    );
+    const saved: unknown = await this.loadData();
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, isRecord(saved) ? saved : {});
     // The voice engine is GPT-Live (or the older ElevenLabs loop). A build
     // that tried OpenAI Realtime saved "realtime" here; that runs as GPT-Live.
     if (this.settings.voiceEngine !== "elevenlabs" && this.settings.voiceEngine !== "gpt-live") {
@@ -500,6 +540,9 @@ export default class HyoPlugin extends Plugin {
     // from the gateway.
     if (!Platform.isMobile && this.settings.defaultAgent) {
       try {
+        const fs = nodeFs();
+        const path = nodePath();
+        const os = nodeOs();
         const agentFile = path.join(
           os.homedir(),
           ".claude",

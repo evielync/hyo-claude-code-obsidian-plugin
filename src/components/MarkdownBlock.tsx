@@ -1,8 +1,9 @@
 import React, { useRef, useEffect } from "react";
-import { MarkdownRenderer, Component } from "obsidian";
+import { MarkdownRenderer, Component, type App } from "obsidian";
 import { transformScreenBlocks } from "../voice/voice-persona";
 
 interface MarkdownBlockProps {
+  app: App;
   content: string;
   sourcePath?: string;
 }
@@ -16,7 +17,7 @@ export function stripInlineThinkingTags(text: string): string {
     .replace(/<thinking>[\s\S]*$/, "");
 }
 
-export function MarkdownBlock({ content, sourcePath = "" }: MarkdownBlockProps) {
+export function MarkdownBlock({ app, content, sourcePath = "" }: MarkdownBlockProps) {
   const ref = useRef<HTMLDivElement>(null);
   const componentRef = useRef<Component | null>(null);
 
@@ -37,9 +38,11 @@ export function MarkdownBlock({ content, sourcePath = "" }: MarkdownBlockProps) 
         ref.current,
         sourcePath,
         componentRef.current
-      );
+      ).catch((err: unknown) => {
+        console.error("[hyo] Couldn't render markdown", err);
+      });
     }
-  }, [content, sourcePath]);
+  }, [app, content, sourcePath]);
 
   // MarkdownRenderer produces .internal-link elements but doesn't wire up
   // navigation — inside a custom view Obsidian won't handle the click for us.
@@ -49,9 +52,10 @@ export function MarkdownBlock({ content, sourcePath = "" }: MarkdownBlockProps) 
     if (!el) return;
 
     const handleClick = (evt: MouseEvent) => {
-      const link = (evt.target as HTMLElement)?.closest(
-        "a.internal-link"
-      ) as HTMLElement | null;
+      // Clicks land on elements; check it all the same before reaching in.
+      const target = evt.target as Node | null;
+      if (!target?.instanceOf(Element)) return;
+      const link = target.closest<HTMLElement>("a.internal-link");
       if (!link) return;
 
       evt.preventDefault();
@@ -60,12 +64,14 @@ export function MarkdownBlock({ content, sourcePath = "" }: MarkdownBlockProps) 
       if (!linktext) return;
 
       const newLeaf = evt.metaKey || evt.ctrlKey;
-      app.workspace.openLinkText(linktext, sourcePath, newLeaf);
+      app.workspace.openLinkText(linktext, sourcePath, newLeaf).catch((err: unknown) => {
+        console.error("[hyo] Couldn't open link", linktext, err);
+      });
     };
 
     el.addEventListener("click", handleClick);
     return () => el.removeEventListener("click", handleClick);
-  }, [sourcePath]);
+  }, [app, sourcePath]);
 
   return <div ref={ref} className="hyo-markdown-body" />;
 }

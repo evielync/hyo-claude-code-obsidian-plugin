@@ -3,11 +3,9 @@ import type HyoPlugin from "./main";
 import type { HyoCommand } from "./settings";
 import type { Skill } from "./hooks/useSkills";
 import { withBundledSkills } from "./bundled-skills";
-
-// Node built-ins are desktop-only; deferred so this module loads on mobile.
-const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
-const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
-const os: typeof import("os") = Platform.isMobile ? (undefined as any) : require("os");
+import { hasNode, nodeFs, nodeOs, nodePath } from "./platform/node";
+import { isPluginEnabled, loadedPlugin, vaultBasePath } from "./obsidian-internals";
+import { isRecord } from "./json-guards";
 
 const ICON = "sparkles";
 
@@ -15,6 +13,10 @@ const ICON = "sparkles";
 // merged Hyo defers to it (see standaloneActive()) so Ev doesn't get two
 // header buttons firing the same command twice.
 const STANDALONE_PLUGIN_ID = "ai-commands";
+
+// The header button is kept on the view itself, not in this instance, so a
+// reloaded Hyo can find (and remove) the button the previous instance added.
+type ViewWithButton = MarkdownView & { __hyoCommandsEl?: HTMLElement };
 
 /**
  * Ports the standalone AI Commands plugin's note-header button into Hyo.
@@ -62,7 +64,8 @@ export class CommandsManager {
 
   private removeButtons(): void {
     this.app.workspace.getLeavesOfType("markdown").forEach((leaf) => {
-      const v = leaf.view as any;
+      if (!(leaf.view instanceof MarkdownView)) return;
+      const v: ViewWithButton = leaf.view;
       if (v.__hyoCommandsEl) {
         v.__hyoCommandsEl.remove();
         delete v.__hyoCommandsEl;
@@ -79,9 +82,9 @@ export class CommandsManager {
   // mid-session settles without a restart.
   private standaloneActive(): boolean {
     try {
-      const enabled = (this.app as any).plugins?.enabledPlugins;
-      return !!enabled && enabled.has(STANDALONE_PLUGIN_ID);
+      return isPluginEnabled(this.app, STANDALONE_PLUGIN_ID);
     } catch {
+      // The plugin registry is internal; if it ever changes shape, Hyo owns the button.
       return false;
     }
   }
@@ -99,20 +102,18 @@ export class CommandsManager {
 
   private refreshView(view: MarkdownView): void {
     // Add the action once per view; reuse it afterwards.
-    const v = view as any;
-    if (!v.__hyoCommandsEl) {
-      v.__hyoCommandsEl = view.addAction(ICON, "Hyo commands", (evt: MouseEvent) =>
-        this.showMenu(evt, view)
-      );
-    }
+    const v: ViewWithButton = view;
+    const button = (v.__hyoCommandsEl ??= view.addAction(ICON, "Hyo commands", (evt: MouseEvent) =>
+      this.showMenu(evt, view)
+    ));
     const hide = this.standaloneActive() || this.commandsForFile(view.file).length === 0;
-    v.__hyoCommandsEl.setCssStyles({ display: hide ? "none" : "" });
+    button.toggle(!hide);
   }
 
   private commandsForFile(file: TFile | null): HyoCommand[] {
     if (!file) return [];
     const cache = this.app.metadataCache.getFileCache(file);
-    const type = cache?.frontmatter?.type;
+    const type: unknown = cache?.frontmatter?.type;
     if (typeof type !== "string" || !type.trim()) return [];
     return this.plugin.settings.commands[type] || [];
   }
@@ -129,7 +130,12 @@ export class CommandsManager {
         item
           .setTitle(cmd.label || cmd.skill)
           .setIcon(ICON)
-          .onClick(() => this.fire(cmd, view.file))
+          .onClick(() => {
+            this.fire(cmd, view.file).catch((e: unknown) => {
+              console.error("[hyo] Couldn't run the command:", e);
+              new Notice(`Hyo couldn't run "${cmd.label || cmd.skill}"`);
+            });
+          })
       );
     }
     menu.showAtMouseEvent(evt);
@@ -162,7 +168,7 @@ export class CommandsManager {
     if (file) {
       notePath = Platform.isMobile
         ? file.path
-        : path.join((this.app.vault.adapter as any).basePath, file.path);
+        : nodePath().join(vaultBasePath(this.app), file.path);
     }
 
     await this.plugin.runFromSeam(prompt, notePath);
@@ -175,7 +181,7 @@ export class CommandsManager {
     const types = new Set<string>();
     for (const file of this.app.vault.getMarkdownFiles()) {
       const cache = this.app.metadataCache.getFileCache(file);
-      const t = cache?.frontmatter?.type;
+      const t: unknown = cache?.frontmatter?.type;
       if (typeof t === "string" && t.trim()) types.add(t.trim());
     }
     return Array.from(types).sort();
@@ -197,8 +203,11 @@ export class CommandsManager {
   // (deep-research, dataviz, loop, schedule) so the dropdowns match what
   // typing "/" in chat already offers.
   getSkills(): Skill[] {
-    if (Platform.isMobile || !fs) return [];
-    const vaultPath = (this.app.vault.adapter as any).basePath as string;
+    if (Platform.isMobile || !hasNode()) return [];
+    const fs = nodeFs();
+    const path = nodePath();
+    const os = nodeOs();
+    const vaultPath = vaultBasePath(this.app);
     const workingDirectory = this.plugin.settings.workingDirectory
       ? this.plugin.settings.workingDirectory.replace(/^~/, os.homedir())
       : vaultPath;
@@ -251,24 +260,25 @@ export class CommandsManager {
     // Nothing to migrate from without filesystem access, and this only ever
     // needs to happen once from whichever desktop already ran the standalone
     // plugin — mark it done so mobile doesn't retry every load.
-    if (Platform.isMobile || !fs) {
+    if (Platform.isMobile || !hasNode()) {
       this.plugin.settings.commandsMigrated = true;
       await this.plugin.saveSettings();
       return;
     }
     try {
-      const standalone = (this.app as any).plugins?.plugins?.[STANDALONE_PLUGIN_ID];
-      const dir: string | undefined = standalone?.manifest?.dir;
-      const vaultBase = (this.app.vault.adapter as any).basePath as string;
+      const fs = nodeFs();
+      const path = nodePath();
+      const dir = loadedPlugin(this.app, STANDALONE_PLUGIN_ID)?.manifest.dir;
+      const vaultBase = vaultBasePath(this.app);
       const dataPath = dir
         ? path.join(vaultBase, dir, "data.json")
-        : path.join(vaultBase, ".obsidian", "plugins", STANDALONE_PLUGIN_ID, "data.json");
+        : path.join(vaultBase, this.app.vault.configDir, "plugins", STANDALONE_PLUGIN_ID, "data.json");
 
       if (fs.existsSync(dataPath)) {
-        const parsed = JSON.parse(fs.readFileSync(dataPath, "utf8"));
-        const commands = parsed?.commands;
+        const parsed: unknown = JSON.parse(fs.readFileSync(dataPath, "utf8"));
+        const commands = isRecord(parsed) ? parsed.commands : undefined;
         let migratedTypes = 0;
-        if (commands && typeof commands === "object") {
+        if (isRecord(commands)) {
           for (const [type, cmds] of Object.entries(commands)) {
             if (Array.isArray(cmds) && !this.plugin.settings.commands[type]) {
               this.plugin.settings.commands[type] = cmds as HyoCommand[];

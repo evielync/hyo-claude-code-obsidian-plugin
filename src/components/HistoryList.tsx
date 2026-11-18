@@ -79,7 +79,7 @@ export function HistoryList<T extends HistoryTask>({
     if (!onRefresh) return;
     setRefreshing(true);
     onRefresh();
-    setTimeout(() => setRefreshing(false), 800);
+    window.setTimeout(() => setRefreshing(false), 800);
   };
 
   // Full-text search runs after typing pauses, and a stale answer never lands
@@ -92,7 +92,7 @@ export function HistoryList<T extends HistoryTask>({
     }
     let live = true;
     setSearching(true);
-    const t = setTimeout(() => {
+    const t = window.setTimeout(() => {
       onSearchText(query)
         .then((hits) => {
           if (!live) return;
@@ -108,7 +108,7 @@ export function HistoryList<T extends HistoryTask>({
     }, 300);
     return () => {
       live = false;
-      clearTimeout(t);
+      window.clearTimeout(t);
     };
   }, [query, needle, fullText, onSearchText]);
 

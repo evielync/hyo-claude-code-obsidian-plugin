@@ -1,6 +1,7 @@
 import React from "react";
 import type { PermissionRequestData } from "../hooks/useChatEngine";
 import { permissionAskerLine } from "../background-jobs";
+import { inputString } from "./tool-input";
 
 interface PermissionRequestProps {
   request: PermissionRequestData;
@@ -8,8 +9,8 @@ interface PermissionRequestProps {
 }
 
 export function PermissionRequest({ request, onRespond }: PermissionRequestProps) {
-  const { requestId, toolName, input, asker } = request;
-  const summary = getPermissionSummary(toolName, input);
+  const { requestId, toolName, asker } = request;
+  const summary = getPermissionSummary(toolName, request.input);
 
   return (
     <div className="hyo-permission">
@@ -42,22 +43,22 @@ export function PermissionRequest({ request, onRespond }: PermissionRequestProps
   );
 }
 
-function getPermissionSummary(toolName: string, input: any): string {
+function getPermissionSummary(toolName: string, input: unknown): string {
   if (!input) return "";
 
   switch (toolName) {
     case "Edit":
-      return shortPath(input.file_path);
+      return shortPath(inputString(input, "file_path"));
     case "Write":
-      return shortPath(input.file_path);
+      return shortPath(inputString(input, "file_path"));
     case "Read":
-      return shortPath(input.file_path);
+      return shortPath(inputString(input, "file_path"));
     case "Bash":
-      return truncate(input.command || input.description || "", 80);
+      return truncate(inputString(input, "command") || inputString(input, "description") || "", 80);
     case "Glob":
-      return input.pattern || "";
+      return inputString(input, "pattern") || "";
     case "Grep":
-      return `"${input.pattern || ""}"`;
+      return `"${inputString(input, "pattern") || ""}"`;
     default:
       if (toolName.startsWith("mcp__")) {
         return toolName.replace(/^mcp__[^_]+__/, "").replace(/_/g, " ");
