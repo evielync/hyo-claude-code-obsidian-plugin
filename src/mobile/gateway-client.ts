@@ -11,6 +11,8 @@
 
 import { debug } from "./debug";
 import { parseEntries, type OpenEntry } from "../open-conversations";
+import type { PromptContentBlock } from "../types/content-blocks";
+import { isRecord, str } from "../types/gateway-json";
 
 export type ConnectionStatus =
   | "connecting"
@@ -19,24 +21,46 @@ export type ConnectionStatus =
   | "reconnecting";
 
 export type TabMessage =
-  | { type: "stream"; event: any }
+  // A Claude Code stream-json event, forwarded as the Mac's process wrote it.
+  | { type: "stream"; event: unknown }
   // The conversation's process ended. `subscribed`: this tab still hears the
   // conversation (the next message starts a new process). `gone`: the Mac no
   // longer has this tab (it was away too long, or the Mac restarted).
   | { type: "closed"; code: number | null; subscribed?: boolean; gone?: boolean }
   | { type: "error"; error: string };
 
+// The client passes these through as the Mac sent them; the history loader
+// (mobile/session-parser.ts) reads them.
 /** A page of a conversation's history from the Mac (newest first when opened). */
 export interface HistoryReply {
   /** Parsed messages (a paging Mac). */
-  messages?: any[];
+  messages?: unknown[];
   /** Raw transcript lines (a Mac from before paging). */
-  lines?: any[];
-  voiceCalls: any[];
+  lines?: unknown[];
+  /** The conversation's saved voice calls. */
+  voiceCalls: unknown[];
   /** Index of the first message in the whole conversation. */
   offset: number;
   total: number;
   model?: string | null;
+}
+
+/** What repairing a conversation on the Mac came to (its session-repair.ts result). */
+export interface RepairReply {
+  success: boolean;
+  linesRemoved: number;
+  capturedUserText: string | null;
+  reason?: string;
+}
+
+function isRepairReply(v: unknown): v is RepairReply {
+  return (
+    isRecord(v) &&
+    typeof v.success === "boolean" &&
+    typeof v.linesRemoved === "number" &&
+    (typeof v.capturedUserText === "string" || v.capturedUserText === null) &&
+    (v.reason === undefined || typeof v.reason === "string")
+  );
 }
 
 export interface ClaudeUpdateResult {
@@ -57,7 +81,7 @@ export type TabHandler = (msg: TabMessage) => void;
 interface PendingRPC<T> {
   resolve: (v: T) => void;
   reject: (e: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer: number;
 }
 
 const RPC_TIMEOUT_MS = 35_000;
@@ -67,6 +91,14 @@ const RPC_TIMEOUT_MS = 35_000;
 export const HISTORY_TIMEOUT_MS = 30_000;
 const MAX_BACKOFF_MS = 30_000;
 const MAX_QUEUED_MESSAGES = 200;
+
+/** Search hits from the Mac: session id → the matched line. */
+function searchHits(raw: unknown): Record<string, string> {
+  const hits: Record<string, string> = {};
+  if (!isRecord(raw)) return hits;
+  for (const [id, line] of Object.entries(raw)) if (typeof line === "string") hits[id] = line;
+  return hits;
+}
 
 function genId(): string {
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
@@ -84,13 +116,14 @@ export class GatewayClient {
   private statusListeners = new Set<(s: ConnectionStatus) => void>();
   private tabHandlers = new Map<string, TabHandler>();
   private reconnectAttempts = 0;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectTimer: number | null = null;
   private destroyed = false;
   private outbox: string[] = [];
 
-  private sessionsQueue: PendingRPC<any[]>[] = [];
-  private agentsQueue: PendingRPC<any[]>[] = [];
-  private skillsQueue: PendingRPC<any[]>[] = [];
+  // Lists the Mac sends; the hooks that show them read each row.
+  private sessionsQueue: PendingRPC<unknown[]>[] = [];
+  private agentsQueue: PendingRPC<unknown[]>[] = [];
+  private skillsQueue: PendingRPC<unknown[]>[] = [];
   private searchQueue: PendingRPC<Record<string, string>>[] = [];
   // Live voice: the desktop signs the phone's WebRTC offer and tells it which
   // engine/voice is set. Keyed by requestId.
@@ -103,7 +136,7 @@ export class GatewayClient {
   private openListeners = new Set<(entries: OpenEntry[], meta: { ack?: number; sync?: number }) => void>();
   private connectListeners = new Set<() => void>();
   private renamePending = new Map<string, PendingRPC<string>>();
-  private repairPending = new Map<string, PendingRPC<any>>();
+  private repairPending = new Map<string, PendingRPC<RepairReply>>();
   private titlePending = new Map<string, PendingRPC<string | null>>();
   // Claude updates run on the Mac; progress comes back as it goes.
   private claudeUpdatePending = new Map<
@@ -112,7 +145,7 @@ export class GatewayClient {
       onPhase: (m: string) => void;
       resolve: (r: ClaudeUpdateResult) => void;
       started: boolean;
-      timer: ReturnType<typeof setTimeout>;
+      timer: number;
     }
   >();
 
@@ -207,14 +240,14 @@ export class GatewayClient {
       }
     };
 
-    ws.onmessage = (ev) => {
-      let msg: any;
+    ws.onmessage = (ev: MessageEvent<unknown>) => {
+      let msg: unknown;
       try {
-        msg = JSON.parse(ev.data);
+        msg = JSON.parse(typeof ev.data === "string" ? ev.data : String(ev.data));
       } catch {
         return;
       }
-      this.handleMessage(msg);
+      if (isRecord(msg)) this.handleMessage(msg);
     };
 
     ws.onclose = () => {
@@ -249,13 +282,13 @@ export class GatewayClient {
     this.setStatus("reconnecting");
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), MAX_BACKOFF_MS);
     this.reconnectAttempts++;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = setTimeout(() => this.connect(), delay);
+    if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = window.setTimeout(() => this.connect(), delay);
   }
 
   destroy(): void {
     this.destroyed = true;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     try {
       this.ws?.close();
@@ -266,27 +299,27 @@ export class GatewayClient {
     this.tabHandlers.clear();
     this.statusListeners.clear();
     for (const p of this.sessionsQueue) {
-      clearTimeout(p.timer);
+      window.clearTimeout(p.timer);
       p.reject(new Error("Gateway connection closed"));
     }
     this.sessionsQueue = [];
     for (const p of this.agentsQueue) {
-      clearTimeout(p.timer);
+      window.clearTimeout(p.timer);
       p.reject(new Error("Gateway connection closed"));
     }
     this.agentsQueue = [];
     for (const p of this.skillsQueue) {
-      clearTimeout(p.timer);
+      window.clearTimeout(p.timer);
       p.reject(new Error("Gateway connection closed"));
     }
     this.skillsQueue = [];
     for (const p of this.searchQueue) {
-      clearTimeout(p.timer);
+      window.clearTimeout(p.timer);
       p.reject(new Error("Gateway connection closed"));
     }
     this.searchQueue = [];
     for (const p of this.historyPending.values()) {
-      clearTimeout(p.timer);
+      window.clearTimeout(p.timer);
       p.reject(new Error("Gateway connection closed"));
     }
     this.historyPending.clear();
@@ -294,7 +327,7 @@ export class GatewayClient {
     this.connectListeners.clear();
     for (const map of [this.renamePending, this.titlePending, this.repairPending]) {
       for (const p of map.values()) {
-        clearTimeout(p.timer);
+        window.clearTimeout(p.timer);
         p.reject(new Error("Gateway connection closed"));
       }
       map.clear();
@@ -317,41 +350,44 @@ export class GatewayClient {
 
   // ---- incoming message routing ----
 
-  private handleMessage(msg: any): void {
+  // Everything from the Mac is read defensively: an older or newer Hyo there
+  // may send a message with fields this phone doesn't expect.
+  private handleMessage(msg: Record<string, unknown>): void {
     switch (msg.type) {
       case "stream": {
-        this.tabHandlers.get(msg.tabId)?.({ type: "stream", event: msg.event });
+        const tabId = str(msg.tabId);
+        if (tabId !== undefined) this.tabHandlers.get(tabId)?.({ type: "stream", event: msg.event });
         return;
       }
       case "sessions": {
         const pending = this.sessionsQueue.shift();
         if (pending) {
-          clearTimeout(pending.timer);
-          pending.resolve(msg.sessions || []);
+          window.clearTimeout(pending.timer);
+          pending.resolve(Array.isArray(msg.sessions) ? msg.sessions : []);
         }
         return;
       }
       case "agents": {
         const pending = this.agentsQueue.shift();
         if (pending) {
-          clearTimeout(pending.timer);
-          pending.resolve(msg.agents || []);
+          window.clearTimeout(pending.timer);
+          pending.resolve(Array.isArray(msg.agents) ? msg.agents : []);
         }
         return;
       }
       case "skills": {
         const pending = this.skillsQueue.shift();
         if (pending) {
-          clearTimeout(pending.timer);
-          pending.resolve(msg.skills || []);
+          window.clearTimeout(pending.timer);
+          pending.resolve(Array.isArray(msg.skills) ? msg.skills : []);
         }
         return;
       }
       case "search_results": {
         const pending = this.searchQueue.shift();
         if (pending) {
-          clearTimeout(pending.timer);
-          pending.resolve(msg.hits || {});
+          window.clearTimeout(pending.timer);
+          pending.resolve(searchHits(msg.hits));
         }
         return;
       }
@@ -365,14 +401,15 @@ export class GatewayClient {
               total: typeof msg.total === "number" ? msg.total : 0,
               model: typeof msg.model === "string" ? msg.model : null,
             }
-          : { lines: msg.lines || [], voiceCalls: Array.isArray(msg.voiceCalls) ? msg.voiceCalls : [], offset: 0, total: 0 };
-        const byRequest = typeof msg.requestId === "string" ? this.historyPending.get(msg.requestId) : undefined;
-        const waiting = byRequest
-          ? [[msg.requestId, byRequest] as const]
+          : { lines: Array.isArray(msg.lines) ? msg.lines : [], voiceCalls: Array.isArray(msg.voiceCalls) ? msg.voiceCalls : [], offset: 0, total: 0 };
+        const requestId = str(msg.requestId);
+        const byRequest = requestId !== undefined ? this.historyPending.get(requestId) : undefined;
+        const waiting = requestId !== undefined && byRequest
+          ? [[requestId, byRequest] as const]
           : [...this.historyPending.entries()].filter(([, p]) => p.sessionId === msg.sessionId);
         for (const [id, p] of waiting) {
           this.historyPending.delete(id);
-          clearTimeout(p.timer);
+          window.clearTimeout(p.timer);
           p.resolve(result);
         }
         return;
@@ -393,21 +430,22 @@ export class GatewayClient {
         return;
       }
       case "claude_update": {
-        const pending = this.claudeUpdatePending.get(msg.requestId);
-        if (!pending) return;
+        const requestId = str(msg.requestId);
+        const pending = requestId !== undefined ? this.claudeUpdatePending.get(requestId) : undefined;
+        if (requestId === undefined || !pending) return;
         if (msg.phase === "started") {
           pending.started = true;
-          clearTimeout(pending.timer);
-          pending.timer = setTimeout(() => {
-            this.claudeUpdatePending.delete(msg.requestId);
+          window.clearTimeout(pending.timer);
+          pending.timer = window.setTimeout(() => {
+            this.claudeUpdatePending.delete(requestId);
             pending.resolve({ ok: false, error: "The update took too long" });
           }, CLAUDE_UPDATE_MAX_MS);
         } else if (msg.phase === "progress") {
           if (typeof msg.message === "string") pending.onPhase(msg.message);
         } else if (msg.phase === "done") {
-          this.claudeUpdatePending.delete(msg.requestId);
-          clearTimeout(pending.timer);
-          pending.resolve({ ok: !!msg.ok, error: msg.error });
+          this.claudeUpdatePending.delete(requestId);
+          window.clearTimeout(pending.timer);
+          pending.resolve({ ok: !!msg.ok, error: str(msg.error) });
         }
         return;
       }
@@ -417,48 +455,58 @@ export class GatewayClient {
         return;
       case "live_sdp_answer":
       case "live_sdp_error": {
-        const pending = this.liveSdpPending.get(msg.requestId);
-        if (pending) {
-          this.liveSdpPending.delete(msg.requestId);
-          clearTimeout(pending.timer);
-          if (msg.type === "live_sdp_answer") pending.resolve({ sdp: msg.sdp });
-          else pending.reject(new Error(msg.message || "The desktop couldn't start the call"));
+        const requestId = str(msg.requestId);
+        const pending = requestId !== undefined ? this.liveSdpPending.get(requestId) : undefined;
+        if (requestId !== undefined && pending) {
+          this.liveSdpPending.delete(requestId);
+          window.clearTimeout(pending.timer);
+          const sdp = str(msg.sdp);
+          if (msg.type === "live_sdp_answer" && sdp !== undefined) pending.resolve({ sdp });
+          else pending.reject(new Error(str(msg.message) || "The desktop couldn't start the call"));
         }
         return;
       }
       case "live_config": {
-        const pending = this.liveConfigPending.get(msg.requestId);
-        if (pending) {
-          this.liveConfigPending.delete(msg.requestId);
-          clearTimeout(pending.timer);
-          pending.resolve({ engine: msg.engine || "elevenlabs", voice: msg.voice || "marin" });
+        const requestId = str(msg.requestId);
+        const pending = requestId !== undefined ? this.liveConfigPending.get(requestId) : undefined;
+        if (requestId !== undefined && pending) {
+          this.liveConfigPending.delete(requestId);
+          window.clearTimeout(pending.timer);
+          pending.resolve({ engine: str(msg.engine) || "elevenlabs", voice: str(msg.voice) || "marin" });
         }
         return;
       }
       case "repair_result": {
-        const pending = this.repairPending.get(msg.requestId);
-        if (pending) {
-          this.repairPending.delete(msg.requestId);
-          clearTimeout(pending.timer);
-          pending.resolve(msg.result);
+        const requestId = str(msg.requestId);
+        const pending = requestId !== undefined ? this.repairPending.get(requestId) : undefined;
+        if (requestId !== undefined && pending) {
+          this.repairPending.delete(requestId);
+          window.clearTimeout(pending.timer);
+          pending.resolve(
+            isRepairReply(msg.result)
+              ? msg.result
+              : { success: false, linesRemoved: 0, capturedUserText: null, reason: "your Mac's answer couldn't be read" }
+          );
         }
         return;
       }
       case "renamed": {
-        const pending = this.renamePending.get(msg.sessionId);
-        if (pending) {
-          this.renamePending.delete(msg.sessionId);
-          clearTimeout(pending.timer);
-          pending.resolve(msg.title);
+        const sessionId = str(msg.sessionId);
+        const pending = sessionId !== undefined ? this.renamePending.get(sessionId) : undefined;
+        if (sessionId !== undefined && pending) {
+          this.renamePending.delete(sessionId);
+          window.clearTimeout(pending.timer);
+          pending.resolve(str(msg.title) ?? "");
         }
         return;
       }
       case "title": {
-        const pending = this.titlePending.get(msg.requestId);
-        if (pending) {
-          this.titlePending.delete(msg.requestId);
-          clearTimeout(pending.timer);
-          pending.resolve(msg.title || null);
+        const requestId = str(msg.requestId);
+        const pending = requestId !== undefined ? this.titlePending.get(requestId) : undefined;
+        if (requestId !== undefined && pending) {
+          this.titlePending.delete(requestId);
+          window.clearTimeout(pending.timer);
+          pending.resolve(str(msg.title) || null);
         }
         return;
       }
@@ -472,19 +520,20 @@ export class GatewayClient {
           // their server process no longer exists. Settle each so its spinner
           // clears; the conversation history is preserved and the next prompt
           // resumes it from the saved session id.
-          const gone: string[] = Array.isArray(msg.gone) ? msg.gone : [];
+          const gone = Array.isArray(msg.gone) ? msg.gone.filter((id): id is string => typeof id === "string") : [];
           for (const tabId of gone) {
             this.tabHandlers.get(tabId)?.({ type: "closed", code: null, gone: true });
           }
           return;
         }
-        if (msg.subtype === "tab_closed" && msg.tabId) {
-          this.tabHandlers.get(msg.tabId)?.({ type: "closed", code: msg.code ?? null, subscribed: msg.subscribed === true });
+        const tabId = str(msg.tabId);
+        if (msg.subtype === "tab_closed" && tabId) {
+          this.tabHandlers.get(tabId)?.({ type: "closed", code: typeof msg.code === "number" ? msg.code : null, subscribed: msg.subscribed === true });
           return;
         }
         if (msg.subtype === "error") {
-          if (msg.tabId) {
-            this.tabHandlers.get(msg.tabId)?.({ type: "error", error: msg.error || "Unknown gateway error" });
+          if (tabId) {
+            this.tabHandlers.get(tabId)?.({ type: "error", error: str(msg.error) || "Unknown gateway error" });
           } else {
             debug("[hyo-gateway] Gateway error:", msg.error);
           }
@@ -518,7 +567,7 @@ export class GatewayClient {
     appendSystemPrompt?: string,
     agent?: string,
     model?: string,
-    content?: any[],
+    content?: PromptContentBlock[],
     extra: { qid?: string; silent?: boolean; permissionMode?: string; effort?: string } = {}
   ): void {
     this.send({ type: "prompt", tabId, text, content, sessionId, resume, askFirst, appendSystemPrompt, agent, model, ...extra });
@@ -562,10 +611,10 @@ export class GatewayClient {
    * Repair a conversation poisoned by an orphaned thinking block, on the Mac
    * (the desktop's own repair). Resolves with its result; never hangs.
    */
-  repairSession(sessionId: string): Promise<{ success: boolean; linesRemoved: number; capturedUserText: string | null; reason?: string }> {
+  repairSession(sessionId: string): Promise<RepairReply> {
     const requestId = genId();
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
+      const timer = window.setTimeout(() => {
         this.repairPending.delete(requestId);
         resolve({ success: false, linesRemoved: 0, capturedUserText: null, reason: this.status === "connected" ? "your Mac didn't answer in time" : "can't reach your Mac right now" });
       }, RPC_TIMEOUT_MS);
@@ -605,7 +654,7 @@ export class GatewayClient {
   liveConfig(): Promise<{ engine: string; voice: string }> {
     const requestId = `lc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timer = window.setTimeout(() => {
         this.liveConfigPending.delete(requestId);
         reject(new Error("live_config timed out"));
       }, RPC_TIMEOUT_MS);
@@ -626,7 +675,7 @@ export class GatewayClient {
   ): Promise<{ sdp: string }> {
     const requestId = `ls_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timer = window.setTimeout(() => {
         this.liveSdpPending.delete(requestId);
         reject(new Error("The desktop didn't answer the call request in time"));
       }, 20000);
@@ -635,9 +684,9 @@ export class GatewayClient {
     });
   }
 
-  listSessions(): Promise<any[]> {
+  listSessions(): Promise<unknown[]> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timer = window.setTimeout(() => {
         const idx = this.sessionsQueue.findIndex((p) => p.resolve === resolve);
         if (idx >= 0) this.sessionsQueue.splice(idx, 1);
         reject(new Error("list_sessions timed out"));
@@ -651,7 +700,7 @@ export class GatewayClient {
   // phone gets back session id → matched line.
   searchSessions(query: string): Promise<Record<string, string>> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timer = window.setTimeout(() => {
         const idx = this.searchQueue.findIndex((p) => p.resolve === resolve);
         if (idx >= 0) this.searchQueue.splice(idx, 1);
         reject(new Error("search_sessions timed out"));
@@ -661,9 +710,9 @@ export class GatewayClient {
     });
   }
 
-  listAgents(): Promise<any[]> {
+  listAgents(): Promise<unknown[]> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timer = window.setTimeout(() => {
         const idx = this.agentsQueue.findIndex((p) => p.resolve === resolve);
         if (idx >= 0) this.agentsQueue.splice(idx, 1);
         reject(new Error("list_agents timed out"));
@@ -673,9 +722,9 @@ export class GatewayClient {
     });
   }
 
-  listSkills(): Promise<any[]> {
+  listSkills(): Promise<unknown[]> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timer = window.setTimeout(() => {
         const idx = this.skillsQueue.findIndex((p) => p.resolve === resolve);
         if (idx >= 0) this.skillsQueue.splice(idx, 1);
         reject(new Error("list_skills timed out"));
@@ -695,7 +744,7 @@ export class GatewayClient {
   getHistory(sessionId: string, opts: { tabId?: string; before?: number; timeoutMs?: number } = {}): Promise<HistoryReply> {
     const requestId = `h_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timer = window.setTimeout(() => {
         if (!this.historyPending.delete(requestId)) return;
         reject(
           new Error(
@@ -751,7 +800,7 @@ export class GatewayClient {
 
   rename(sessionId: string, title: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timer = window.setTimeout(() => {
         this.renamePending.delete(sessionId);
         reject(new Error("rename timed out"));
       }, RPC_TIMEOUT_MS);
@@ -777,7 +826,7 @@ export class GatewayClient {
   generateTitle(userMessage: string, assistantMessage: string): Promise<string | null> {
     const requestId = genId();
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
+      const timer = window.setTimeout(() => {
         this.titlePending.delete(requestId);
         resolve(null);
       }, RPC_TIMEOUT_MS);
@@ -793,7 +842,7 @@ export class GatewayClient {
   updateClaude(required: string, onPhase: (message: string) => void): Promise<ClaudeUpdateResult> {
     const requestId = genId();
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
+      const timer = window.setTimeout(() => {
         this.claudeUpdatePending.delete(requestId);
         resolve({ ok: false, unsupported: true });
       }, CLAUDE_UPDATE_ACK_MS);

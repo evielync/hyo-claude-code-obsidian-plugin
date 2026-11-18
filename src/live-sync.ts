@@ -27,7 +27,8 @@ import { startQueued } from "./send-queue";
 
 export interface LiveMsg {
   role: string;
-  content?: any;
+  /** Text, or the content blocks a message was sent with (images, documents). */
+  content?: unknown;
   displayText?: string;
   streaming?: boolean;
   queuedId?: string;
@@ -41,16 +42,22 @@ export interface LiveMsg {
   voiceCall?: unknown;
   selfStarted?: boolean;
   thinking?: string;
-  toolCalls?: any[];
-  orderedBlocks?: any[];
+  toolCalls?: unknown[];
+  orderedBlocks?: unknown[];
   permissionRequests?: { requestId: string; resolved?: "allowed" | "denied" }[];
   planReview?: { requestId: string; resolved?: "approved" | "rejected" } | null;
   askQuestion?: { id: string } | null;
+  /** The reply slot a compaction runs in. */
+  isCompaction?: boolean;
 }
 
-/** A fresh reply slot for a turn. */
+/**
+ * A fresh reply slot for a turn. Every view's message type has only `role`
+ * required, so a message built from these fields is one of its messages.
+ */
 export function emptyReply<M extends LiveMsg>(extra: Partial<M> = {}): M {
-  return { role: "assistant", content: "", thinking: "", toolCalls: [], orderedBlocks: [], streaming: true, ...extra } as unknown as M;
+  const reply: LiveMsg = { role: "assistant", content: "", thinking: "", toolCalls: [], orderedBlocks: [], streaming: true, ...extra };
+  return reply as M;
 }
 
 function isEmptyReply(m: LiveMsg | undefined): boolean {
@@ -155,7 +162,7 @@ export function steered<M extends LiveMsg>(messages: M[], ev: { qid: string; tex
   const after = rest.slice(cut);
   // A reply with nothing in it yet has nothing to keep.
   const last = before[before.length - 1];
-  if (last?.streaming && isEmptyReply(last) && !(last as any).isCompaction) before = before.slice(0, -1);
+  if (last?.streaming && isEmptyReply(last) && !last.isCompaction) before = before.slice(0, -1);
   before = before.map((m) => (m.role === "assistant" && m.streaming && !m.voiceCall ? { ...m, streaming: false } : m));
   return [...before, msg, emptyReply<M>(), ...after];
 }
@@ -220,7 +227,8 @@ export function queueDropped<M extends LiveMsg>(messages: M[], qids: string[], r
     reason === "refused"
       ? "_Claude couldn't start for this conversation, so the message above wasn't sent. Send it again once the reason above is sorted._"
       : "_Claude stopped before the message above could go. Send it again to carry on._";
-  return [...out, { role: "assistant", content: why, streaming: false, toolCalls: [], orderedBlocks: [] } as unknown as M];
+  const line: LiveMsg = { role: "assistant", content: why, streaming: false, toolCalls: [], orderedBlocks: [] };
+  return [...out, line as M];
 }
 
 /** A tab is still busy while a message of its is waiting to go. */

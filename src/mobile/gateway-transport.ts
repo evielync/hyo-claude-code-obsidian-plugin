@@ -11,6 +11,8 @@
 
 import { debug } from "./debug";
 import { GatewayClient } from "./gateway-client";
+import type { PromptContentBlock } from "../types/content-blocks";
+import { field, str } from "../types/gateway-json";
 
 // The Sonnet 5 family runs 1M context natively and doesn't accept a "[1m]"
 // suffix. Stale saved data could still carry one, so strip it and keep the
@@ -34,7 +36,8 @@ export interface TransportOptions {
   // the gateway applies it via --append-system-prompt on any (re)spawn. Undefined
   // in text mode, so text sessions are unchanged.
   appendSystemPrompt?: string;
-  onMessage: (msg: any) => void;
+  /** A Claude Code stream-json event, as the gateway forwarded it. */
+  onMessage: (msg: unknown) => void;
   onError: (error: string) => void;
   onClose: (code: number | null) => void;
   // Kept for structural parity with ClaudeTransport's TransportOptions —
@@ -59,10 +62,10 @@ function genTabId(): string {
 // and `text` (the same message flattened). The gateway writes `content`
 // straight to the CLI's stream-json stdin, which accepts image and document
 // blocks; `text` is what an older gateway reads.
-function flattenContentBlocks(blocks: any[]): string {
+function flattenContentBlocks(blocks: PromptContentBlock[]): string {
   const textParts: string[] = [];
   for (const b of blocks) {
-    if (b?.type === "text" && b.text) textParts.push(b.text);
+    if (b.type === "text" && b.text) textParts.push(b.text);
   }
   return textParts.join("\n\n");
 }
@@ -114,8 +117,9 @@ export class GatewayTransport {
         // respawn silently starts a brand-new session and the conversation
         // loses all its history.
         const ev = msg.event;
-        if (ev?.type === "system" && ev?.subtype === "init" && ev.session_id) {
-          this.options.sessionId = ev.session_id;
+        const initSessionId = str(field(ev, "session_id"));
+        if (field(ev, "type") === "system" && field(ev, "subtype") === "init" && initSessionId) {
+          this.options.sessionId = initSessionId;
           this.options.resume = true;
         }
         this.options.onMessage(ev);
@@ -138,7 +142,7 @@ export class GatewayTransport {
     debug("[hyo-gateway] Tab registered:", this.tabId);
   }
 
-  sendUserMessage(content: string | any[], askFirst?: boolean, sendExtra: { qid?: string; silent?: boolean; permissionMode?: string; effort?: string; model?: string } = {}): void {
+  sendUserMessage(content: string | PromptContentBlock[], askFirst?: boolean, sendExtra: { qid?: string; silent?: boolean; permissionMode?: string; effort?: string; model?: string } = {}): void {
     // The tab's model as it is now: a conversation's history (and the model
     // it was built on) can arrive after this transport was made.
     const { model, ...extra } = sendExtra;

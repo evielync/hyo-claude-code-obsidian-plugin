@@ -46,8 +46,12 @@
 //   { type:'skills', skills:[{ name, description }] }
 //   { type:'gateway', subtype, ... }
 
-import { Platform, Notice } from "obsidian";
+import { Platform, Notice, requestUrl } from "obsidian";
 import { debug } from "./debug";
+import { nodeChildProcess, nodeCrypto, nodeFs, nodeNet, nodeOs, nodePath } from "./platform/node";
+import { errorMessage, field, isRecord, isVoiceCallRecord, str } from "./types/gateway-json";
+import type { RepairResult } from "./session-repair";
+import type { MetaEntry } from "./voice/voice-call";
 import { readState, type ReadState } from "./read-state";
 import { getProjectDir, saveCustomTitle, setTaskMeta, saveVoiceCall, getVoiceCalls, readTranscriptEntries, parseSessionEntries, newestPlusPinned, type HistoryMessage } from "./session-parser";
 import { transcriptModel, resumeModel } from "./models";
@@ -68,26 +72,13 @@ import {
 } from "./session-owner";
 import { openConversations, gatewayOpenList, gatewayOpenListGone, gatewayOpenListReset, gatewayOpenListRefresh, type OpenEntry } from "./open-conversations";
 import type * as FsType from "fs";
-import type * as PathType from "path";
-import type * as OsType from "os";
-import type { ChildProcess, SpawnOptionsWithoutStdio } from "child_process";
+import type { ChildProcess } from "child_process";
 import type { WebSocket as WsSocket, WebSocketServer as WsServer } from "ws";
 
-// Node built-ins are desktop-only; deferred so this module stays safe to
-// import on mobile even though startGatewayHost/stopGatewayHost are never
-// called there.
-const fs: typeof FsType = Platform.isMobile ? (undefined as any) : require("fs");
-const path: typeof PathType = Platform.isMobile ? (undefined as any) : require("path");
-const os: typeof OsType = Platform.isMobile ? (undefined as any) : require("os");
-const spawn: typeof import("child_process").spawn = Platform.isMobile
-  ? (undefined as any)
-  : require("child_process").spawn;
-const randomUUID: typeof import("crypto").randomUUID = Platform.isMobile
-  ? (undefined as any)
-  : require("crypto").randomUUID;
-const WebSocketServer: typeof WsServer = Platform.isMobile
-  ? (undefined as any)
-  : require("ws").WebSocketServer;
+// Node built-ins (and `ws`) are desktop-only. They're loaded where they're
+// used (platform/node.ts; `ws` by a dynamic import when the server starts),
+// so this module stays safe to import on mobile even though
+// startGatewayHost/stopGatewayHost are never called there.
 
 export interface LiveVoiceConfig {
   engine: string;
@@ -163,51 +154,43 @@ function sendTo(ws: WsSocket | null | undefined, obj: unknown): void {
 // versa. (The gateway briefly had its own path encoder; it disagreed with the
 // CLI's on spaces and `~`, which split the metadata into two stores.)
 
-function loadMetadata(dir: string): Record<string, any> {
+/** A conversation's entry in session-metadata.json (older files may still say `title`). */
+type SessionMeta = MetaEntry & { title?: string };
+
+function loadMetadata(dir: string): Record<string, SessionMeta> {
+  const fs = nodeFs();
+  const path = nodePath();
   try {
-    return JSON.parse(fs.readFileSync(path.join(dir, "session-metadata.json"), "utf8"));
+    // Hyo's own file (session-parser.ts writes it).
+    return JSON.parse(fs.readFileSync(path.join(dir, "session-metadata.json"), "utf8")) as Record<string, SessionMeta>;
   } catch {
     return {};
   }
 }
 
-function extractTitle(fullPath: string): string {
+/** One transcript line, parsed; null when it isn't JSON. */
+function parseLine(line: string): unknown {
   try {
-    const fd = fs.openSync(fullPath, "r");
-    const buf = Buffer.alloc(16384);
-    const bytes = fs.readSync(fd, buf, 0, buf.length, 0);
-    fs.closeSync(fd);
-    for (const line of buf.slice(0, bytes).toString("utf8").split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        const o = JSON.parse(line);
-        if (o.type === "user" && o.message?.content) {
-          const c = o.message.content;
-          const text =
-            typeof c === "string"
-              ? c
-              : Array.isArray(c)
-                ? c
-                    .filter((x: any) => x.type === "text")
-                    .map((x: any) => x.text)
-                    .join(" ")
-                : "";
-          if (text && !text.startsWith("<")) return text.slice(0, 60);
-        }
-      } catch {
-        // skip malformed line
-      }
-    }
+    return JSON.parse(line) as unknown;
   } catch {
-    // no such file / unreadable
+    return null;
   }
-  return "Untitled";
 }
-void extractTitle; // kept for parity with the source script; listSessions uses firstUserText below
+
+/** The `message.content` of a transcript line (a string, or an array of blocks). */
+function contentOf(o: unknown): unknown {
+  return field(field(o, "message"), "content");
+}
+
+/** A content block of the given type (blocks are read as Claude Code wrote them). */
+function isBlock(x: unknown, type: string): x is Record<string, unknown> {
+  return isRecord(x) && x.type === type;
+}
 
 // The first user message with substance (a "Hi Norm" opener is skipped), or
 // the greeting if that's all there is. The phone's History titles from this.
 function firstUserText(fullPath: string): string {
+  const fs = nodeFs();
   let greeting = "";
   const CHUNK = 65536;
   const MAX_SCAN = 5 * 1024 * 1024;
@@ -221,27 +204,22 @@ function firstUserText(fullPath: string): string {
       const bytes = fs.readSync(fd, buf, 0, CHUNK, pos);
       if (bytes <= 0) break;
       pos += bytes;
-      carry += buf.slice(0, bytes).toString("utf8");
+      carry += buf.subarray(0, bytes).toString("utf8");
       let nl: number;
       while ((nl = carry.indexOf("\n")) !== -1) {
         const line = carry.slice(0, nl);
         carry = carry.slice(nl + 1);
         if (!line.trim()) continue;
-        let o: any;
-        try {
-          o = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        if (o.type !== "user" || !o.message?.content) continue;
-        const c = o.message.content;
+        const o = parseLine(line);
+        const c = contentOf(o);
+        if (field(o, "type") !== "user" || !c) continue;
         const text =
           typeof c === "string"
             ? c
             : Array.isArray(c)
               ? c
-                  .filter((x: any) => x.type === "text")
-                  .map((x: any) => x.text)
+                  .filter((x) => isBlock(x, "text"))
+                  .map((x) => x.text)
                   .join(" ")
               : "";
         const cleaned = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
@@ -276,7 +254,8 @@ function snipText(text: string): string {
   return line.length > 100 ? line.slice(0, 98).trimEnd() + "…" : line;
 }
 
-function lastMessage(fullPath: string): { role: string | null; snippet: string } {
+function lastMessage(fullPath: string): { role: "user" | "assistant" | null; snippet: string } {
+  const fs = nodeFs();
   try {
     const st = fs.statSync(fullPath);
     const len = Math.min(st.size, 16384);
@@ -289,24 +268,21 @@ function lastMessage(fullPath: string): { role: string | null; snippet: string }
       .split("\n")
       .filter((l) => l.trim());
     for (let i = lines.length - 1; i >= 0; i--) {
-      let o: any;
-      try {
-        o = JSON.parse(lines[i]);
-      } catch {
-        continue;
-      }
-      const c = o?.message?.content;
-      const textOf = () =>
-        Array.isArray(c)
-          ? c.find((x: any) => x.type === "text" && x.text?.trim())?.text || ""
-          : typeof c === "string"
-            ? c
-            : "";
-      if (o?.type === "assistant") {
+      const o = parseLine(lines[i]);
+      const c = contentOf(o);
+      const textOf = (): string => {
+        if (Array.isArray(c)) {
+          const block: unknown = c.find((x) => isBlock(x, "text") && typeof x.text === "string" && x.text.trim());
+          return str(field(block, "text")) || "";
+        }
+        return typeof c === "string" ? c : "";
+      };
+      const type = field(o, "type");
+      if (type === "assistant") {
         const t = textOf();
         if (t.trim()) return { role: "assistant", snippet: snipText(t) };
-      } else if (o?.type === "user") {
-        const isTool = Array.isArray(c) && c.every((x: any) => x.type === "tool_result");
+      } else if (type === "user") {
+        const isTool = Array.isArray(c) && c.every((x) => isBlock(x, "tool_result"));
         if (!isTool) {
           const t = textOf().replace(/<file\s+name="[^"]+">[\s\S]*?<\/file>/g, "");
           if (t.trim()) return { role: "user", snippet: snipText(t) };
@@ -319,11 +295,29 @@ function lastMessage(fullPath: string): { role: string | null; snippet: string }
   return { role: null, snippet: "" };
 }
 
-function listSessions(cwd: string) {
+/** One row of the phone's History list. */
+interface SessionRow {
+  id: string;
+  title: string;
+  /** Last written (epoch ms). */
+  date: number;
+  size: number;
+  lastRole: "user" | "assistant" | null;
+  lastSnippet: string;
+  pinned: boolean;
+  closed: boolean;
+  lastActive: string | null;
+  /** Only a voice call so far: there's no transcript yet. */
+  callOnly?: boolean;
+}
+
+function listSessions(cwd: string): SessionRow[] {
+  const fs = nodeFs();
+  const path = nodePath();
   const dir = getProjectDir(cwd);
   if (!fs.existsSync(dir)) return [];
   const meta = loadMetadata(dir);
-  const rows: any[] = [];
+  const rows: SessionRow[] = [];
   for (const f of fs.readdirSync(dir)) {
     if (!f.endsWith(".jsonl")) continue;
     const full = path.join(dir, f);
@@ -379,7 +373,9 @@ function listSessions(cwd: string) {
 const SEARCH_MAX_BYTES = 8 * 1024 * 1024;
 
 function searchSessions(cwd: string, query: string): Record<string, string> {
-  const needle = String(query || "").trim().toLowerCase();
+  const fs = nodeFs();
+  const path = nodePath();
+  const needle = query.trim().toLowerCase();
   const hits: Record<string, string> = {};
   if (!needle) return hits;
   const dir = getProjectDir(cwd);
@@ -400,21 +396,17 @@ function searchSessions(cwd: string, query: string): Record<string, string> {
       }
       for (const line of buf.toString("utf8").split("\n")) {
         if (!line.trim() || !line.toLowerCase().includes(needle)) continue;
-        let o: any;
-        try {
-          o = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        if (o?.type !== "user" && o?.type !== "assistant") continue;
-        const c = o.message?.content;
+        const o = parseLine(line);
+        const type = field(o, "type");
+        if (type !== "user" && type !== "assistant") continue;
+        const c = contentOf(o);
         const text = (
           typeof c === "string"
             ? c
             : Array.isArray(c)
               ? c
-                  .filter((x: any) => x?.type === "text" && typeof x.text === "string")
-                  .map((x: any) => x.text)
+                  .map((x) => (isBlock(x, "text") ? str(x.text) : undefined))
+                  .filter((t): t is string => t !== undefined)
                   .join("\n")
               : ""
         )
@@ -448,12 +440,13 @@ const PAGE_BYTES = 300_000;
 const PAGE_MAX_MESSAGES = 80;
 const PHONE_TEXT_MAX = 4000;
 
-function shorten(text: unknown, max: number): unknown {
+function shorten<T>(text: T, max: number): T | string {
   if (typeof text !== "string" || text.length <= max) return text;
   return text.slice(0, max) + "\n… (shortened for your phone; the full text is on your Mac)";
 }
 
-function shortenInput(input: any): any {
+/** A tool call's input (whatever the tool took) with its long strings shortened. */
+function shortenInput(input: unknown): unknown {
   if (!input || typeof input !== "object") return input;
   let size = 0;
   try {
@@ -462,8 +455,10 @@ function shortenInput(input: any): any {
     return {};
   }
   if (size <= PHONE_TEXT_MAX * 2) return input;
-  const out: any = Array.isArray(input) ? [] : {};
-  for (const [k, v] of Object.entries(input)) out[k] = typeof v === "string" ? shorten(v, PHONE_TEXT_MAX) : v;
+  const short = (v: unknown): unknown => (typeof v === "string" ? shorten(v, PHONE_TEXT_MAX) : v);
+  if (Array.isArray(input)) return input.map(short);
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(input)) out[k] = short(v);
   return out;
 }
 
@@ -471,9 +466,9 @@ function shortenInput(input: any): any {
 export function forPhone(m: HistoryMessage): HistoryMessage {
   return {
     ...m,
-    thinking: m.thinking ? (shorten(m.thinking, PHONE_TEXT_MAX * 2) as string) : m.thinking,
-    toolCalls: m.toolCalls?.map((t) => ({ ...t, input: shortenInput(t.input), result: shorten(t.result, PHONE_TEXT_MAX) as string | null })),
-    orderedBlocks: m.orderedBlocks?.map((b) => (b.type === "thinking" ? { ...b, content: shorten(b.content, PHONE_TEXT_MAX * 2) as string } : b)),
+    thinking: m.thinking ? shorten(m.thinking, PHONE_TEXT_MAX * 2) : m.thinking,
+    toolCalls: m.toolCalls?.map((t) => ({ ...t, input: shortenInput(t.input), result: shorten(t.result, PHONE_TEXT_MAX) })),
+    orderedBlocks: m.orderedBlocks?.map((b) => (b.type === "thinking" ? { ...b, content: shorten(b.content, PHONE_TEXT_MAX * 2) } : b)),
   };
 }
 
@@ -525,6 +520,8 @@ function turnCut(cwd: string, sessionId: string): number | null {
 const peekCache = new Map<string, { mtime: number; size: number; peek: string; lastActive: number }>();
 
 function peekOf(cwd: string, sessionId: string): { peek?: string; lastActive?: number } {
+  const fs = nodeFs();
+  const path = nodePath();
   const file = path.join(getProjectDir(cwd), `${sessionId}.jsonl`);
   try {
     const st = fs.statSync(file);
@@ -533,7 +530,8 @@ function peekOf(cwd: string, sessionId: string): { peek?: string; lastActive?: n
     const lm = lastMessage(file);
     const v = { mtime: st.mtimeMs, size: st.size, peek: lm.snippet, lastActive: Math.round(st.mtimeMs) };
     peekCache.set(file, v);
-    if (peekCache.size > 500) peekCache.delete(peekCache.keys().next().value as string);
+    const oldest = peekCache.keys().next();
+    if (peekCache.size > 500 && !oldest.done) peekCache.delete(oldest.value);
     return { peek: v.peek, lastActive: v.lastActive };
   } catch {
     return {};
@@ -560,7 +558,14 @@ function unwatchUnread(): void {
 // ---- Agent listing (list_agents RPC) ---------------------------------------
 // Scans ~/.claude/agents/*.md plus <vault>/.claude/agents/*.md, returning
 // name (filename minus .md) + frontmatter `description:` when present.
-function parseAgentFile(fullPath: string, name: string): { name: string; description: string } {
+/** An agent or skill, as the phone's menus list it. */
+interface NamedItem {
+  name: string;
+  description: string;
+}
+
+function parseAgentFile(fullPath: string, name: string): NamedItem {
+  const fs = nodeFs();
   let description = "";
   try {
     const content = fs.readFileSync(fullPath, "utf8");
@@ -577,9 +582,11 @@ function parseAgentFile(fullPath: string, name: string): { name: string; descrip
   return { name, description };
 }
 
-function listAgentsFromDir(dir: string): Array<{ name: string; description: string }> {
+function listAgentsFromDir(dir: string): NamedItem[] {
+  const fs = nodeFs();
+  const path = nodePath();
   if (!fs.existsSync(dir)) return [];
-  const out: Array<{ name: string; description: string }> = [];
+  const out: NamedItem[] = [];
   for (const f of fs.readdirSync(dir)) {
     if (!f.endsWith(".md")) continue;
     const name = f.replace(/\.md$/, "");
@@ -588,8 +595,10 @@ function listAgentsFromDir(dir: string): Array<{ name: string; description: stri
   return out;
 }
 
-function listAgents(vault: string): Array<{ name: string; description: string }> {
-  const seen = new Map<string, { name: string; description: string }>();
+function listAgents(vault: string): NamedItem[] {
+  const path = nodePath();
+  const os = nodeOs();
+  const seen = new Map<string, NamedItem>();
   const userDir = path.join(os.homedir(), ".claude", "agents");
   const vaultDir = path.join(vault, ".claude", "agents");
   // Vault agents load second so a vault-local override wins over the same-named
@@ -605,7 +614,9 @@ function listAgents(vault: string): Array<{ name: string; description: string }>
 // offers exactly what desktop offers. Claude is spawned with cwd at the vault
 // root, so the vault is the project here. Name and description only; the
 // phone never needs the skill body.
-function listSkillsFromDir(dir: string, seen: Map<string, { name: string; description: string }>): void {
+function listSkillsFromDir(dir: string, seen: Map<string, NamedItem>): void {
+  const fs = nodeFs();
+  const path = nodePath();
   if (!fs.existsSync(dir)) return;
   let entries: FsType.Dirent[];
   try {
@@ -634,8 +645,10 @@ function listSkillsFromDir(dir: string, seen: Map<string, { name: string; descri
   }
 }
 
-function listSkills(vault: string): Array<{ name: string; description: string }> {
-  const seen = new Map<string, { name: string; description: string }>();
+function listSkills(vault: string): NamedItem[] {
+  const path = nodePath();
+  const os = nodeOs();
+  const seen = new Map<string, NamedItem>();
   listSkillsFromDir(path.join(os.homedir(), ".claude", "skills"), seen);
   listSkillsFromDir(path.join(vault, ".claude", "skills"), seen);
   listSkillsFromDir(path.join(vault, "skills"), seen);
@@ -648,12 +661,12 @@ function generateTitle(cliPath: string, env: NodeJS.ProcessEnv, userMessage: str
     const prompt = `Generate a short 3-6 word title (no quotes, no punctuation at the end) for a conversation that starts with this user message:\n\n"${userMessage}"\n\nAssistant replied:\n\n"${(assistantMessage || "").slice(0, 500)}"\n\nRespond with ONLY the title.`;
     let out = "",
       err = "";
-    const p = spawn(cliPath, ["--print", prompt, "--model", "haiku"], {
-      cwd: os.tmpdir(),
+    const p = nodeChildProcess().spawn(cliPath, ["--print", prompt, "--model", "haiku"], {
+      cwd: nodeOs().tmpdir(),
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const timer = setTimeout(() => {
+    const timer = window.setTimeout(() => {
       debug("[hyo][gateway] title: timeout, killing");
       try {
         p.kill();
@@ -665,13 +678,13 @@ function generateTitle(cliPath: string, env: NodeJS.ProcessEnv, userMessage: str
     p.stdout?.on("data", (c: Buffer) => (out += c.toString()));
     p.stderr?.on("data", (c: Buffer) => (err += c.toString()));
     p.on("close", (code) => {
-      clearTimeout(timer);
+      window.clearTimeout(timer);
       const title = out.trim().replace(/^["']|["']$/g, "").slice(0, 60) || null;
       if (!title) debug(`[hyo][gateway] title: empty (code=${code}) stderr=${err.slice(0, 200)}`);
       resolve(title);
     });
     p.on("error", (e: Error) => {
-      clearTimeout(timer);
+      window.clearTimeout(timer);
       debug(`[hyo][gateway] title: spawn error ${e.message}`);
       resolve(null);
     });
@@ -692,7 +705,7 @@ function generateTitle(cliPath: string, env: NodeJS.ProcessEnv, userMessage: str
 
 // Path slug for this vault's serve mount, e.g. "EV-HQ" -> "hyo-ev-hq".
 function vaultSlug(vaultPath: string): string {
-  const name = path.basename(vaultPath || "vault");
+  const name = nodePath().basename(vaultPath || "vault");
   const slug = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -725,19 +738,21 @@ const MOBILE_ALLOW_DEFAULTS = [
 ];
 
 function mobileSettingsPath(): string {
-  return process.env.HYO_MOBILE_SETTINGS || path.join(os.homedir(), ".hyo", "mobile-settings.json");
+  return process.env.HYO_MOBILE_SETTINGS || nodePath().join(nodeOs().homedir(), ".hyo", "mobile-settings.json");
 }
 
 function readMobileAllow(): string[] {
   try {
-    const j = JSON.parse(fs.readFileSync(mobileSettingsPath(), "utf8"));
-    return Array.isArray(j?.permissions?.allow) ? j.permissions.allow : [];
+    const allow = field(field(JSON.parse(nodeFs().readFileSync(mobileSettingsPath(), "utf8")), "permissions"), "allow");
+    return Array.isArray(allow) ? allow.filter((t): t is string => typeof t === "string") : [];
   } catch {
     return [];
   }
 }
 
 function writeMobileAllow(allow: string[]): void {
+  const fs = nodeFs();
+  const path = nodePath();
   fs.mkdirSync(path.dirname(mobileSettingsPath()), { recursive: true });
   fs.writeFileSync(mobileSettingsPath(), JSON.stringify({ permissions: { allow } }, null, 2));
 }
@@ -770,10 +785,12 @@ function addMobileAllow(toolName: string): void {
 let discoverySlug: string | null = null;
 
 function gatewaysDir(): string {
-  return path.join(os.homedir(), ".hyo", "gateways");
+  return nodePath().join(nodeOs().homedir(), ".hyo", "gateways");
 }
 
 function writeDiscovery(slug: string, vault: string, port: number): void {
+  const fs = nodeFs();
+  const path = nodePath();
   try {
     fs.mkdirSync(gatewaysDir(), { recursive: true });
     fs.writeFileSync(
@@ -789,7 +806,7 @@ function writeDiscovery(slug: string, vault: string, port: number): void {
 function removeDiscovery(): void {
   if (!discoverySlug) return;
   try {
-    fs.unlinkSync(path.join(gatewaysDir(), `${discoverySlug}.json`));
+    nodeFs().unlinkSync(nodePath().join(gatewaysDir(), `${discoverySlug}.json`));
   } catch {
     /* already gone */
   }
@@ -804,14 +821,15 @@ function removeDiscovery(): void {
 const MOBILE_LOG_MAX = 512 * 1024;
 
 export function mobileLogPath(): string {
-  return path.join(os.homedir(), ".hyo", "mobile.log");
+  return nodePath().join(nodeOs().homedir(), ".hyo", "mobile.log");
 }
 
 function mlog(msg: string): void {
   debug(`[hyo][gateway] ${msg}`);
   try {
+    const fs = nodeFs();
     const file = mobileLogPath();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.mkdirSync(nodePath().dirname(file), { recursive: true });
     try {
       if (fs.statSync(file).size > MOBILE_LOG_MAX) fs.writeFileSync(file, "");
     } catch {
@@ -853,6 +871,7 @@ function failStartup(detail: string): void {
 // both land under Program Files, and `ProgramFiles` is consulted first so a
 // non-default system drive still resolves.
 function tailscaleCandidates(): string[] {
+  const path = nodePath();
   if (process.platform === "win32") {
     const progFiles = process.env["ProgramFiles"] || "C:\\Program Files";
     const progFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
@@ -874,6 +893,7 @@ function tailscaleCandidates(): string[] {
 }
 
 function findTailscaleBin(): string | null {
+  const fs = nodeFs();
   for (const c of tailscaleCandidates()) {
     try {
       if (fs.existsSync(c)) return c;
@@ -916,13 +936,14 @@ function runTailscale(
             mlog(`${label} -> exit ${code}${err ? ` err=${err.trim().split("\n")[0]}` : ""}`);
             try {
               onDone(code, out, err);
-            } catch (e: any) {
+            } catch (e) {
               // The queue must keep moving, but a throw here also means the
               // startup chain stopped partway. Say so rather than going quiet.
-              failStartup(`mobile setup failed after '${label}': ${e?.message || String(e)}`);
+              failStartup(`mobile setup failed after '${label}': ${errorMessage(e) || String(e)}`);
             }
           };
           let child: ChildProcess;
+          const { spawn } = nodeChildProcess();
           try {
             if (process.platform === "darwin") {
               const shellCmd = [tsBin, ...args].map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ");
@@ -931,21 +952,21 @@ function runTailscale(
             } else {
               child = spawn(tsBin, args, { stdio: ["ignore", "pipe", "pipe"] });
             }
-          } catch (e: any) {
-            done(-1, "", e?.message || String(e));
+          } catch (e) {
+            done(-1, "", errorMessage(e) || String(e));
             return;
           }
           let out = "";
           let err = "";
           let settled = false;
-          let timer: ReturnType<typeof setTimeout> | null = null;
+          let timer: number | null = null;
           const settle = (code: number, o: string, e: string) => {
             if (settled) return;
             settled = true;
-            if (timer) clearTimeout(timer);
+            if (timer) window.clearTimeout(timer);
             done(code, o, e);
           };
-          timer = setTimeout(() => {
+          timer = window.setTimeout(() => {
             try {
               child.kill();
             } catch {
@@ -971,10 +992,28 @@ function runTailscale(
     });
 }
 
+/** This machine's tailnet name, from `tailscale status --json` (trailing dot dropped). */
+function tailnetName(status: unknown): string {
+  return (str(field(field(status, "Self"), "DNSName")) || "").replace(/\.$/, "");
+}
+
+/** Every serve mount in `tailscale serve status --json`: its path and what it proxies to. */
+function serveHandlers(status: unknown): Array<{ mountPath: string; proxy: string }> {
+  const out: Array<{ mountPath: string; proxy: string }> = [];
+  const web = field(status, "Web");
+  for (const host of Object.values(isRecord(web) ? web : {})) {
+    const handlers = field(host, "Handlers");
+    for (const [mountPath, h] of Object.entries(isRecord(handlers) ? handlers : {})) {
+      out.push({ mountPath, proxy: str(field(h, "Proxy")) || "" });
+    }
+  }
+  return out;
+}
+
 function announceConnectUrl(tsBin: string, slug: string, onUrl: (url: string) => void): void {
-  runTailscale(tsBin, ["status", "--json"], (code, out) => {
+  runTailscale(tsBin, ["status", "--json"], (_code, out) => {
     try {
-      const host = String((JSON.parse(out) as any)?.Self?.DNSName || "").replace(/\.$/, "");
+      const host = tailnetName(JSON.parse(out));
       if (host) {
         const url = `wss://${host}/${slug}`;
         setStatus({ state: "on", url });
@@ -1024,7 +1063,7 @@ function setupTailscaleServe(port: number, slug: string, onUrl: (url: string) =>
         return;
       }
       if (attempt === 0) {
-        setTimeout(() => attemptAdd(1), 3500);
+        window.setTimeout(() => attemptAdd(1), 3500);
         return;
       }
       const reason = err ? err.trim().split("\n")[0] : `exit code ${code}`;
@@ -1045,12 +1084,9 @@ function cleanStaleMounts(tsBin: string, done: () => void): void {
     let mounts: { mountPath: string; port: number }[] = [];
     try {
       if (code === 0) {
-        const cfg = JSON.parse(out);
-        for (const host of Object.values<any>(cfg?.Web || {})) {
-          for (const [p, h] of Object.entries<any>(host?.Handlers || {})) {
-            const m = /^http:\/\/127\.0\.0\.1:(\d+)$/.exec(String(h?.Proxy || ""));
-            if (m && /^\/hyo-/.test(p)) mounts.push({ mountPath: p, port: parseInt(m[1], 10) });
-          }
+        for (const { mountPath, proxy } of serveHandlers(JSON.parse(out))) {
+          const m = /^http:\/\/127\.0\.0\.1:(\d+)$/.exec(proxy);
+          if (m && /^\/hyo-/.test(mountPath)) mounts.push({ mountPath, port: parseInt(m[1], 10) });
         }
       }
     } catch {
@@ -1060,7 +1096,7 @@ function cleanStaleMounts(tsBin: string, done: () => void): void {
       done();
       return;
     }
-    const net = require("net");
+    const net = nodeNet();
     let pending = mounts.length;
     const finishOne = () => {
       if (--pending === 0) done();
@@ -1086,7 +1122,7 @@ function cleanStaleMounts(tsBin: string, done: () => void): void {
 // gateway port is internal (Tailscale fronts it), so the user never has to
 // know or care which one we land on — we just avoid whatever's already taken.
 async function findFreePort(preferred: number): Promise<number> {
-  const net = require("net");
+  const net = nodeNet();
   // Probe by connecting, not binding: bind checks miss cross-family listeners
   // (an IPv6 wildcard bind succeeds while IPv4 loopback is taken, and vice
   // versa), which made us claim ports that other services were already
@@ -1099,7 +1135,7 @@ async function findFreePort(preferred: number): Promise<number> {
         resolve(free);
       };
       sock.once("connect", () => done(false)); // something answered — taken
-      sock.once("error", (e: any) => done(e && e.code === "ECONNREFUSED"));
+      sock.once("error", (e: NodeJS.ErrnoException) => done(e.code === "ECONNREFUSED"));
       sock.setTimeout(1500, () => done(false)); // no verdict — assume taken
     });
   for (let p = preferred; p < preferred + 50; p++) {
@@ -1114,6 +1150,26 @@ async function findFreePort(preferred: number): Promise<number> {
  * without Tailscale or the rest of startup.
  */
 const PHONE_MODES = new Set(["manual", "acceptEdits", "bypassPermissions"]);
+
+/** A turn of the conversation so far, as the phone sends it for a live call. */
+interface LiveTurn {
+  role: "user" | "assistant";
+  text: string;
+}
+
+function isLiveTurn(h: unknown): h is LiveTurn {
+  return isRecord(h) && (h.role === "user" || h.role === "assistant") && typeof h.text === "string" && !!h.text;
+}
+
+/** The pinned/closed/last-active change the phone asks for (only those fields are read). */
+function taskMetaPatch(raw: unknown): { pinned?: boolean; closed?: boolean; lastActive?: string } {
+  const patch: { pinned?: boolean; closed?: boolean; lastActive?: string } = {};
+  if (!isRecord(raw)) return patch;
+  if (typeof raw.pinned === "boolean") patch.pinned = raw.pinned;
+  if (typeof raw.closed === "boolean") patch.closed = raw.closed;
+  if (typeof raw.lastActive === "string") patch.lastActive = raw.lastActive;
+  return patch;
+}
 
 export interface GatewaySocketContext {
   config: () => Required<GatewayHostConfig> | null;
@@ -1131,41 +1187,48 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
   const send = (obj: unknown) => sendTo(ws, obj);
   const sink = { send, isOpen: () => ws.readyState === ws.OPEN };
 
-  ws.on("message", async (data: Buffer | string) => {
+  const onMessage = async (data: Buffer | string): Promise<void> => {
     const cfg = ctx.config();
     const env = ctx.env();
     if (!cfg || !env) return; // host stopped mid-flight
     const cwd = cfg.getCwd() || cfg.cwd;
-    let m: any;
+    let parsed: unknown;
     try {
-      m = JSON.parse(data.toString());
+      parsed = JSON.parse(data.toString());
     } catch {
       return;
     }
+    // Every message is a JSON object with a `type` (see the list at the top).
+    if (!isRecord(parsed)) return;
+    const m = parsed;
     try {
       // Every conversation the phone has open attaches to the Mac's one
       // process for it (session-owner.ts): prompts, answers, stop, reattach.
       const sessionCtx: GatewaySessionContext = {
         cwd,
-        mintId: () => randomUUID(),
+        mintId: () => nodeCrypto().randomUUID(),
         allowOnPhone: addMobileAllow,
-        specFor: (p, sessionId) => {
+        specFor: (prompt: unknown, sessionId) => {
+          // The phone's `prompt` message (its model, agent, ask-first and persona).
+          const p = isRecord(prompt) ? prompt : {};
           // Ask-first drops the desktop's local settings and loads the
           // phone's own allowlist back on, as the phone's processes always did.
           const ask = p.askFirst !== false;
           if (ask) ensureMobileSettings();
+          const effort = str(p.effort);
+          const mode = str(p.permissionMode);
           return {
             cliPath: cfg.cliPath,
             cwd,
-            model: p.model || cfg.defaultModel,
-            ...(typeof p.effort === "string" && p.effort ? { effort: p.effort } : {}),
+            model: str(p.model) || cfg.defaultModel,
+            ...(effort ? { effort } : {}),
             // The mode the phone has for this conversation (it only applies
             // if the phone is the one starting it; a running conversation
             // keeps its own). Older phones send only Ask first on or off.
-            permissionMode: PHONE_MODES.has(p.permissionMode) ? p.permissionMode : ask ? "manual" : "bypassPermissions",
-            agent: p.agent || cfg.defaultAgent,
+            permissionMode: mode !== undefined && PHONE_MODES.has(mode) ? mode : ask ? "manual" : "bypassPermissions",
+            agent: str(p.agent) || cfg.defaultAgent,
             sessionId,
-            appendSystemPrompt: p.appendSystemPrompt,
+            appendSystemPrompt: str(p.appendSystemPrompt),
             adopt: true,
             ...(ask ? { settingSources: "user,project", settingsPath: mobileSettingsPath() } : {}),
           };
@@ -1202,7 +1265,7 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
           send({
             type: "history",
             sessionId,
-            requestId: m.requestId,
+            requestId: str(m.requestId),
             paged: true,
             ...page,
             voiceCalls: getVoiceCalls(cwd, sessionId),
@@ -1219,7 +1282,7 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
           // on the Mac, which has the file. Then the conversation's process
           // starts fresh on the cleaned file (once nothing runs in it).
           const sessionId = typeof m.sessionId === "string" ? m.sessionId : "";
-          let result: any;
+          let result: RepairResult;
           try {
             const own = sessionId ? findSessionOwner(cwd, sessionId) : null;
             const main = mainChatOwner(cwd);
@@ -1227,35 +1290,41 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
             if (!sessionId) result = { success: false, linesRemoved: 0, capturedUserText: null, reason: "No session ID for this tab" };
             else if (owner?.busy) result = { success: false, linesRemoved: 0, capturedUserText: null, reason: "background work is still running in this chat. Try again once it has finished" };
             else {
-              result = repairSession(path.join(getProjectDir(cwd), `${sessionId}.jsonl`));
+              result = repairSession(nodePath().join(getProjectDir(cwd), `${sessionId}.jsonl`));
               if (result.success) owner?.restart();
             }
-          } catch (e: any) {
-            result = { success: false, linesRemoved: 0, capturedUserText: null, reason: e?.message || String(e) };
+          } catch (e) {
+            result = { success: false, linesRemoved: 0, capturedUserText: null, reason: errorMessage(e) || String(e) };
           }
-          send({ type: "repair_result", requestId: m.requestId, result });
+          send({ type: "repair_result", requestId: str(m.requestId), result });
           break;
         }
         case "search_sessions":
-          send({ type: "search_results", query: m.query, hits: searchSessions(cwd, m.query) });
+          send({ type: "search_results", query: m.query, hits: searchSessions(cwd, str(m.query) ?? "") });
           break;
-        case "rename":
-          saveCustomTitle(cwd, m.sessionId, m.title);
-          send({ type: "renamed", sessionId: m.sessionId, title: m.title });
+        case "rename": {
+          const sessionId = str(m.sessionId);
+          const title = str(m.title);
+          if (sessionId !== undefined && title !== undefined) saveCustomTitle(cwd, sessionId, title);
+          send({ type: "renamed", sessionId, title });
           break;
+        }
         case "save_voice_call":
           // A call made on the phone, saved where desktop keeps its own.
-          if (typeof m.sessionId === "string" && m.call && typeof m.call.id === "string") {
+          if (typeof m.sessionId === "string" && isVoiceCallRecord(m.call)) {
             saveVoiceCall(cwd, m.sessionId, m.call, typeof m.title === "string" ? m.title : undefined);
           }
-          send({ type: "voice_call_saved", sessionId: m.sessionId });
+          send({ type: "voice_call_saved", sessionId: str(m.sessionId) });
           break;
-        case "set_task_meta":
-          setTaskMeta(cwd, m.sessionId, m.patch || {});
-          send({ type: "task_meta_set", sessionId: m.sessionId });
+        case "set_task_meta": {
+          const sessionId = str(m.sessionId);
+          const patch = taskMetaPatch(m.patch);
+          if (sessionId !== undefined) setTaskMeta(cwd, sessionId, patch);
+          send({ type: "task_meta_set", sessionId });
           // A pin puts the conversation in everyone's Open list.
-          if (m.patch && "pinned" in m.patch) openConversations(cwd)?.pinsChanged();
+          if ("pinned" in patch) openConversations(cwd)?.pinsChanged();
           break;
+        }
         case "list_agents":
           send({ type: "agents", agents: listAgents(cwd) });
           break;
@@ -1263,15 +1332,15 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
           send({ type: "skills", skills: listSkills(cwd) });
           break;
         case "generate_title": {
-          const title = await generateTitle(cfg.cliPath, env, m.userMessage, m.assistantMessage);
-          send({ type: "title", requestId: m.requestId, title });
+          const title = await generateTitle(cfg.cliPath, env, str(m.userMessage) ?? "", str(m.assistantMessage) ?? "");
+          send({ type: "title", requestId: str(m.requestId), title });
           break;
         }
         case "live_config": {
           const lv = cfg.getLiveVoice?.();
           send({
             type: "live_config",
-            requestId: m.requestId,
+            requestId: str(m.requestId),
             engine: lv?.engine || "elevenlabs",
             voice: typeof lv?.voice === "string" ? lv.voice : lv?.voice ? "custom" : "marin",
           });
@@ -1283,53 +1352,61 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
           // history from the phone) is built here too, so the phone holds
           // nothing secret and follows the desktop's voice settings.
           const lv = cfg.getLiveVoice?.();
+          const requestId = str(m.requestId);
           if (!lv || lv.engine !== "gpt-live" || !lv.openAiApiKey) {
             send({
               type: "live_sdp_error",
-              requestId: m.requestId,
+              requestId,
               message: "Set the desktop's voice engine to GPT-Live and add an OpenAI key in Hyo settings there.",
             });
             break;
           }
           const agent = typeof m.agent === "string" && m.agent ? m.agent : cfg.defaultAgent;
-          const history = Array.isArray(m.history) ? m.history.slice(-60) : [];
+          const history: unknown[] = Array.isArray(m.history) ? m.history.slice(-60) : [];
           // About you goes into the starting instructions, read fresh (capped
           // so a slow read never holds up the call).
           const aboutYou = lv.getAboutYou
-            ? await Promise.race([lv.getAboutYou().catch(() => ""), new Promise<string>((r) => setTimeout(() => r(""), 1500))])
+            ? await Promise.race([lv.getAboutYou().catch(() => ""), new Promise<string>((r) => window.setTimeout(() => r(""), 1500))])
             : "";
           const session = {
             model: "gpt-live-1",
             delegation: { type: "client" },
             instructions: buildLiveInstructions(lv.personality, readAgentIdentity(agent), { voiceDescription: lv.voiceDescription, aboutYou }),
-            input: history
-              .filter((h: any) => h && (h.role === "user" || h.role === "assistant") && typeof h.text === "string" && h.text)
-              .map((h: any) => ({
-                type: "message",
-                role: h.role,
-                content: [{ type: h.role === "user" ? "input_text" : "output_text", text: String(h.text).slice(0, 4000) }],
-              })),
+            input: history.filter(isLiveTurn).map((h) => ({
+              type: "message",
+              role: h.role,
+              content: [{ type: h.role === "user" ? "input_text" : "output_text", text: h.text.slice(0, 4000) }],
+            })),
             audio: { output: { voice: lv.voice || "marin" } },
           };
           void (async () => {
             try {
-              const res = await fetch("https://api.openai.com/v1/live/sessions", {
+              const res = await requestUrl({
+                url: "https://api.openai.com/v1/live/sessions",
                 method: "POST",
                 headers: { Authorization: `Bearer ${lv.openAiApiKey}`, "Content-Type": "application/json" },
                 body: JSON.stringify({ session, transport: { type: "webrtc", sdp: m.sdp } }),
+                // An error status is answered below, with OpenAI's own reason.
+                throw: false,
               });
-              const data: any = await res.json().catch(() => ({}));
-              if (!res.ok || !data?.transport?.sdp) {
+              let data: unknown = {};
+              try {
+                data = res.json;
+              } catch {
+                // Not JSON: the status says what happened.
+              }
+              const sdp = str(field(field(data, "transport"), "sdp"));
+              if (res.status < 200 || res.status >= 300 || !sdp) {
                 send({
                   type: "live_sdp_error",
-                  requestId: m.requestId,
-                  message: data?.error?.message || `OpenAI refused the call (${res.status})`,
+                  requestId,
+                  message: str(field(field(data, "error"), "message")) || `OpenAI refused the call (${res.status})`,
                 });
                 return;
               }
-              send({ type: "live_sdp_answer", requestId: m.requestId, sdp: data.transport.sdp, sessionId: data?.session?.id });
-            } catch (e: any) {
-              send({ type: "live_sdp_error", requestId: m.requestId, message: e?.message || "Couldn't reach OpenAI" });
+              send({ type: "live_sdp_answer", requestId, sdp, sessionId: field(field(data, "session"), "id") });
+            } catch (e) {
+              send({ type: "live_sdp_error", requestId, message: errorMessage(e) || "Couldn't reach OpenAI" });
             }
           })();
           break;
@@ -1338,7 +1415,7 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
           // The phone's "Update Claude" button. "started" goes back straight
           // away: a gateway from before this existed ignores the request,
           // and that silence is how the phone knows to fall back.
-          const requestId = m.requestId;
+          const requestId = str(m.requestId);
           const required = typeof m.required === "string" ? m.required : "";
           send({ type: "claude_update", requestId, phase: "started" });
           void (async () => {
@@ -1352,8 +1429,8 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
               // restart them now. A busy one swaps on its next message.
               if (r.ok) restartIdleOwners();
               send({ type: "claude_update", requestId, phase: "done", ok: r.ok, error: r.error });
-            } catch (e: any) {
-              send({ type: "claude_update", requestId, phase: "done", ok: false, error: e?.message || String(e) });
+            } catch (e) {
+              send({ type: "claude_update", requestId, phase: "done", ok: false, error: errorMessage(e) || String(e) });
             }
           })();
           break;
@@ -1362,11 +1439,13 @@ export function attachGatewaySocket(ws: WsSocket, ctx: GatewaySocketContext): vo
           send({ type: "gateway", subtype: "pong" });
           break;
       }
-    } catch (e: any) {
-      debug(`[hyo][gateway] [${cid}] handler error on ${m.type}: ${e.message}`);
-      send({ type: "gateway", subtype: "error", error: e.message });
+    } catch (e) {
+      debug(`[hyo][gateway] [${cid}] handler error on ${String(m.type)}: ${errorMessage(e)}`);
+      send({ type: "gateway", subtype: "error", error: errorMessage(e) });
     }
-  });
+  };
+  // Each message is handled on its own; every failure is answered inside.
+  ws.on("message", (data: Buffer | string) => void onMessage(data));
 
   ws.on("close", () => {
     ctx.onClients?.(-1);
@@ -1419,7 +1498,7 @@ export function startGatewayHost(config: GatewayHostConfig): void {
   // kill every session with a bare "exited (code -2)". If the configured file
   // doesn't exist, fall back to `claude` and let the PATH built below — which
   // covers the usual install locations — resolve it.
-  if (resolved.cliPath && resolved.cliPath.includes("/") && !fs.existsSync(resolved.cliPath)) {
+  if (resolved.cliPath && resolved.cliPath.includes("/") && !nodeFs().existsSync(resolved.cliPath)) {
     debug(`[hyo][gateway] cliPath ${resolved.cliPath} doesn't exist — falling back to \`claude\` on PATH`);
     resolved.cliPath = "claude";
   }
@@ -1435,8 +1514,9 @@ export function startGatewayHost(config: GatewayHostConfig): void {
   // Unix-shaped; on Windows the inherited PATH already covers npm and winget
   // installs, and joining with the wrong separator would corrupt the whole
   // variable, so that platform gets its PATH passed through untouched.
+  const path = nodePath();
   const env: NodeJS.ProcessEnv = { ...process.env };
-  const home = os.homedir();
+  const home = nodeOs().homedir();
   env.PATH =
     process.platform === "win32"
       ? process.env.PATH || ""
@@ -1454,13 +1534,14 @@ export function startGatewayHost(config: GatewayHostConfig): void {
         ].join(path.delimiter);
   activeEnv = env;
 
-  const server = new WebSocketServer({ host: "127.0.0.1", port: resolved.port });
+  const { WebSocketServer } = await import("ws");
+  const server: WsServer = new WebSocketServer({ host: "127.0.0.1", port: resolved.port });
   wss = server;
-  server.on("error", (e: any) => {
+  server.on("error", (e: NodeJS.ErrnoException) => {
     const msg =
-      e && e.code === "EADDRINUSE"
+      e.code === "EADDRINUSE"
         ? `Port ${resolved.port} is already in use. Change the gateway port in Hyo settings (Mobile access).`
-        : `Gateway error: ${e?.message || e}`;
+        : `Gateway error: ${e.message || String(e)}`;
     setStatus({ state: "error", detail: msg });
     try {
       new Notice(`Hyo mobile access: ${msg}`, 8000);
@@ -1491,10 +1572,10 @@ export function startGatewayHost(config: GatewayHostConfig): void {
       onClients: (d) => setStatus({ clients: Math.max(0, currentStatus.clients + d) }),
     })
   );
-    } catch (e: any) {
+    } catch (e) {
       // Everything after the first await used to land here as an unhandled
       // rejection, leaving the indicator on "starting" with nothing said.
-      failStartup(`mobile access couldn't start: ${e?.message || String(e)}`);
+      failStartup(`mobile access couldn't start: ${errorMessage(e) || String(e)}`);
     }
   })();
 }
@@ -1512,7 +1593,7 @@ export interface MobileCheck {
 }
 
 function probePort(port: number): Promise<boolean> {
-  const net = require("net");
+  const net = nodeNet();
   return new Promise((resolve) => {
     const sock = net.connect({ port, host: "127.0.0.1" });
     const done = (live: boolean) => {
@@ -1549,9 +1630,9 @@ export async function checkMobileAccess(vaultPath: string, port: number): Promis
   let backend = "";
   let dnsName = "";
   try {
-    const parsed = JSON.parse(status.out);
-    backend = String(parsed?.BackendState || "");
-    dnsName = String(parsed?.Self?.DNSName || "").replace(/\.$/, "");
+    const parsed: unknown = JSON.parse(status.out);
+    backend = str(field(parsed, "BackendState")) || "";
+    dnsName = tailnetName(parsed);
   } catch {
     /* handled by the check below */
   }
@@ -1580,13 +1661,10 @@ export async function checkMobileAccess(vaultPath: string, port: number): Promis
   const serve = await run(tsBin, ["serve", "status", "--json"]);
   let mountPort: number | null = null;
   try {
-    const cfg = JSON.parse(serve.out);
-    for (const host of Object.values<any>(cfg?.Web || {})) {
-      for (const [p, h] of Object.entries<any>(host?.Handlers || {})) {
-        if (p !== `/${slug}`) continue;
-        const m = /^http:\/\/127\.0\.0\.1:(\d+)$/.exec(String(h?.Proxy || ""));
-        if (m) mountPort = parseInt(m[1], 10);
-      }
+    for (const { mountPath, proxy } of serveHandlers(JSON.parse(serve.out))) {
+      if (mountPath !== `/${slug}`) continue;
+      const m = /^http:\/\/127\.0\.0\.1:(\d+)$/.exec(proxy);
+      if (m) mountPort = parseInt(m[1], 10);
     }
   } catch {
     /* handled by the check below */
