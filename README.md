@@ -42,7 +42,7 @@ No separate app, no extra billing — Hyo runs on your existing Claude login, no
 Hyo is in Obsidian's community plugin directory.
 
 **Step 1: Install Hyo**
-In Obsidian, go to Settings → Community plugins → Browse, search for **Hyo Claude Code Agent**, and click **Install**. Or click **Add to Obsidian** on Hyo's page at community.obsidian.md.
+Open [Hyo in the Obsidian plugin directory](https://community.obsidian.md/plugins/hyo) and click **Add to Obsidian**. Or in Obsidian, go to Settings → Community plugins → Browse, search for **Hyo Claude Code Agent**, and click **Install**.
 
 **Step 2: Enable it**
 In Settings → Community plugins, turn on **Hyo Claude Code Agent**.
