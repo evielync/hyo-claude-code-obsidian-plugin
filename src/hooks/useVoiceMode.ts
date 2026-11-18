@@ -140,43 +140,6 @@ export function useVoiceMode({
 
   // --- Recording ---
 
-  const startRecording = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : "audio/webm";
-      const recorder = new MediaRecorder(stream, { mimeType });
-      chunksRef.current = [];
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-
-      recorder.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        await processRecording();
-      };
-
-      recorderRef.current = recorder;
-      recorder.start();
-      setVoiceState("listening");
-    } catch (err) {
-      console.error("[hyo-voice] Microphone access denied:", err);
-      setVoiceState("idle");
-      new Notice(
-        "Hyo voice: couldn't access the microphone. Grant Obsidian mic access in System Settings → Privacy & Security → Microphone, then restart Obsidian.",
-        8000
-      );
-    }
-  }, []);
-
-  const stopRecording = useCallback(() => {
-    if (recorderRef.current && recorderRef.current.state === "recording") {
-      recorderRef.current.stop();
-    }
-  }, []);
-
   // Process recording → transcribe → send
   const processRecording = useCallback(async () => {
     if (processingRef.current) return;
@@ -219,6 +182,63 @@ export function useVoiceMode({
     }
   }, [apiKey, onTranscript]);
 
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+      const recorder = new MediaRecorder(stream, { mimeType });
+      chunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        await processRecording();
+      };
+
+      recorderRef.current = recorder;
+      recorder.start();
+      setVoiceState("listening");
+    } catch (err) {
+      console.error("[hyo-voice] Microphone access denied:", err);
+      setVoiceState("idle");
+      new Notice(
+        "Hyo voice: couldn't access the microphone. Grant Obsidian mic access in System Settings → Privacy & Security → Microphone, then restart Obsidian.",
+        8000
+      );
+    }
+  }, [processRecording]);
+
+  const stopRecording = useCallback(() => {
+    if (recorderRef.current && recorderRef.current.state === "recording") {
+      recorderRef.current.stop();
+    }
+  }, []);
+
+  // --- Audio controls ---
+
+  const stopAudio = useCallback(() => {
+    // On a live call the voice model owns playback; nothing queued here to stop.
+    if (isLive) return;
+    stopSpeechRef.current = true;
+    speechQueueRef.current = [];
+    prefetchRef.current = null;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current = null;
+    }
+    // Unblock the runner's await on the clip we just paused.
+    if (currentResolveRef.current) currentResolveRef.current();
+    runnerRef.current = false;
+    setVoiceState("idle");
+    setIsPaused(false);
+  }, [isLive]);
+
   // --- Record button handler ---
 
   const handleRecordClick = useCallback(() => {
@@ -234,7 +254,7 @@ export function useVoiceMode({
       // startRecording reports its own failures (a Notice), so nothing to wait for here.
       void startRecording();
     }
-  }, [voiceState, stopRecording, startRecording]);
+  }, [voiceState, stopAudio, stopRecording, startRecording]);
 
   // --- Streaming TTS ---
   // A speech queue that speaks Chad's reply as it streams, instead of waiting
@@ -331,26 +351,6 @@ export function useVoiceMode({
     },
     [apiKey, voiceId, runQueue, isLive]
   );
-
-  // --- Audio controls ---
-
-  const stopAudio = useCallback(() => {
-    // On a live call the voice model owns playback; nothing queued here to stop.
-    if (isLive) return;
-    stopSpeechRef.current = true;
-    speechQueueRef.current = [];
-    prefetchRef.current = null;
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-      audioRef.current = null;
-    }
-    // Unblock the runner's await on the clip we just paused.
-    if (currentResolveRef.current) currentResolveRef.current();
-    runnerRef.current = false;
-    setVoiceState("idle");
-    setIsPaused(false);
-  }, [isLive]);
 
   // --- GPT-Live call ---
 

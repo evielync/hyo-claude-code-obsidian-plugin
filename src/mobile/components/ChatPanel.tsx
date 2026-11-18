@@ -305,7 +305,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
   const [openCall, setOpenCall] = useState<VoiceCallRecord | null>(null);
   useEffect(() => setOpenCall(null), [activeTabId]);
   const [attachedFilesMap, setAttachedFilesMap] = useState<Record<string, AttachedFile[]>>({});
-  const attachedFiles = attachedFilesMap[activeTabId] ?? [];
+  const attachedFiles = useMemo(() => attachedFilesMap[activeTabId] ?? [], [attachedFilesMap, activeTabId]);
   const [attachPopupOpen, setAttachPopupOpen] = useState(false);
   const attachBtnRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -973,7 +973,7 @@ export function ChatPanel({ sessionManager, plugin, app, isShown }: ChatPanelPro
       setInputValues((prev) => ({ ...prev, [activeTabId]: `/${item.name} ` }));
       inputRef.current?.focus();
     },
-    [activeTabId, compact]
+    [activeTabId, compact, sendMessage]
   );
 
   const handleInput = useCallback(

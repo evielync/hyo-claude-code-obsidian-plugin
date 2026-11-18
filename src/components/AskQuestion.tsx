@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import type { AskQuestionData } from "../hooks/useChatEngine";
 
 interface AskQuestionProps {
@@ -9,7 +9,7 @@ interface AskQuestionProps {
 export function AskQuestion({ question, onAnswer }: AskQuestionProps) {
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [inputValue, setInputValue] = useState("");
-  const questions = question.questions || [];
+  const questions = useMemo(() => question.questions || [], [question.questions]);
 
   const currentIdx = questions.findIndex((_, i) => !answers[i]);
 
