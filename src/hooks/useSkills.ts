@@ -1,9 +1,5 @@
 import { useEffect, useState } from "react";
-import { Platform } from "obsidian";
-// Node built-ins are desktop-only; deferred so this module loads on mobile.
-const fs: typeof import("fs") = Platform.isMobile ? (undefined as any) : require("fs");
-const path: typeof import("path") = Platform.isMobile ? (undefined as any) : require("path");
-const os: typeof import("os") = Platform.isMobile ? (undefined as any) : require("os");
+import { nodeFs, nodeOs, nodePath } from "../platform/node";
 
 export interface Skill {
   name: string;
@@ -30,6 +26,10 @@ export function useSkills(workingDirectory: string): Skill[] {
     if (!workingDirectory) return;
 
     try {
+      // Desktop only: these throw on mobile, and the catch below says so.
+      const fs = nodeFs();
+      const path = nodePath();
+      const os = nodeOs();
       const resolved = workingDirectory.replace(/^~/, os.homedir());
 
       // Check all standard locations (same as Claude Code)

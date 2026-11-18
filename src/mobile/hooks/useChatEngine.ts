@@ -1,5 +1,6 @@
 // The chat's message shapes, shared by the session manager and the message
 // components.
+import type { ToolInput } from "../../types/session-events";
 import type { VoiceCallRecord } from "../../voice/voice-call";
 
 const HIDDEN_TOOLS = new Set([
@@ -57,7 +58,7 @@ export interface Message {
 export interface ToolCallData {
   id: string;
   name: string;
-  input: any;
+  input: ToolInput;
   result: string | null;
   _inputJson?: string;
 }
@@ -73,7 +74,7 @@ export interface OrderedBlock {
 export interface PermissionRequestData {
   requestId: string;
   toolName: string;
-  input?: any;
+  input?: ToolInput;
   /** The background job asking, by name, when it isn't the chat itself. */
   asker?: string;
   /** That job's id (the request's agent_id): its asks go when it ends. */

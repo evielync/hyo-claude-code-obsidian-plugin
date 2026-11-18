@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { Workspace } from "obsidian";
 import { readState } from "../read-state";
 
 let nextView = 1;
@@ -31,19 +32,21 @@ export function useReportViewing(cwd: string, sessionId: string | null): void {
  * Whether a panel can be seen, kept up to date as the layout changes (a
  * sidebar collapses, another view takes the tab) and as the window hides.
  */
-export function usePanelShown(app: { workspace: any }, isShown?: () => boolean): boolean {
+export function usePanelShown(app: { workspace: Workspace }, isShown?: () => boolean): boolean {
   const [shown, setShown] = useState(() => (isShown ? isShown() : true));
   useEffect(() => {
     if (!isShown) return;
     const check = () => setShown(isShown());
     const refs = [app.workspace.on("layout-change", check), app.workspace.on("active-leaf-change", check)];
-    document.addEventListener("visibilitychange", check);
+    // The document this panel was opened in (a popout window has its own).
+    const doc = activeDocument;
+    doc.addEventListener("visibilitychange", check);
     // Some changes fire no event (dragging a sidebar shut); check now and then too.
     const timer = window.setInterval(check, 1500);
     check();
     return () => {
       for (const r of refs) app.workspace.offref(r);
-      document.removeEventListener("visibilitychange", check);
+      doc.removeEventListener("visibilitychange", check);
       window.clearInterval(timer);
     };
   }, [app, isShown]);
